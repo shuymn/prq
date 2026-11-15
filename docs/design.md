@@ -16,8 +16,9 @@ conversation.
   skills](#instructions-and-skills)), and the model decides when to use them. The analysis notes, which only the model
   reads, are language-neutral too. The UI text is written in one language and is not translated.
 - **Local and cloud agents are treated alike.** An analysis can run in a local AI session on a subscription (Claude
-  Code, Codex or another; prq does not name one) or in a cloud agent that calls an LLM with an API key. The UI does not
-  tell them apart, except where it shows which agent ID is working on a job.
+  Code, Codex or another; prq does not name one) or in a cloud agent that calls an LLM with an API key. Summaries and the
+  conversation look the same whichever agent made them; only the operational parts (job status, the pool, the budget,
+  explanations of waiting) name the agent.
 - **Agents form a pool.** A cloud agent is always in the pool. A local agent is in the pool only while `prq` is
   running, and when one is present it is preferred over cloud.
 - **A local agent is woken by the AI's own mechanism.** The AI session starts a background `prq wait` and resumes when
@@ -99,8 +100,10 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   already recorded and shall not add it to the conversation a second time.
 - While no local agent is present, the jobs of a `local` session wait, questions included.
 - A job that was claimed but never submitted (the AI session was closed, for example) is not returned automatically.
-  The UI shows which agent ID has been working on it and since when. When the host notices, "Retry" puts it back to
-  pending. A retry changes the `claimId`, so an answer that arrives late from the earlier claim is rejected.
+  The UI shows which agent ID has been working on it and since when, and starts showing it as possibly stalled after 60
+  minutes. "Retry" is available on any claimed or failed job at any time, because the host may know the session is gone
+  before that mark appears. A retry puts the job back to pending and changes the `claimId`, so an answer that arrives
+  late from the earlier claim is rejected.
 - A failed job is kept as `failed` with its reason and can be retried from the UI.
 
 ### Intake
@@ -168,8 +171,9 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
 - **When a skill is used is the model's decision**, made from the descriptions and the two prompts. The core has no
   dedicated step for any skill.
 - **Scripts run in the cloud workspace.** A skill's script runs in the Sandbox (its image includes `python3`) and only
-  as far as the skill's `allowed-tools` frontmatter permits. A skill that declares no `allowed-tools` cannot run
-  scripts. The pinned SHA means a skill's code does not change under the host.
+  as far as the skill's `allowed-tools` frontmatter permits. In the Agent Skills format `allowed-tools` lists
+  pre-approved tools, and prq has no interactive approval step, so a skill that declares none cannot run scripts: it
+  contributes instructions and references only. The pinned SHA means a skill's code does not change under the host.
 - **Local runner.** `prq context` returns the two prompts and materializes the registered skills into the job's
   worktree (for example `.prq/skills/<name>/`), so the local AI reads them as files. A local agent may also use skills it
   already has on its own machine.
@@ -213,9 +217,11 @@ Pi's copyright notice.
 - **How to write the notes.** "Decisions" uses the user's own words and gives a reason only if the user gave one. "The
   user's interests and preferences" lists only what the user said; left alone, the model adds guesses.
 - **Size.** The notes have no size limit. In the prototype they grew from 3,560 to 13,406 characters, but that was with a
-  20k-token context window compacted six times in 16 turns. A conversation about one PR does not run for days, and with a
-  real context length compaction should happen only a few times. A summary that stopped at the output limit is not
-  adopted, so growth beyond that stops further compaction but never loses the record of the conversation.
+  20k-token context window compacted six times in 16 turns. Two things follow, and they are different claims. The
+  displayed history is never lost: a summary that stopped at the output limit is not adopted, and the full history is
+  never changed. Whether the model can keep answering well depends on the notes fitting the real context window. That
+  holds for the expected use (a conversation about one PR, a few compactions at real window sizes), and it is checked on
+  real PRs after deployment, looking at answer quality after compaction.
 - **Reasoning.** When a turn ends, the model's reasoning is removed from the context.
 - **Storage and insertion.** PrSession stores the notes with the target SHA, a revision and the message ID at the cut
   point. The model receives them as a message that says the conversation before this point was compressed into the
@@ -271,8 +277,9 @@ answers what was decided earlier after compaction. See [spikes.md](spikes.md) fo
 
 These are enforced, not left to observation.
 
-- A cloud turn has a step limit (for example, 20) and a job has a token limit (for example, 500,000). When either is
-  exceeded the job becomes `failed` and stops.
+- A cloud turn has a step limit (for example, 20) and a job has a token limit (for example, 500,000). When a turn hits
+  either limit, the system shall make no further model or tool calls and end the job as `failed` with the reason. Text the
+  turn had already produced is kept in the conversation and marked incomplete.
 - AIChatAgent's automatic recovery retries are lowered from the default of 10 to about 2. A compaction is retried once.
 - The Hub holds a daily token budget for cloud. When it is exceeded, cloud jobs stop and the UI says so. A provider with
   prepaid credit also stops at the balance at worst.

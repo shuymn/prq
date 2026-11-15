@@ -115,8 +115,9 @@ continued conversation pays the cached rate for history.
 
 Findings that became rules: an invalid regular expression passed to `grep` came back as a tool error and the model
 carried on, so tools return bad input as an error string; without a tool that lists the workspace the model searched for
-files that do not exist until the step limit left an empty answer, so a listing tool exists from the start and reaching
-the step limit returns what was gathered.
+files that do not exist until the step limit left an empty answer, so a listing tool exists from the start. What happens
+when a turn reaches the step or token limit is a rule in [design.md](design.md#billing-limits): the job fails with the
+reason and any text already produced is kept, marked incomplete.
 
 ### Compaction
 
@@ -174,7 +175,7 @@ Adoption test met: after repeated compaction the model still answered what was d
 
 Exact versions are in the pnpm catalog on the branch. The main ones: `agents` 0.33, `@cloudflare/ai-chat` 0.12, `ai` 7.0,
 `@cloudflare/sandbox` 1.0, `hono` 4.13, `jose` 6.2, `valibot` 1.5, `@octokit/auth-app` 8.3, `@octokit/webhooks-methods`
-6.0, `wrangler` 4.16, Node 24.
+6.0, `wrangler` 4.161, Node 24.
 
 ## Not covered
 
