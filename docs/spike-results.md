@@ -8,7 +8,7 @@
 mise exec -- pnpm install
 mise exec -- pnpm run typecheck
 mkdir -p .tmp && TMPDIR=$PWD/.tmp mise exec -- pnpm test                                  # workerd 6 件 + e2e 15 件
-cd packages/server && TMPDIR=$PWD/../../.tmp mise exec -- pnpm test:sandbox # Docker と github.com が要る。2 件
+mkdir -p .tmp && cd packages/server && TMPDIR=$PWD/../../.tmp mise exec -- pnpm test:sandbox # Docker と github.com が要る。2 件
 ```
 
 - `pnpm test` = `vitest run`（`@cloudflare/vitest-plugin` で workerd の中、`vitest.config.ts`）と `vitest run -c vitest.e2e.config.ts`（Node から本物の `wrangler dev` と本物の `prq` CLI を動かす）。e2e はファイルごとに `wrangler dev` を空の保存先で起動し、終了時に PID のプロセスグループごと止める（`test/e2e/support.ts:43`）。
