@@ -83,7 +83,7 @@ export class PrSession extends AIChatAgent<Env> {
       await this.#notifyHub();
       return undefined;
     }
-    const last = this.messages.at(-1);
+    const last = this.messages.findLast((m) => m.role === "user");
     const result = streamText({
       model: createModel(`echo: ${textOf(last)}`, Number(this.env.MOCK_CHUNK_DELAY_MS)),
       messages: await convertToModelMessages(this.messages),

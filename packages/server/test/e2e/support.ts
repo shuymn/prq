@@ -46,7 +46,7 @@ export type Dev = { url: string; stop(): Promise<void> };
 export async function startDev(vars: Record<string, string> = {}): Promise<Dev> {
   const port = await freePort();
   const persist = mkdtempSync(join(TMP_ROOT, "persist-"));
-  const args = [WRANGLER, "dev", "--port", String(port), "--ip", "127.0.0.1", "--persist-to", persist];
+  const args = [WRANGLER, "dev", "--port", String(port), "--inspector-port", String(await freePort()), "--ip", "127.0.0.1", "--persist-to", persist];
   for (const [k, v] of Object.entries(vars)) args.push("--var", `${k}:${v}`);
   // node + wrangler.js directly, detached into its own process group, so stop() can end wrangler and workerd together.
   const child = spawn(process.execPath, args, {

@@ -128,14 +128,14 @@ describe("local owner", () => {
     const c1 = await claim(agentId);
     const retried = await api(dev, `/api/session/${session(name)}/jobs/${c1.json.job.jobId}/retry`, { method: "POST" });
     expect(retried).toEqual({ ok: true });
-
-    const late = await submit(agentId, c1.json.job, c1.json.claimId, "late answer");
-    expect(late.code).toBe(4);
-    expect(late.json.error).toBe("stale_claim");
-
     const c2 = await claim(agentId);
     expect(c2.json.job.jobId).toBe(c1.json.job.jobId);
     expect(c2.json.claimId).not.toBe(c1.json.claimId);
+
+    // The first claim's answer arrives late, after the job was claimed again.
+    const late = await submit(agentId, c1.json.job, c1.json.claimId, "late answer");
+    expect(late.code).toBe(4);
+    expect(late.json.error).toBe("stale_claim");
     expect((await submit(agentId, c2.json.job, c2.json.claimId, "fresh answer")).json.status).toBe("accepted");
     const st = await sessionState(dev, name);
     expect(answers(st.messages).map(textOf)).toEqual(["fresh answer"]);
@@ -234,6 +234,25 @@ describe("local owner", () => {
     const c = await claim(agentId);
     expect((await submit(agentId, c.json.job, c.json.claimId, "awake")).json.status).toBe("accepted");
     await chat.close();
+  });
+
+  it("delivers an answer submitted while the chat client was disconnected when it reconnects", async () => {
+    const name = "octo~demo~10";
+    const agentId = "laptop-10";
+    const chat = await ChatClient.connect(dev, name);
+    const q = chat.send("answer me later");
+    await chat.waitFor(() => chat.streamed(q.requestId).done);
+    await chat.close();
+    const c = await claim(agentId);
+    const s = await submit(agentId, c.json.job, c.json.claimId, "while you were away");
+    // useAgentChat loads the transcript over HTTP (/get-messages) when it (re)connects, then follows broadcasts.
+    const back = await ChatClient.connect(dev, name);
+    const history = await api(dev, `/agents/pr-session/${session(name)}/get-messages`);
+    expect(history.map((m: any) => [m.id, textOf(m)])).toEqual([
+      [q.messageId, "answer me later"],
+      [s.json.messageId, "while you were away"],
+    ]);
+    await back.close();
   });
 
   it("exits with the auth code on 401/403, distinct from the timeout code", async () => {
