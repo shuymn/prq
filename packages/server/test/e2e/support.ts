@@ -43,11 +43,12 @@ async function freePort(): Promise<number> {
 export type Dev = { url: string; stop(): Promise<void> };
 
 /** Starts `wrangler dev` with fresh local storage and the given var overrides; stop() kills it by PID. */
-export async function startDev(vars: Record<string, string> = {}): Promise<Dev> {
+export async function startDev(vars: Record<string, string> = {}, opts: { config?: string } = {}): Promise<Dev> {
   const port = await freePort();
   const persist = mkdtempSync(join(TMP_ROOT, "persist-"));
   const args = [WRANGLER, "dev", "--port", String(port), "--inspector-port", String(await freePort()), "--ip", "127.0.0.1", "--persist-to", persist];
   for (const [k, v] of Object.entries(vars)) args.push("--var", `${k}:${v}`);
+  if (opts.config) args.push("-c", opts.config);
   // node + wrangler.js directly, detached into its own process group, so stop() can end wrangler and workerd together.
   const child = spawn(process.execPath, args, {
     cwd: SERVER_DIR,
@@ -67,7 +68,7 @@ export async function startDev(vars: Record<string, string> = {}): Promise<Dev> 
     }
     rmSync(persist, { recursive: true, force: true });
   };
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + 300_000; // the sandbox config builds a Docker image first
   while (!log.includes("Ready on")) {
     if (child.exitCode !== null || Date.now() > deadline) {
       await stop();

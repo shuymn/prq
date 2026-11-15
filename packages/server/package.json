@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "tsc && tsc -p test/e2e",
     "test": "vitest run && vitest run -c vitest.e2e.config.ts",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "test:sandbox": "vitest run -c vitest.sandbox.config.ts"
   },
   "dependencies": {
     "@cloudflare/ai-chat": "catalog:",

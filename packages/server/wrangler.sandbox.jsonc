@@ -1,0 +1,17 @@
+// Spike only: the Sandbox workspace runs as its own local Worker so the other suites do not need Docker.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "prq-spike-sandbox",
+  "main": "src/workspace-dev.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": { "bindings": [{ "name": "Workspace", "class_name": "Workspace" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Workspace"] }],
+  "containers": [
+    {
+      "class_name": "Workspace",
+      "scheduling_policy": "durable_object",
+      "images": { "sandbox": { "dockerfile": "./Dockerfile" } }
+    }
+  ]
+}
