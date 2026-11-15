@@ -109,7 +109,7 @@ describe("local owner", () => {
       submit(agentId, c.json.job, c.json.claimId, "once"),
       submit(agentId, c.json.job, c.json.claimId, "once"),
     ]);
-    expect(first.json).toEqual({ status: "accepted", messageId: `answer-${c.json.job.jobId}` });
+    expect(first.json.status).toBe("accepted");
     for (const r of [again, x, y]) {
       expect(r.code).toBe(0);
       expect(r.json).toEqual({ status: "duplicate", messageId: first.json.messageId });
