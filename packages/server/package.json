@@ -4,14 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc",
-    "test": "vitest run",
+    "typecheck": "tsc && tsc -p test/e2e",
+    "test": "vitest run && vitest run -c vitest.e2e.config.ts",
     "dev": "wrangler dev"
   },
   "dependencies": {
     "@cloudflare/ai-chat": "catalog:",
     "@cloudflare/sandbox": "catalog:",
     "@octokit/auth-app": "catalog:",
+    "@octokit/request": "catalog:",
     "@octokit/webhooks-methods": "catalog:",
     "@prq/protocol": "workspace:*",
     "agents": "catalog:",
@@ -25,6 +26,7 @@
     "@ai-sdk/provider": "catalog:",
     "@cloudflare/vitest-plugin": "catalog:",
     "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:"
