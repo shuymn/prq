@@ -1,0 +1,10 @@
+{
+  "name": "@prq/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": { "prq": "./src/main.ts" },
+  "scripts": { "typecheck": "tsc" },
+  "dependencies": { "@prq/protocol": "workspace:*", "valibot": "catalog:" },
+  "devDependencies": { "@types/node": "catalog:", "typescript": "catalog:" }
+}

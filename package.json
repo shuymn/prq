@@ -1,0 +1,12 @@
+{
+  "name": "prq",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.20.0",
+  "scripts": {
+    "typecheck": "pnpm -r --no-bail run typecheck",
+    "test": "pnpm -r --no-bail run test"
+  },
+  "engines": { "node": "24.x" }
+}

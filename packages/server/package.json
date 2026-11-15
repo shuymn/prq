@@ -1,0 +1,32 @@
+{
+  "name": "@prq/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "@cloudflare/ai-chat": "catalog:",
+    "@cloudflare/sandbox": "catalog:",
+    "@octokit/auth-app": "catalog:",
+    "@octokit/webhooks-methods": "catalog:",
+    "@prq/protocol": "workspace:*",
+    "agents": "catalog:",
+    "ai": "catalog:",
+    "hono": "catalog:",
+    "jose": "catalog:",
+    "universal-github-app-jwt": "catalog:",
+    "valibot": "catalog:"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "catalog:",
+    "@cloudflare/vitest-plugin": "catalog:",
+    "@cloudflare/workers-types": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

@@ -1,0 +1,26 @@
+// Prototype only: local dev (wrangler dev / vitest). Never deployed.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "prq-spike",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "Hub", "class_name": "Hub" },
+      { "name": "PrSession", "class_name": "PrSession" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub", "PrSession"] }],
+  "vars": {
+    // Test values only.
+    "ACCESS_TEST_SECRET": "test-access-secret-not-real",
+    "ACCESS_AUD": "prq-test-aud",
+    "ACCESS_ISS": "https://test.cloudflareaccess.com",
+    "OWNER_GITHUB_ID": "1001",
+    "WEBHOOK_SECRET": "It's a Secret to Everybody",
+    "PRESENCE_TTL_MS": "600000",
+    "WAIT_MAX_MS": "25000",
+    "MOCK_CHUNK_DELAY_MS": "20"
+  }
+}
