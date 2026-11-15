@@ -3,8 +3,12 @@ import { verify } from "@octokit/webhooks-methods";
 import { getAgentByName } from "agents";
 import { Hono } from "hono";
 
+/**
+ * The PrSession name: owner~repo~number. routeAgentRequest takes the path segment as is (no percent-decoding), so
+ * "owner/repo#n" cannot be addressed from /agents/pr-session/:name; "~" is URL-safe and never in GitHub names.
+ */
 export function sessionName(fullName: string, number: number): string {
-  return `${fullName}#${number}`;
+  return `${fullName.replace("/", "~")}~${number}`;
 }
 
 export const webhook = new Hono<{ Bindings: Env }>().post("/", async (c) => {
