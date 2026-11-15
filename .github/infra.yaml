@@ -7,7 +7,7 @@ reconcile:
   labels: authoritative
   rulesets: authoritative
 spec:
-  description: Japanese summaries and follow-up Q&A for your own GitHub pull requests, on Cloudflare Workers
+  description: "Understand your own GitHub pull requests: summaries and follow-up questions, on Cloudflare Workers"
   visibility: public
   archived: false
   topics:
