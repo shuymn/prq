@@ -1,7 +1,7 @@
 // Node-side helpers for the e2e suites: they talk to a real `wrangler dev` and run the real prq CLI.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,6 +45,7 @@ export type Dev = { url: string; stop(): Promise<void> };
 /** Starts `wrangler dev` with fresh local storage and the given var overrides; stop() kills it by PID. */
 export async function startDev(vars: Record<string, string> = {}, opts: { config?: string } = {}): Promise<Dev> {
   const port = await freePort();
+  mkdirSync(TMP_ROOT, { recursive: true });
   const persist = mkdtempSync(join(TMP_ROOT, "persist-"));
   const args = [WRANGLER, "dev", "--port", String(port), "--inspector-port", String(await freePort()), "--ip", "127.0.0.1", "--persist-to", persist];
   for (const [k, v] of Object.entries(vars)) args.push("--var", `${k}:${v}`);

@@ -7,7 +7,7 @@
 ```
 mise exec -- pnpm install
 mise exec -- pnpm run typecheck
-TMPDIR=$PWD/.tmp mise exec -- pnpm test                                  # workerd 6 件 + e2e 15 件
+mkdir -p .tmp && TMPDIR=$PWD/.tmp mise exec -- pnpm test                                  # workerd 6 件 + e2e 15 件
 cd packages/server && TMPDIR=$PWD/../../.tmp mise exec -- pnpm test:sandbox # Docker と github.com が要る。2 件
 ```
 
