@@ -1,0 +1,35 @@
+# The hooks run the lefthook pinned in package.json, with mise's pinned node and pnpm, whatever lefthook is first on
+# PATH; the jobs call the tools mise.toml pins (`mise install`).
+lefthook: mise exec -- pnpm exec lefthook
+
+pre-commit:
+  skip:
+    - merge
+    - rebase
+  parallel: true
+  jobs:
+    # Lints the staged files; CI lints the whole tree (pnpm run lint). oxlint skips the files .oxlintrc.json ignores.
+    - name: lint
+      glob: "*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}"
+      run: pnpm exec oxlint --type-aware --deny-warnings --no-error-on-unmatched-pattern {staged_files}
+    # Formats the staged files and restages them; CI checks the whole tree (pnpm run fmt). oxfmt skips the files it
+    # does not format and those .oxfmtrc.json ignores.
+    - name: fmt
+      run: pnpm exec oxfmt --no-error-on-unmatched-pattern {staged_files}
+      stage_fixed: true
+    # Blocks commits that stage secrets; CI scans the whole history (security.yml).
+    - name: secrets
+      run: mise exec -- betterleaks git --pre-commit --staged --redact --no-banner --verbose --validation=false
+    # The workflow checks CI runs through the shared gha.yml.
+    - name: actionlint
+      glob: ".github/workflows/*.{yml,yaml}"
+      run: mise exec -- actionlint {staged_files}
+    - name: ghalint
+      glob: ".github/workflows/*.{yml,yaml}"
+      run: mise exec -- ghalint run
+
+commit-msg:
+  jobs:
+    # Checks the message against Conventional Commits (commitlint.config.cjs); CI does not.
+    - name: commitlint
+      run: pnpm exec commitlint --edit {1}

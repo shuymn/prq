@@ -22,7 +22,10 @@ const tokens = JSON.parse(readFileSync(new URL("tokens.json", import.meta.url), 
 const flat = new Map();
 (function walk(node, path, type) {
   type = node.$type ?? type;
-  if ("$value" in node) return void flat.set(path.join("."), { type, value: node.$value });
+  if ("$value" in node) {
+    flat.set(path.join("."), { type, value: node.$value });
+    return;
+  }
   for (const [key, child] of Object.entries(node)) if (!key.startsWith("$")) walk(child, [...path, key], type);
 })(tokens, [], undefined);
 
@@ -35,13 +38,13 @@ const resolve = (value) => {
   }
   return value;
 };
+const byte = (c) =>
+  Math.round(c * 255)
+    .toString(16)
+    .padStart(2, "0");
 const hex = (value) => {
   const color = resolve(value);
   if (color.colorSpace !== "srgb") throw new Error(`unsupported color ${JSON.stringify(color)}`);
-  const byte = (c) =>
-    Math.round(c * 255)
-      .toString(16)
-      .padStart(2, "0");
   const alpha = color.alpha ?? 1;
   return `#${color.components.map(byte).join("")}${alpha < 1 ? byte(alpha) : ""}`;
 };

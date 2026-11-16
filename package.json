@@ -1,0 +1,28 @@
+{
+  "name": "prq",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "oxlint --type-aware --deny-warnings",
+    "lint:fix": "oxlint --type-aware --fix",
+    "fmt": "oxfmt --check",
+    "fmt:fix": "oxfmt",
+    "knip": "knip",
+    "typecheck": "pnpm -r --no-bail run typecheck",
+    "test": "pnpm -r --no-bail run test",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "catalog:",
+    "@commitlint/config-conventional": "catalog:",
+    "knip": "catalog:",
+    "lefthook": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}

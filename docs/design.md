@@ -180,17 +180,17 @@ alarm set at the claim). The Hub adds only what it owns itself: whether a local 
 - **Latest event:** a push received, a question sent, a summary completed or an answer completed, with its time. Rows
   are ordered by it. Claims, heartbeats and streaming are not events.
 - **Problem:** at most one label, the first that applies in this order:
-  1. *Summary failed* — the analysis of the current head failed and it has no completed analysis. Clears when one
+  1. _Summary failed_ — the analysis of the current head failed and it has no completed analysis. Clears when one
      completes.
-  2. *Answer failed* — a question's latest job failed. Clears when a retry of it completes.
-  3. *Possibly stalled* — a claimed job has no result 60 minutes after its claim. Clears when the job completes, fails
+  2. _Answer failed_ — a question's latest job failed. Clears when a retry of it completes.
+  3. _Possibly stalled_ — a claimed job has no result 60 minutes after its claim. Clears when the job completes, fails
      or is retried.
-  4. *Waiting for a local agent* — a `local` session has waiting work (sent by PrSession) and no local agent is
+  4. _Waiting for a local agent_ — a `local` session has waiting work (sent by PrSession) and no local agent is
      present (known to the Hub). Clears when an agent is present again.
-  5. *New push not summarized* — the current head has no completed analysis. It is derived from the current head, not
+  5. _New push not summarized_ — the current head has no completed analysis. It is derived from the current head, not
      from the latest completed summary, so a completed analysis of an older head does not clear it and a push back to
      an analyzed head does not set it.
-  "Needs attention" counts the PRs whose problem is one of the first four.
+     "Needs attention" counts the PRs whose problem is one of the first four.
 
 ### Instructions and skills
 
@@ -427,8 +427,8 @@ prq/
 1. **Prototype (done).** The points to check were tried in the layout above, without lint, format or CI. See
    [spikes.md](spikes.md); the code is on the `spike/prototype` branch and is a reference, not a base to merge.
 2. **UI design.** The screens in [ui.md](ui.md) are designed in Pencil.
-3. **Toolchain and CI.** lint, format, hooks, CI and the repository settings are set up following zenith and kopje (see
-   the toolchain row in [decisions.md](decisions.md)) before the production code is written.
+3. **Toolchain and CI (done).** lint, format, hooks, CI and the repository settings were set up following zenith and
+   kopje (see the toolchain row in [decisions.md](decisions.md)) before the production code is written.
 4. **Implementation.** The production code, starting from the contracts in `@prq/protocol`.
 
 ## Not verified yet

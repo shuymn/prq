@@ -63,7 +63,10 @@ function size(at, n, prop) {
   if (typeof v !== "number" || v === 0) return;
   if (n.type === "text" && (n.textGrowth ?? "auto") === "auto") return;
   const [, max, token] = String(n.context ?? "").match(new RegExp(`^tokens\\b.*\\b${prop}(<?)=([\\w.-]+)`)) ?? [];
-  if (!token) return void violations.push(`fixed ${prop} ${v} without a size token in context: ${at}`);
+  if (!token) {
+    violations.push(`fixed ${prop} ${v} without a size token in context: ${at}`);
+    return;
+  }
   const variable = VARS[token.replaceAll(".", "-")];
   if (!variable) violations.push(`unknown size token ${token} (${prop}): ${at}`);
   else if (max ? v > variable.value : variable.value !== v) {
@@ -116,10 +119,12 @@ function props(at, n, full, isScreen = false) {
 }
 function tree(at, n, full) {
   props(at, n, full);
-  for (const child of n.children ?? []) if (typeof child === "object") tree(`${at} / ${child.name ?? child.id}`, child, true);
+  for (const child of n.children ?? [])
+    if (typeof child === "object") tree(`${at} / ${child.name ?? child.id}`, child, true);
 }
 
-for (const name of Object.keys(VARS)) if (RAW_SCALE.test(name)) violations.push(`${name.split("-")[0]} variable defined: ${name}`);
+for (const name of Object.keys(VARS))
+  if (RAW_SCALE.test(name)) violations.push(`${name.split("-")[0]} variable defined: ${name}`);
 
 const componentName = new Map();
 Get((n) => {
@@ -147,11 +152,13 @@ Get((n, c) => {
   if (!frames.has(root.node.name)) return;
   if (n.type === "ref") {
     const target = componentName.get(n.ref);
-    if (!target || !inventory.has(target)) violations.push(`instance of ${target ?? n.ref}, not an inventory component: ${at}`);
+    if (!target || !inventory.has(target))
+      violations.push(`instance of ${target ?? n.ref}, not an inventory component: ${at}`);
   } else if (n.type === "frame") {
     if (n.reusable) violations.push(`component defined inside a screen: ${at}`);
     else if (inventory.has(n.name)) violations.push(`frame named like a component (detached copy?): ${at}`);
-  } else if (n.type !== "text") violations.push(`${n.type} in a screen (only instances, layout frames and text): ${at}`);
+  } else if (n.type !== "text")
+    violations.push(`${n.type} in a screen (only instances, layout frames and text): ${at}`);
 });
 for (const [name, count] of seen) if (count > 1) violations.push(`component defined ${count} times: ${name}`);
 for (const name of inventory) if (!seen.has(name)) violations.push(`missing component: ${name}`);
@@ -166,7 +173,8 @@ for (const [name, n] of roots) {
     if (!roots.has(`Note / ${name}`)) violations.push(`missing note: Note / ${name}`);
   } else if (name?.startsWith("Note / ") && frames.has(name.slice("Note / ".length))) {
     counts.notes++;
-    if (n.type !== "ref" || componentName.get(n.ref) !== "Note") violations.push(`note is not a Note instance: ${name}`);
+    if (n.type !== "ref" || componentName.get(n.ref) !== "Note")
+      violations.push(`note is not a Note instance: ${name}`);
   } else violations.push(`unlisted root node: ${name}`);
 }
 for (const f of FRAMES) if (!roots.has(f)) violations.push(`missing frame: ${f}`);

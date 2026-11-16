@@ -4,14 +4,14 @@ The visual design of the web UI and the vocabulary it shares with the code. The 
 document [prq.pen](prq.pen); this directory holds it together with what the code is built from, so that a screen built
 from the design looks like the design.
 
-| File | What it is |
-| --- | --- |
-| [tokens.json](tokens.json) | The design tokens: the single source for the Pencil variables and the CSS custom properties in code |
-| [components.md](components.md) | The component inventory: each Pencil component ↔ the code component and its props, the tokens it uses, the `modern-web-guidance` guides it relies on, and whether it must fit the extension panel |
-| [screens.md](screens.md) | Every screen and state in the brief ↔ the Pencil frame that shows it and what the frame must make visible |
-| [prq.pen](prq.pen) | The Pencil document: variables, components and screen frames |
-| [pencil-variables.mjs](pencil-variables.mjs) | Applies `tokens.json` to the Pencil variables and reports any difference |
-| [pencil-audit.js](pencil-audit.js), [audit-prelude.mjs](audit-prelude.mjs) | Check the Pencil document against the rules below and against the two tables |
+| File                                                                       | What it is                                                                                                                                                                                        |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [tokens.json](tokens.json)                                                 | The design tokens: the single source for the Pencil variables and the CSS custom properties in code                                                                                               |
+| [components.md](components.md)                                             | The component inventory: each Pencil component ↔ the code component and its props, the tokens it uses, the `modern-web-guidance` guides it relies on, and whether it must fit the extension panel |
+| [screens.md](screens.md)                                                   | Every screen and state in the brief ↔ the Pencil frame that shows it and what the frame must make visible                                                                                         |
+| [prq.pen](prq.pen)                                                         | The Pencil document: variables, components and screen frames                                                                                                                                      |
+| [pencil-variables.mjs](pencil-variables.mjs)                               | Applies `tokens.json` to the Pencil variables and reports any difference                                                                                                                          |
+| [pencil-audit.js](pencil-audit.js), [audit-prelude.mjs](audit-prelude.mjs) | Check the Pencil document against the rules below and against the two tables                                                                                                                      |
 
 The brief the design answers is [docs/ui.md](../docs/ui.md).
 
@@ -50,28 +50,28 @@ The brief the design answers is [docs/ui.md](../docs/ui.md).
 (spacing and sizes in `px`, font sizes in `rem`), typography a composite of `fontFamily`, `fontSize`, `fontWeight`,
 `lineHeight` and `letterSpacing` (0 everywhere), and motion `duration` and `cubicBezier` tokens.
 
-| Group | Holds | In Pencil |
-| --- | --- | --- |
-| `palette` | The raw colors | no (referenced by `color.*` only) |
-| `color`, `shadow` | Semantic colors and the overlay shadow | yes |
-| `space` | The spacing scale | no (referenced by `gap.*` and `inset.*` only) |
-| `gap`, `inset`, `size`, `radius`, `border-width`, `focus` | Dimensions (`focus.offset` is the gap between a control and its focus ring) | yes |
-| `font`, `text` | Font families and text styles | yes |
-| `duration`, `easing`, `breakpoint` | Values only code uses (motion, layout breakpoint) | no |
+| Group                                                     | Holds                                                                       | In Pencil                                     |
+| --------------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------- |
+| `palette`                                                 | The raw colors                                                              | no (referenced by `color.*` only)             |
+| `color`, `shadow`                                         | Semantic colors and the overlay shadow                                      | yes                                           |
+| `space`                                                   | The spacing scale                                                           | no (referenced by `gap.*` and `inset.*` only) |
+| `gap`, `inset`, `size`, `radius`, `border-width`, `focus` | Dimensions (`focus.offset` is the gap between a control and its focus ring) | yes                                           |
+| `font`, `text`                                            | Font families and text styles                                               | yes                                           |
+| `duration`, `easing`, `breakpoint`                        | Values only code uses (motion, layout breakpoint)                           | no                                            |
 
 ### Names
 
 A token's name is its path. Path segments are lowercase letters, digits and `-`. The CSS custom property is `--`
 followed by the segments joined with `-`, so two paths must never join to the same name.
 
-| Token | CSS |
-| --- | --- |
-| `color.fg.muted` | `--color-fg-muted: #9198a1` |
-| `space.3` | `--space-3: 12px` |
-| `text.body` | `--text-body: 400 0.875rem/1.5 Inter, system-ui, sans-serif` |
+| Token            | CSS                                                               |
+| ---------------- | ----------------------------------------------------------------- |
+| `color.fg.muted` | `--color-fg-muted: #9198a1`                                       |
+| `space.3`        | `--space-3: 12px`                                                 |
+| `text.body`      | `--text-body: 400 0.875rem/1.5 Inter, system-ui, sans-serif`      |
 | `shadow.overlay` | `--shadow-overlay: 0px 8px 24px 0px rgb(0.39% 1.57% 3.53% / 0.8)` |
-| `duration.open` | `--duration-open: 0.1s` |
-| `easing.enter` | `--easing-enter: cubic-bezier(0, 0, 0.2, 1)` |
+| `duration.open`  | `--duration-open: 0.1s`                                           |
+| `easing.enter`   | `--easing-enter: cubic-bezier(0, 0, 0.2, 1)`                      |
 
 ### Generating CSS
 
@@ -116,11 +116,11 @@ document follows the rules and has every frame.
 
 ### Document structure
 
-| Root frames | Hold |
-| --- | --- |
-| One per section of components.md | The components of that section |
-| `<Screen> / <State>` | A screen state: desktop frames 1440 wide and at least 900 tall, extension panel frames `size.panel` (360) wide and at least 800 tall, clipping their content |
-| `Note / <Screen> / <State>` | Next to each frame, the state IDs it shows and the `modern-web-guidance` guides it relies on |
+| Root frames                      | Hold                                                                                                                                                         |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| One per section of components.md | The components of that section                                                                                                                               |
+| `<Screen> / <State>`             | A screen state: desktop frames 1440 wide and at least 900 tall, extension panel frames `size.panel` (360) wide and at least 800 tall, clipping their content |
+| `Note / <Screen> / <State>`      | Next to each frame, the state IDs it shows and the `modern-web-guidance` guides it relies on                                                                 |
 
 Components are at the top of the canvas and screens below them, one column per screen in the order of
 [screens.md](screens.md).

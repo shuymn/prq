@@ -1,0 +1,6 @@
+// The Worker's configuration. The entry, flags and bindings are added with the Worker's code.
+{
+  "name": "prq",
+  // No later than the workerd that @cloudflare/vitest-plugin bundles.
+  "compatibility_date": "2026-11-10",
+}
