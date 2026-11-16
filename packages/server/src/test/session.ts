@@ -50,6 +50,13 @@ export async function setPool(agentIds: readonly string[]): Promise<void> {
   }
 }
 
+// Empties the Hub's notification queue (of the sessions earlier tests of the file left).
+export async function clearQueue(): Promise<void> {
+  await runInDurableObject(await hub(), (_, state) => {
+    state.storage.sql.exec("DELETE FROM prq_notifications");
+  });
+}
+
 // The sessions in the Hub's notification queue.
 export async function queued(): Promise<string[]> {
   return runInDurableObject(await hub(), (_, state) =>
@@ -185,6 +192,22 @@ function hasPrSessionSeams(instance: object): instance is PrSessionSeams {
 export function prSessionSeams(instance: object): PrSessionSeams {
   if (!hasPrSessionSeams(instance)) {
     throw new TypeError("PrSession lacks a member the tests hold");
+  }
+  return instance;
+}
+
+export type HubSeams = {
+  peekSession(session: string, agentId: string): Promise<{ resume: boolean; fresh: boolean; open: boolean }>;
+  claimSession(session: string, agentId: string, mode: "resume" | "fresh"): Promise<unknown>;
+};
+
+function hasHubSeams(instance: object): instance is HubSeams {
+  return ["peekSession", "claimSession"].every((name) => typeof Reflect.get(instance, name) === "function");
+}
+
+export function hubSeams(instance: object): HubSeams {
+  if (!hasHubSeams(instance)) {
+    throw new TypeError("Hub lacks a member the tests hold");
   }
   return instance;
 }
