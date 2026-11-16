@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up mise
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          install_args: node pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The versions mise.lock pins; the job's checks run on these.
+      - name: Print tool versions
+        run: |
+          node --version
+          pnpm --version
+
+      - name: Run linter
+        run: pnpm run lint
+
+      - name: Run formatter
+        run: pnpm run fmt
+
+      - name: Find unused files, dependencies and exports
+        run: pnpm run knip
+
+      - name: Run type checker
+        run: pnpm run typecheck
+
+      - name: Run tests
+        run: pnpm run test
