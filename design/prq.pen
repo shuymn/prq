@@ -6092,7 +6092,7 @@
                   "id": "XKvKc",
                   "name": "start",
                   "gap": "$gap-related",
-                  "alignItems": "end",
+                  "alignItems": "center",
                   "children": [
                     {
                       "type": "text",
@@ -6106,15 +6106,29 @@
                       "fontWeight": "$text-heading-font-weight"
                     },
                     {
-                      "type": "text",
-                      "id": "c1Rmh",
-                      "name": "version",
-                      "fill": "$color-fg-muted",
-                      "content": "v0.4.0",
-                      "lineHeight": "$text-small-line-height",
-                      "fontFamily": "$text-small-font-family",
-                      "fontSize": "$text-small-font-size",
-                      "fontWeight": "$text-small-font-weight"
+                      "type": "frame",
+                      "id": "XXgXV",
+                      "name": "version-box",
+                      "context": "Offsets version so its baseline meets the name's (align-items: baseline in code)",
+                      "padding": [
+                        "$gap-tight",
+                        0,
+                        0,
+                        0
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "c1Rmh",
+                          "name": "version",
+                          "fill": "$color-fg-muted",
+                          "content": "v0.4.0",
+                          "lineHeight": "$text-small-line-height",
+                          "fontFamily": "$text-small-font-family",
+                          "fontSize": "$text-small-font-size",
+                          "fontWeight": "$text-small-font-weight"
+                        }
+                      ]
                     }
                   ]
                 },
