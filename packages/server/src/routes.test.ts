@@ -8,20 +8,23 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// Each route the app registers, middleware included, with its parameters filled in. A route a later change mounts
-// outside the Access check answers it without a token and fails this test.
+const METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+
+// The one request that bypasses Access (docs/design.md, Authentication boundary).
+const isWebhook = (method: string, path: string) => method === "POST" && path === "/webhook";
+
+// Each route the app registers, middleware included, with its parameters filled in, under every method: a handler can
+// answer some methods only. A route a later change mounts outside the Access check answers without a token and fails
+// this test.
 it("every route needs Access", async () => {
   captureLogs();
-  const routes = app.routes.filter((route) => !/^\/webhook(?:\/|$)/.test(route.path));
-  expect(routes.length).toBeGreaterThan(0);
+  expect(app.routes.length).toBeGreaterThan(0);
 
-  for (const route of routes) {
+  for (const route of app.routes) {
     const path = route.path.replace(/:[^/]+/g, "1").replace(/\*/g, "1");
-    const method = route.method === "ALL" ? "GET" : route.method;
-    const res = await exports.default.fetch(request(path, undefined, { method }));
-    expect({ route: `${method} ${route.path}`, status: res.status }).toEqual({
-      route: `${method} ${route.path}`,
-      status: 401,
-    });
+    for (const method of METHODS.filter((candidate) => !isWebhook(candidate, path))) {
+      const res = await exports.default.fetch(request(path, undefined, { method }));
+      expect({ route: `${method} ${path}`, status: res.status }).toEqual({ route: `${method} ${path}`, status: 401 });
+    }
   }
 });
