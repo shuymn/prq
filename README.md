@@ -15,5 +15,6 @@ Status: design.
 - [docs/ui.md](docs/ui.md): the brief for the UI design.
 - [docs/spikes.md](docs/spikes.md): what the prototype checked and found (code on the `spike/prototype` branch).
 
-The GitHub repository settings are declared in `.github/infra.yaml`; review them with `gh infra plan` and apply them
-with `gh infra apply`.
+The GitHub repository settings are declared in `.github/infra.yaml`; review them with
+`gh-infra plan .github/infra.yaml` and apply them with `gh-infra apply .github/infra.yaml` (gh-infra is pinned in
+`mise.toml`).

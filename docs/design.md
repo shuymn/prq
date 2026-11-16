@@ -427,8 +427,8 @@ prq/
 1. **Prototype (done).** The points to check were tried in the layout above, without lint, format or CI. See
    [spikes.md](spikes.md); the code is on the `spike/prototype` branch and is a reference, not a base to merge.
 2. **UI design.** The screens in [ui.md](ui.md) are designed in Pencil.
-3. **Toolchain and CI.** lint, format, hooks, CI and the repository settings are set up following zenith and kopje (see
-   the toolchain row in [decisions.md](decisions.md)) before the production code is written.
+3. **Toolchain and CI (done).** lint, format, hooks, CI and the repository settings were set up following zenith and
+   kopje (see the toolchain row in [decisions.md](decisions.md)) before the production code is written.
 4. **Implementation.** The production code, starting from the contracts in `@prq/protocol`.
 
 ## Not verified yet
