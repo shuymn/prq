@@ -21,6 +21,7 @@ export default defineConfig(async () => {
     ],
     test: {
       include: ["src/**/*.test.ts"],
+      setupFiles: ["src/test/setup.ts"],
     },
   };
 });
