@@ -44,8 +44,9 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
   "CREATE TABLE prq_outbox (kind TEXT PRIMARY KEY CHECK (kind IN ('notify')), gen INTEGER NOT NULL)",
   // Intake: a row per question waiting for its job, written before the question and removed with the job's creation.
   "CREATE TABLE prq_intake (seq INTEGER PRIMARY KEY AUTOINCREMENT, question_id TEXT NOT NULL UNIQUE)",
-  // The Hub's attempt number of the claim that holds the job (or completed it).
-  "ALTER TABLE prq_jobs ADD COLUMN claim_attempt INTEGER",
+  // Per agent ID, the newest of the Hub's claim attempts that claimed a job here. Kept apart from the jobs: a retry,
+  // which clears a job's claim, does not lower it.
+  "CREATE TABLE prq_claim_attempts (agent_id TEXT PRIMARY KEY, attempt INTEGER NOT NULL)",
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {

@@ -14,7 +14,6 @@ export type JobRow = {
   state: JobState;
   agent_id: string | null;
   claim_id: string | null;
-  claim_attempt: number | null;
   claimed_at: number | null;
   workspace_sha: string | null;
   done_claim_id: string | null;
@@ -100,9 +99,20 @@ const WORKSPACE_SHA = `CASE kind WHEN 'analysis' THEN target ELSE (
   ORDER BY done.updated_at DESC, done.seq DESC LIMIT 1) END`;
 
 // A claim is one attempt of the Hub's, numbered from its counter. A session takes a claim only from an attempt newer
-// than every attempt the agent has claimed under there, so a claim that lands late (its caller stopped waiting for it)
-// changes nothing once a newer attempt of the agent has claimed. Bound to the agent ID, then the attempt.
-const NEWER_ATTEMPT_CLAIMED = "EXISTS (SELECT 1 FROM prq_jobs WHERE agent_id = ? AND claim_attempt >= ?)";
+// than every attempt the agent has claimed under there (prq_claim_attempts), so a claim that lands late (its caller
+// stopped waiting for it) changes nothing once a newer attempt of the agent has claimed, whatever happened to that
+// job since. Bound to the agent ID, then the attempt.
+const NEWER_ATTEMPT_CLAIMED = "EXISTS (SELECT 1 FROM prq_claim_attempts WHERE agent_id = ? AND attempt >= ?)";
+
+// Records that the agent's attempt claimed a job here; written in the claim's transaction.
+export function recordAttempt(sql: SqlStorage, agentId: string, attempt: number): void {
+  sql.exec(
+    `INSERT INTO prq_claim_attempts (agent_id, attempt) VALUES (?, ?)
+     ON CONFLICT (agent_id) DO UPDATE SET attempt = max(attempt, excluded.attempt)`,
+    agentId,
+    attempt,
+  );
+}
 
 // The agent's own claimed job, under a new claim (a resume is a claim: the time and the workspace are set again).
 export function resumeClaim(
@@ -114,14 +124,12 @@ export function resumeClaim(
 ): JobRow | undefined {
   return sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET claim_id = ?, claim_attempt = ?, claimed_at = ?, updated_at = ?,
-         workspace_sha = ${WORKSPACE_SHA}
+      `UPDATE prq_jobs SET claim_id = ?, claimed_at = ?, updated_at = ?, workspace_sha = ${WORKSPACE_SHA}
        WHERE state = 'claimed' AND job_id = (
          SELECT job_id FROM prq_jobs WHERE state = 'claimed' AND agent_id = ? ORDER BY seq LIMIT 1)
          AND NOT ${NEWER_ATTEMPT_CLAIMED}
        RETURNING *`,
       claimId,
-      attempt,
       now,
       now,
       agentId,
@@ -141,13 +149,12 @@ export function freshClaim(
 ): JobRow | undefined {
   return sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET state = 'claimed', agent_id = ?, claim_id = ?, claim_attempt = ?, claimed_at = ?,
-         updated_at = ?, workspace_sha = ${WORKSPACE_SHA}
+      `UPDATE prq_jobs SET state = 'claimed', agent_id = ?, claim_id = ?, claimed_at = ?, updated_at = ?,
+         workspace_sha = ${WORKSPACE_SHA}
        WHERE state = 'pending' AND job_id = (${NEXT_PENDING}) AND NOT ${NEWER_ATTEMPT_CLAIMED}
        RETURNING *`,
       agentId,
       claimId,
-      attempt,
       now,
       now,
       agentId,
@@ -214,7 +221,7 @@ export function finalizingJobs(sql: SqlStorage): JobRow[] {
 export function retry(sql: SqlStorage, jobId: string, now: number): JobRow | undefined {
   return sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET state = 'pending', agent_id = NULL, claim_id = NULL, claim_attempt = NULL, claimed_at = NULL,
+      `UPDATE prq_jobs SET state = 'pending', agent_id = NULL, claim_id = NULL, claimed_at = NULL,
          workspace_sha = NULL, failure = NULL, updated_at = ?
        WHERE job_id = ? AND state IN ('claimed', 'failed') RETURNING *`,
       now,

@@ -45,6 +45,7 @@ import {
   type Peek,
   peekJobs,
   readOwner,
+  recordAttempt,
   removeIntake,
   reserve,
   resultMessageId,
@@ -384,10 +385,16 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     }
     const claimId = crypto.randomUUID();
     const now = Date.now();
-    const row =
-      mode === "resume"
-        ? resumeClaim(this.#sql, agentId, claimId, attempt, now)
-        : freshClaim(this.#sql, agentId, claimId, attempt, now);
+    const row = this.ctx.storage.transactionSync(() => {
+      const claimed =
+        mode === "resume"
+          ? resumeClaim(this.#sql, agentId, claimId, attempt, now)
+          : freshClaim(this.#sql, agentId, claimId, attempt, now);
+      if (claimed !== undefined) {
+        recordAttempt(this.#sql, agentId, attempt);
+      }
+      return claimed;
+    });
     if (row === undefined) {
       return { job: null };
     }

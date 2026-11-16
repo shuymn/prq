@@ -202,7 +202,8 @@ UI, webhook and CLI input all enter through PrSession.
 - A call the Hub stopped waiting for keeps running and can still land. So each `claim` is one attempt, numbered from the
   Hub's counter, and a session takes a claim only from an attempt newer than every attempt that agent has claimed
   under there: a late claim changes nothing once a newer one has claimed, and the `claimId` an agent received stays its
-  claim.
+  claim. The session keeps each agent's newest claiming attempt apart from the jobs and advances it in the claim's
+  transaction, so a retry, which clears a job's claim, does not lower it.
 - Each time `wait` reconnects it re-checks for pending jobs and returns at once if there are any. An authentication
   failure (401 or 403) is told apart from an ordinary timeout and ends with an error, so the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.

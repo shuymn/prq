@@ -227,6 +227,35 @@ describe("late claims", () => {
   });
 });
 
+describe("late claims after a retry", () => {
+  it("lets no fresh claim held past a newer claim and a retry take the retried job", async () => {
+    captureLogs();
+    const { stub, jobId } = await localSessionWithJob();
+    // Attempt 10's fresh claim is held in the session before it chooses a job.
+    const held = await gate(stub);
+    await runInDurableObject(stub, (instance) => {
+      const seams = prSessionSeams(instance);
+      const owner = seams.ownerOf.bind(instance);
+      vi.spyOn(seams, "ownerOf").mockImplementationOnce(async () => {
+        await held.wait();
+        return owner();
+      });
+    });
+    const late = tracked(stub.claim("laptop", "fresh", 10));
+    await held.reached();
+    // Attempt 11 claims the job, and the host retries it.
+    expect(await stub.claim("laptop", "fresh", 11)).toMatchObject({ job: { jobId } });
+    expect(await stub.retryJob(jobId)).toEqual({ status: "retried" });
+    expect(late.settled()).toBe(false);
+
+    await held.open();
+    expect(await late.promise).toEqual({ job: null });
+    expect((await stub.view()).jobs).toMatchObject([{ jobId, state: "pending", agentId: null }]);
+    // A newer attempt of the agent still claims it.
+    expect(await stub.claim("laptop", "fresh", 12)).toMatchObject({ job: { jobId } });
+  });
+});
+
 describe("a session that is slow to start", () => {
   it("bounds a call to it, its start included, and keeps it queued", async () => {
     const logs = captureLogs();
