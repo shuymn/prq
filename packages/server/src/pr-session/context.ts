@@ -66,8 +66,9 @@ export function messageRoom(around: Pick<ContextResponse, "pr" | "job">, ids: re
 }
 
 // What a page takes of a message from offset on: all of it when it fits in `left` bytes, else null, or, for a message
-// that does not fit in a page of its own (`alone`), the longest part that fits, never splitting a surrogate pair and
-// at least one code unit long. A message read from an offset past its start, or cut short, carries its part.
+// that does not fit in a page of its own (`alone`), the longest part that fits, never splitting a surrogate pair; null
+// when not even its first character fits. A message read from an offset past its start, or cut short, carries its
+// part.
 export function take(message: ContextMessage, offset: number, left: number, alone: boolean): ContextMessage | null {
   const { text } = message;
   const piece = (end: number): ContextMessage =>
@@ -82,17 +83,22 @@ export function take(message: ContextMessage, offset: number, left: number, alon
   if (!alone) {
     return null;
   }
+  // The shortest part: one character, both halves of a surrogate pair.
+  const least = offset + (isHighSurrogate(text.charCodeAt(offset)) && offset + 1 < text.length ? 2 : 1);
   let end = text.length;
   for (;;) {
     const units = end - offset;
-    end = offset + Math.max(1, Math.floor((units * left) / size) - 1);
-    if (end > offset + 1 && isHighSurrogate(text.charCodeAt(end - 1))) {
+    end = Math.max(least, offset + Math.floor((units * left) / size) - 1);
+    if (end > least && isHighSurrogate(text.charCodeAt(end - 1))) {
       end -= 1;
     }
     const cut = piece(end);
     size = jsonBytes(cut);
-    if (size <= left || end === offset + 1) {
+    if (size <= left) {
       return cut;
+    }
+    if (end === least) {
+      return null;
     }
   }
 }

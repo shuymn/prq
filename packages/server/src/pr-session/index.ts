@@ -546,8 +546,8 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       return before;
     }
     const page = await this.#contextPage(start.id, start.offset, { pr: this.#pr(), job: this.#job(before) });
-    if (page === null) {
-      return BAD_CURSOR;
+    if ("error" in page) {
+      return page;
     }
     const row = this.#heldJob(agentId, jobId, claimId);
     if ("error" in row) {
@@ -577,22 +577,27 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // The messages from a place in the conversation (null for the start) that fit in the room the rest of the response
-  // leaves (messageRoom), and where the next page starts; null when the place is not in the conversation. The messages'
-  // IDs are read without their content, and only the page's messages are read whole, one at a time. A page holds at
-  // least part of a message.
+  // leaves (messageRoom), and where the next page starts; BAD_CURSOR when the place is not in the conversation. The
+  // messages' IDs are read without their content, and only the page's messages are read whole, one at a time. A page
+  // holds at least part of a message. One that cannot, because the rest of the response or the first character of its
+  // first message does not fit, is refused rather than sent over the budget; bounded IDs and details keep that from
+  // happening but to rows stored before the bounds.
   async #contextPage(
     id: string | null,
     offset: number,
     around: Pick<ContextResponse, "pr" | "job">,
-  ): Promise<{ messages: ContextMessage[]; next: Cursor | null } | null> {
+  ): Promise<{ messages: ContextMessage[]; next: Cursor | null } | ErrorResponse> {
     const session = this.sessions.session();
     const ids = (await session.getHistoryRowStats()).map((stat) => stat.id);
     let index = id === null ? 0 : ids.indexOf(id);
     if (index < 0) {
-      return null;
+      return BAD_CURSOR;
     }
     const messages: ContextMessage[] = [];
     let left = messageRoom(around, ids);
+    if (left < 0) {
+      return this.#pageOverflow(around.job);
+    }
     for (let from = offset; index < ids.length; index += 1, from = 0) {
       const stored = await session.getMessage(ids[index] ?? "");
       const message = stored === null ? null : contextMessage(stored);
@@ -600,13 +605,15 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
         continue;
       }
       if (from > 0 && from >= message.text.length) {
-        return null;
+        return BAD_CURSOR;
       }
       // A comma before each message but the first, counted for all.
       left -= 1;
       const taken = take(message, from, left, messages.length === 0);
       if (taken === null) {
-        return { messages, next: { id: message.id, offset: from } };
+        return messages.length === 0
+          ? this.#pageOverflow(around.job)
+          : { messages, next: { id: message.id, offset: from } };
       }
       messages.push(taken);
       const end = (taken.part?.offset ?? 0) + taken.text.length;
@@ -616,6 +623,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       left -= jsonBytes(taken);
     }
     return { messages, next: null };
+  }
+
+  #pageOverflow(job: Job): ErrorResponse {
+    log("prq.context.overflow", { pr: this.name, jobId: job.jobId }, "error");
+    return { error: "internal", detail: "the conversation from this place does not fit in a context page" };
   }
 
   #job(row: JobRow): Job {

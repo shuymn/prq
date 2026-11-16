@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROUTE_CALL_MS } from "./http.ts";
 import { PRESENCE_MS } from "./hub.ts";
-import { CONTEXT_PAGE_BYTES, take } from "./pr-session/context.ts";
+import { CONTEXT_PAGE_BYTES, jsonBytes, take } from "./pr-session/context.ts";
 import { PrSession } from "./pr-session/index.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
@@ -364,6 +364,35 @@ describe("context pages", () => {
     expect(full?.details?.title).toBe(title);
     expect(full?.nextCursor).toContain(longId);
     expect(new TextEncoder().encode(JSON.stringify(full)).length).toBeGreaterThan(CONTEXT_PAGE_BYTES - 64);
+  });
+
+  it("refuses a page that cannot hold the first character of its message, from a row stored before IDs were bounded", async () => {
+    const logs = captureLogs();
+    const { ref, token, stub } = await localSession("pages", sockets);
+    await push(ref, "A");
+    const claim = holding(await claimOver(token, "laptop"));
+    // An ID no chat request may add now, 4.2 MB as JSON: the message and the cursor that may name it take more than a
+    // page, so not even its first character fits.
+    await store(stub, [{ id: "\u0001".repeat(700_000), text: "stored before the bound" }]);
+
+    const res = await post("/cli/context", token, contextBody(ref, claim, "laptop"));
+
+    const body = await res.text();
+    expect(body.length).toBeLessThan(1024);
+    expect({ status: res.status, body: v.parse(ErrorResponse, JSON.parse(body)) }).toEqual({
+      status: 500,
+      body: { error: "internal", detail: "the conversation from this place does not fit in a context page" },
+    });
+    expect(logs.map((log) => log.entry).filter((entry) => entry["event"] === "prq.context.overflow")).toMatchObject([
+      { jobId: claim.job.jobId },
+    ]);
+  });
+
+  it("takes a whole surrogate pair, or nothing, when the room is for one character", () => {
+    const message = { id: "emoji", role: "assistant", text: "\u{1F600}".repeat(16) } as const;
+    const pair = { ...message, text: "\u{1F600}", part: { offset: 0, length: 32 } };
+    expect(take(message, 0, jsonBytes(pair), true)).toEqual(pair);
+    expect(take(message, 0, jsonBytes(pair) - 1, true)).toBeNull();
   });
 
   it("never ends a part inside a surrogate pair, whatever room the page has", () => {

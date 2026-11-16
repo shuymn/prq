@@ -143,7 +143,10 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   `nextCursor` names where the next page starts (a message and an offset in its text) and is null on the last page.
   The conversation is append-only, so a cursor stays valid while messages are added; the next page then includes them.
   A message larger than a page comes in parts, each carrying `part` (its offset and the message's whole length), and
-  its parts joined are the message. A cursor that names no place in the conversation gets 400 `bad_request`.
+  its parts joined are the message. A cursor that names no place in the conversation gets 400 `bad_request`. A page
+  that cannot hold even the first character of its message within the budget is refused with 500 `internal` (logged
+  as `prq.context.overflow`) rather than sent over it; bounded IDs and details keep that to rows stored before the
+  bounds.
 - A job carries no text of unbounded length, in a claim or in a context: an answer's question is the message its
   target names, which the agent reads from the context's pages. A claim's response therefore stays small however long
   the question is.
