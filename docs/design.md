@@ -17,8 +17,8 @@ conversation.
   reads, are language-neutral too. The UI text is written in one language and is not translated.
 - **Local and cloud agents are treated alike.** An analysis can run in a local AI session on a subscription (Claude
   Code, Codex or another; prq does not name one) or in a cloud agent that calls an LLM with an API key. Summaries and the
-  conversation look the same whichever agent made them; only the operational parts (job status, the pool, the budget,
-  explanations of waiting) name the agent.
+  conversation look the same whichever agent made them; only the operational parts (job status, the pool, explanations
+  of waiting) name the agent.
 - **Agents form a pool.** A cloud agent is always in the pool. A local agent is in the pool only while `prq` is
   running, and when one is present it is preferred over cloud.
 - **A local agent is woken by the AI's own mechanism.** The AI session starts a background `prq wait` and resumes when
@@ -70,7 +70,8 @@ UI:    React + Vite (Workers Static Assets), connected to PrSession with useAgen
   is safe in URLs and cannot appear in a GitHub owner or repository name.
 - **Hub.** One `Agent` instance that holds the PR ledger for the list view, the pool (which agent IDs are present), the
   notification queue for local agents, and the instructions (the two prompts and the skill registry). It does not hold
-  job state; it asks PrSession (`peek`, `claim`).
+  job state; it asks PrSession (`peek`, `claim`). Each ledger entry keeps what a list row shows (see
+  [PR ledger](#pr-ledger)).
 - **prq CLI.** Runs on the host's machine, talks to the Worker over HTTP with a service token, and uses the host's own
   git and `gh`.
 - **Sandbox.** The cloud workspace of a PrSession: a container with a checkout of the PR that the agent searches and
@@ -114,9 +115,12 @@ UI, webhook and CLI input all enter through PrSession.
   turn; for `local` it runs no turn, creates a job for every user question that has none, and notifies the Hub. A
   question can already be stored when a later turn starts, which is why every question without a job gets one, not only
   the last message.
-- When a webhook arrives, it goes to the PrSession, not to the Hub. If an analysis job for the same head SHA already
-  exists (waiting, running or done), the system shall do nothing. A redelivery is therefore harmless and no delivery ID
-  is stored. Analysis jobs that have not started are folded into the latest head: if A is running and B and C arrive,
+- An analysis is made per push, at the pushed head SHA: GitHub sends one `pull_request` event per push, and the commits
+  inside a push are not analyzed one by one.
+- When a webhook arrives, it goes to the PrSession, not to the Hub. The PrSession always records the pushed SHA as the
+  current head. If an analysis job for the same head SHA already exists (waiting, running or done), the system shall
+  create no job; a push back to an already analyzed head (after a force-push, for example) shows that head's stored
+  summary. A redelivery is therefore harmless and no delivery ID is stored. Analysis jobs that have not started are folded into the latest head: if A is running and B and C arrive,
   only C runs after A.
 - A waiting question runs before the next analysis.
 - When the server appends a message to the conversation (an analysis request, for example), it calls
@@ -142,6 +146,19 @@ UI, webhook and CLI input all enter through PrSession.
 
 CLI exit codes: 0 ready, 2 timeout, 3 authentication failure, 4 claim mismatch, 1 anything else.
 
+### Versions
+
+- The Worker and the web UI it serves are deployed together and share one version, `vX.Y.Z`; the UI shows it next to
+  the product name. The CLI carries the version it was built with. How releases set the version is decided with the
+  deploy setup.
+- Every `/cli/*` response, including errors and `wait` timeouts, carries the server's version in a `Prq-Version`
+  header (named in `@prq/protocol`); response bodies do not change. Every `prq` command that calls `/cli/*` compares
+  it with its own version as plain strings, so a pre-release or build differs from the release. On a mismatch it
+  writes one line to stderr, once per invocation however often `wait` reconnects, naming both versions (for example
+  "prq v0.3.0 talks to a v0.4.0 server; update prq if a command fails"). It is a notice, not an error: stdout and the
+  exit code stay the same. A response without the header (a failure before the Worker, such as at Access) is not
+  compared. Setting `PRQ_VERSION_NOTICE=0` turns the notice off.
+
 ### Presence
 
 - Registering in the pool is the `prq` connection itself, and presence is kept per agent ID. There is no registration
@@ -151,6 +168,27 @@ CLI exit codes: 0 ready, 2 timeout, 3 authentication failure, 4 claim mismatch, 
   new PRs to cloud.
 - When any one agent ID is present, "a local agent is present" is true.
 
+### PR ledger
+
+The Hub's entry per PR is what the list shows without asking each PrSession. PrSession sends the entry's fields to the
+Hub whenever a push arrives, a question is saved, one of its jobs changes state, or a claim reaches 60 minutes (an
+alarm set at the claim). The Hub adds only what it owns itself: whether a local agent is present.
+
+- **Latest event:** a push received, a question sent, a summary completed or an answer completed, with its time. Rows
+  are ordered by it. Claims, heartbeats and streaming are not events.
+- **Problem:** at most one label, the first that applies in this order:
+  1. *Summary failed* — the analysis of the current head failed and it has no completed analysis. Clears when one
+     completes.
+  2. *Answer failed* — a question's latest job failed. Clears when a retry of it completes.
+  3. *Possibly stalled* — a claimed job has no result 60 minutes after its claim. Clears when the job completes, fails
+     or is retried.
+  4. *Waiting for a local agent* — a `local` session has waiting work (sent by PrSession) and no local agent is
+     present (known to the Hub). Clears when an agent is present again.
+  5. *New push not summarized* — the current head has no completed analysis. It is derived from the current head, not
+     from the latest completed summary, so a completed analysis of an older head does not clear it and a push back to
+     an analyzed head does not set it.
+  "Needs attention" counts the PRs whose problem is one of the first four.
+
 ### Instructions and skills
 
 How a summary or an answer should read is the host's decision, written as instructions. The core holds the mechanism
@@ -159,10 +197,16 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
 - **Two free-form prompts**, edited in settings: one for analysis (the summaries) and one for answers. An example is
   "Write in Japanese. Polish the final text with the yomiyasu skill." A prompt is plain text; the core does not parse it.
 - **Skills in the Agent Skills format.** A skill is a directory with a `SKILL.md` (frontmatter with `name` and
-  `description`) and optional `references/` and `scripts/`. The host registers a skill by GitHub URL, path and ref; the
-  system resolves the ref to a commit SHA and pins the skill to it. The Hub stores the registration and the pinned
-  contents. A skill is only re-read from GitHub when the host updates it to a new ref. An example is
-  `skills/yomiyasu` of `nanaism/yomiyasu` (MIT).
+  `description`) and optional `references/` and `scripts/`. The host registers a skill by the GitHub link to its
+  `SKILL.md` (`/blob/<ref>/<path>/SKILL.md`), which names the repository, ref and path. The ref is a commit SHA (a
+  permalink) or a branch or tag, which may contain `/`: the segments after `blob/` are split at the longest prefix that
+  names a branch or tag, or at the first segment when it is a commit SHA (as GitHub does). The preview shows the
+  resolved ref and path, so a wrong split is seen before confirming. The system resolves the ref to a commit SHA and
+  pins the skill to it; a permalink is already pinned, and updating it means pasting a new link.
+  Registering and updating take two steps: a preview resolves the ref and fetches the skill without saving it, so the
+  host sees what would be pinned (see [ui.md](ui.md#4-settings)), and confirming pins the previewed SHA without
+  resolving the ref again. The Hub stores the registration and the pinned contents. A skill is only re-read from GitHub
+  when the host updates it to a new ref. An example is `skills/yomiyasu` of `nanaism/yomiyasu` (MIT).
 - **Context budget.** Only each skill's `name` and `description` stay in the model context. The body and the files it
   refers to are loaded on demand through two tools: `activate_skill(name)` returns the `SKILL.md` body, and
   `read_skill_resource(name, path)` returns a file inside that skill's directory (path-checked, so it cannot leave it).
@@ -281,8 +325,8 @@ These are enforced, not left to observation.
   either limit, the system shall make no further model or tool calls and end the job as `failed` with the reason. Text the
   turn had already produced is kept in the conversation and marked incomplete.
 - AIChatAgent's automatic recovery retries are lowered from the default of 10 to about 2. A compaction is retried once.
-- The Hub holds a daily token budget for cloud. When it is exceeded, cloud jobs stop and the UI says so. A provider with
-  prepaid credit also stops at the balance at worst.
+- Spending is capped at the model provider, with the spend limit or prepaid credit of the API key; prq keeps no budget
+  of its own. When the provider refuses a call, the job ends as `failed` with the provider's reason.
 - A Sandbox stops after inactivity (for example, 30 minutes).
 - A `prq wait` long-poll keeps the Hub awake while it waits, and that time is Durable Object duration billed. One waiter
   should fit in the allowance included with Workers Paid; usage is checked after deployment, and if it is high the
@@ -319,6 +363,7 @@ prq/
 │      └─ src/                main.ts, commands/, HTTP client, git
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
 ├─ docs/                   design.md, decisions.md, ui.md, spikes.md
+├─ design/                 design tokens, component inventory, screens ↔ Pencil frames, the Pencil document (the UI design's source for code)
 ├─ pnpm-workspace.yaml     catalog
 ├─ package.json
 ├─ tsconfig.base.json
@@ -333,7 +378,7 @@ prq/
 
 1. **Prototype (done).** The points to check were tried in the layout above, without lint, format or CI. See
    [spikes.md](spikes.md); the code is on the `spike/prototype` branch and is a reference, not a base to merge.
-2. **UI design.** The screens in [ui.md](ui.md) are designed in Penpot.
+2. **UI design.** The screens in [ui.md](ui.md) are designed in Pencil.
 3. **Toolchain and CI.** lint, format, hooks, CI and the repository settings are set up following zenith and kopje (see
    the toolchain row in [decisions.md](decisions.md)) before the production code is written.
 4. **Implementation.** The production code, starting from the contracts in `@prq/protocol`.
@@ -350,8 +395,7 @@ Only a deployment can show these.
   numbers are not production values.
 - **Bundling by wrangler.** That the PKCS#8-only crypto path of `@octokit/auth-app` is the one wrangler bundles was
   checked with an equivalent esbuild condition set, not with wrangler's own.
-- **Billing.** The Durable Object duration of the `wait` long-poll with one waiter, and the real cost of cloud turns
-  against the daily budget.
+- **Billing.** The Durable Object duration of the `wait` long-poll with one waiter, and the real cost of cloud turns.
 - **Providers other than the one tried.** Tool calling and streaming through the AI SDK were tried against one
   OpenAI-compatible provider; each provider to be used needs the same check.
 - **Compaction at real context lengths.** Compaction was exercised with a deliberately small window; its behavior with a
