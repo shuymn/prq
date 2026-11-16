@@ -13,6 +13,11 @@ catalog:
   jose: 6.2.17
   valibot: 1.5.0
 
+  # The Durable Objects: the Agents SDK (Hub), its chat agent (PrSession) and the AI SDK message types it stores.
+  "@cloudflare/ai-chat": 0.12.2
+  agents: 0.33.0
+  ai: 7.0.172
+
   # Tests and TypeScript.
   typescript: 7.0.2
   vitest: 5.1.0
@@ -27,9 +32,10 @@ catalog:
   oxlint: 1.93.0
   oxlint-tsgolint: 7.0.2007
 
-# Dependency build scripts, each reviewed: none runs, since every one of these packages takes its platform binary from
-# optionalDependencies.
+# Dependency build scripts, each reviewed: none runs. esbuild, lefthook and workerd take their platform binaries from
+# optionalDependencies; core-js-pure's postinstall only prints a funding message.
 allowBuilds:
+  core-js-pure: false
   esbuild: false
   lefthook: false
   workerd: false
