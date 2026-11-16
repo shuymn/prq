@@ -14,23 +14,40 @@ export const HUB_SCHEMA: SchemaSteps = [
   // The notification queue: sessions that may have local work, with the generation of their latest notify.
   `CREATE TABLE prq_notifications (
     session TEXT PRIMARY KEY, gen INTEGER NOT NULL, notified_at INTEGER NOT NULL)`,
-  // The ledger: each session's newest entry (JSON) with its revision, the time of its latest event (NULL until one),
-  // which orders the list, and whether its problem needs attention with a local agent present and without one.
+  // The ledger: each session's newest entry (JSON) with its revision, and what the list's order, its filters and the
+  // Hub's totals read without parsing it: the latest event's time (-1 without one), the repository (owner/name,
+  // canonical), whether the pull request is open (or its state not known yet), whether its problem needs attention with
+  // a local agent present and without one, and its jobs.
   `CREATE TABLE prq_ledger (
-    session TEXT PRIMARY KEY, rev INTEGER NOT NULL, latest_event_at INTEGER, entry TEXT NOT NULL,
+    session TEXT PRIMARY KEY, rev INTEGER NOT NULL, entry TEXT NOT NULL,
+    sort_at INTEGER NOT NULL, repo TEXT NOT NULL, open INTEGER NOT NULL CHECK (open IN (0, 1)),
     attention_present INTEGER NOT NULL CHECK (attention_present IN (0, 1)),
-    attention_absent INTEGER NOT NULL CHECK (attention_absent IN (0, 1)))`,
-  // The list's order (NULLs sort last when descending), which pages walk.
-  "CREATE INDEX prq_ledger_order ON prq_ledger (latest_event_at DESC, session)",
+    attention_absent INTEGER NOT NULL CHECK (attention_absent IN (0, 1)),
+    jobs_waiting INTEGER NOT NULL, jobs_running INTEGER NOT NULL, jobs_failed INTEGER NOT NULL)`,
+  // The list's order, walked backwards, without a filter and under each one: every page is a range of one index.
+  "CREATE INDEX prq_ledger_order ON prq_ledger (sort_at, session)",
+  "CREATE INDEX prq_ledger_open ON prq_ledger (sort_at, session) WHERE open = 1",
+  "CREATE INDEX prq_ledger_repo ON prq_ledger (repo, sort_at, session)",
+  "CREATE INDEX prq_ledger_attention_present ON prq_ledger (sort_at, session) WHERE attention_present = 1",
+  "CREATE INDEX prq_ledger_attention_absent ON prq_ledger (sort_at, session) WHERE attention_absent = 1",
   // The claims the ledger entries hold, per session and job: the agent ID and the claim's time on the Hub's clock.
   `CREATE TABLE prq_claims (
     session TEXT NOT NULL, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, claimed_at INTEGER NOT NULL,
     PRIMARY KEY (session, job_id))`,
-  // ledger_version: advanced by every entry the ledger stores. attention_*: how many rows need attention with a local
-  // agent present and without one, kept with each stored entry so no count reads every row.
-  "ALTER TABLE prq_hub ADD COLUMN ledger_version INTEGER NOT NULL DEFAULT 0",
-  "ALTER TABLE prq_hub ADD COLUMN attention_present INTEGER NOT NULL DEFAULT 0",
-  "ALTER TABLE prq_hub ADD COLUMN attention_absent INTEGER NOT NULL DEFAULT 0",
+  "CREATE INDEX prq_claims_agent ON prq_claims (agent_id)",
+  // The repositories the ledger has rows of (owner/name, canonical), with their owner and their name in GitHub's display
+  // case once an entry has given it.
+  "CREATE TABLE prq_repos (repo TEXT PRIMARY KEY, owner TEXT NOT NULL, full_name TEXT NOT NULL)",
+  "CREATE INDEX prq_repos_owner ON prq_repos (owner)",
+  // The ledger's totals, kept with each stored entry so the Hub's view reads no row: its version (advanced by every
+  // stored entry), the rows that need attention with a local agent present and without one, the jobs of every row, and
+  // the owners of the repositories.
+  `CREATE TABLE prq_ledger_totals (
+    id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL DEFAULT 0,
+    attention_present INTEGER NOT NULL DEFAULT 0, attention_absent INTEGER NOT NULL DEFAULT 0,
+    jobs_waiting INTEGER NOT NULL DEFAULT 0, jobs_running INTEGER NOT NULL DEFAULT 0,
+    jobs_failed INTEGER NOT NULL DEFAULT 0, owners INTEGER NOT NULL DEFAULT 0)`,
+  "INSERT INTO prq_ledger_totals (id) VALUES (1)",
 ];
 
 export const PR_SESSION_SCHEMA: SchemaSteps = [

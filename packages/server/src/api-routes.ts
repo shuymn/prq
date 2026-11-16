@@ -1,9 +1,13 @@
 import { vValidator } from "@hono/valibot-validator";
 import {
+  type AgentPage,
+  AgentQuery,
   type ErrorResponse,
   type LedgerPage,
   LedgerQuery,
   PrRef,
+  type RepoPage,
+  RepoQuery,
   RetryRequest,
   type RetryResponse,
 } from "@prq/protocol";
@@ -43,13 +47,25 @@ export function apiRoutes(bound: CallBound) {
           return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
         },
       )
-      // The ledger's rows a page at a time, in the list's order (docs/design.md, PR ledger). The UI reads them again when
-      // the Hub view's ledgerVersion or localAgentPresent changes. A page only reads, so one that lands after the route
-      // stopped waiting changes nothing.
+      // The Hub's pages (docs/design.md, PR ledger and Presence): the ledger's rows in the list's order under its
+      // filters, the present agents, and the repositories for the list's menu. Each only reads, so one that lands after
+      // the route stopped waiting changes nothing.
       .get("/ledger", vValidator("query", LedgerQuery, invalidRequest), async (c) => {
-        const { cursor } = c.req.valid("query");
-        const call = (async (): Promise<LedgerPage | ErrorResponse> => (await hubStub(c.env)).ledgerPage(cursor))();
+        const query = c.req.valid("query");
+        const call = (async (): Promise<LedgerPage | ErrorResponse> => (await hubStub(c.env)).ledgerPage(query))();
         const result = await bound(call, ROUTE_CALL_MS, "the Hub's ledger page");
+        return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
+      })
+      .get("/agents", vValidator("query", AgentQuery, invalidRequest), async (c) => {
+        const { cursor } = c.req.valid("query");
+        const call = (async (): Promise<AgentPage | ErrorResponse> => (await hubStub(c.env)).agentPage(cursor))();
+        const result = await bound(call, ROUTE_CALL_MS, "the Hub's agent page");
+        return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
+      })
+      .get("/repos", vValidator("query", RepoQuery, invalidRequest), async (c) => {
+        const { cursor } = c.req.valid("query");
+        const call = (async (): Promise<RepoPage | ErrorResponse> => (await hubStub(c.env)).repoPage(cursor))();
+        const result = await bound(call, ROUTE_CALL_MS, "the Hub's repository page");
         return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
       })
   );

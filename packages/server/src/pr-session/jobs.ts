@@ -605,17 +605,26 @@ export function ledgerEntry(sql: SqlStorage, now: number): LedgerEntry {
   const count = (...of: JobState[]) => of.reduce((sum, state) => sum + (states.get(state) ?? 0), 0);
   const exists = (where: string, ...bindings: unknown[]) =>
     sql.exec(`SELECT 1 FROM prq_jobs WHERE ${where} LIMIT 1`, ...bindings).toArray().length > 0;
+  // The unresolved failures the labels count: every answer's, and the current head's analysis's.
+  const answersFailed = sql
+    .exec<{ jobs: number }>("SELECT count(*) AS jobs FROM prq_jobs WHERE kind = 'answer' AND unresolved_failure = 1")
+    .one().jobs;
+  const summaryFailed = exists("kind = 'analysis' AND target = ? AND unresolved_failure = 1", headSha);
   const held = heldJobs(sql);
   return {
     details: readDetails(sql),
     owner,
     latestEvent: latestEvent(sql),
-    summaryFailed: exists("kind = 'analysis' AND target = ? AND unresolved_failure = 1", headSha),
-    answerFailed: exists("kind = 'answer' AND unresolved_failure = 1"),
+    summaryFailed,
+    answerFailed: answersFailed > 0,
     stalled: held.some((row) => isStalled(row, now)),
     waitingWork: owner === "local" && count("pending") > 0,
     unsummarized: headSha !== null && !exists("kind = 'analysis' AND target = ? AND state = 'done'", headSha),
-    jobs: { waiting: count("pending"), running: count("claimed", "finalizing", "running"), failed: count("failed") },
+    jobs: {
+      waiting: count("pending"),
+      running: count("claimed", "finalizing", "running"),
+      failed: answersFailed + Number(summaryFailed),
+    },
     claims: held.flatMap((row) =>
       row.agent_id === null || row.claimed_at === null
         ? []

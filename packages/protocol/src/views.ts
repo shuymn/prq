@@ -1,7 +1,7 @@
 import * as v from "valibot";
 
 import { JobTarget } from "./cli.ts";
-import { AgentId, PrDetails, PrRef } from "./pr.ts";
+import { AgentId, MAX_FULL_NAME_CHARS, PrDetails, PrRef, RepoName } from "./pr.ts";
 
 // Sent on every WebSocket connection to the Hub and to a PrSession: a browser cannot read the Prq-Version header of a
 // WebSocket response, so the UI learns the server's version from this message (docs/design.md, Versions).
@@ -76,38 +76,44 @@ export const LedgerClaim = v.object({
 });
 export type LedgerClaim = v.InferOutput<typeof LedgerClaim>;
 
+// A count of jobs by what the host sees of them: waiting (pending), running (claimed, being finalized or run by the
+// cloud agent) and failed (an unresolved failure, as the labels count one: a failed answer until a retry of it
+// completes, and the current head's failed analysis until one of the head completes; a retried job also counts as
+// waiting or running meanwhile).
+export const JobCounts = v.object({
+  waiting: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+  running: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+  failed: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+});
+export type JobCounts = v.InferOutput<typeof JobCounts>;
+
 // A pull request as the list shows it: its details (null until its first webhook), its owner (null until its first
-// job), its latest event, its problem, its jobs by state (running counts claimed jobs), and the claims held in it, at
-// most MAX_ROW_CLAIMS, those of the earliest jobs first.
+// job), its latest event, its problem, its jobs, and the claims held in it, at most MAX_ROW_CLAIMS, those of the
+// earliest jobs first.
 export const LedgerRow = v.object({
   pr: PrRef,
   details: v.nullable(PrDetails),
   owner: v.nullable(Owner),
   latestEvent: v.nullable(LatestEvent),
   problem: v.nullable(Problem),
-  jobs: v.object({ waiting: v.number(), running: v.number(), failed: v.number() }),
+  jobs: JobCounts,
   claims: v.pipe(v.array(LedgerClaim), v.maxLength(MAX_ROW_CLAIMS)),
 });
 export type LedgerRow = v.InferOutput<typeof LedgerRow>;
 
-// The most present agents the Hub view lists; presentAgents counts them all.
-export const MAX_VIEW_AGENTS = 32;
-
-// A present local agent, and whether it holds a claim.
-export const PoolAgent = v.object({ agentId: AgentId, holdsJob: v.boolean() });
-export type PoolAgent = v.InferOutput<typeof PoolAgent>;
-
-// The Hub's Agent state, synced to the UI by useAgent, and bounded whatever the number of pull requests or agents:
-// whether a local agent is present, how many are, the first MAX_VIEW_AGENTS of them by ID, the ledger's version, and how
-// many rows need attention. It changes only when presence, a held claim or the ledger changes, never on a contact
-// alone. The rows themselves are read in pages (LedgerPage); the UI reads them again when ledgerVersion or
-// localAgentPresent changes (a row's problem depends on presence). Only the server sets it.
+// The Hub's Agent state, synced to the UI by useAgent, and the same size whatever the number of pull requests or
+// agents: whether a local agent is present and how many are, the jobs of every pull request, how many rows need
+// attention, how many owners the pull requests have (a row names its repository without the owner while there is
+// one), and the ledger's version, which every stored entry advances. A contact alone changes none of it. The rows, the
+// agents and the repositories are read in pages (GET /api/ledger, /api/agents and /api/repos); the UI reads the rows
+// again when ledgerVersion or localAgentPresent changes (a row's problem depends on presence). Only the server sets it.
 export const HubView = v.object({
   localAgentPresent: v.boolean(),
   presentAgents: v.number(),
-  agents: v.pipe(v.array(PoolAgent), v.maxLength(MAX_VIEW_AGENTS)),
-  ledgerVersion: v.number(),
+  jobs: JobCounts,
   needsAttention: v.number(),
+  owners: v.number(),
+  ledgerVersion: v.number(),
 });
 export type HubView = v.InferOutput<typeof HubView>;
 
@@ -116,17 +122,57 @@ export const LEDGER_PAGE_BYTES = 256 * 1024;
 export const LEDGER_PAGE_ROWS = 500;
 export const MAX_LEDGER_CURSOR_CHARS = 512;
 
-// GET /api/ledger: the rows after the cursor (from the first when there is none), in the list's order.
+// GET /api/ledger: the rows after the cursor (from the first when there is none), in the list's order, that pass the
+// filters: open pull requests (and those whose state is not known yet) unless state is all, one repository (owner/name
+// in any case), and with attention=1 only the rows whose problem needs attention as presence is now.
 export const LedgerQuery = v.object({
   cursor: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(MAX_LEDGER_CURSOR_CHARS))),
+  state: v.optional(v.picklist(["open", "all"]), "open"),
+  repo: v.optional(RepoName),
+  attention: v.optional(v.literal("1")),
 });
 export type LedgerQuery = v.InferOutput<typeof LedgerQuery>;
 
-// A page of rows by latest event, newest first and rows without one last, then by session name. nextCursor names the
-// last row's place (null on the last page); a page read with it starts after that row however rows change meanwhile, so
-// a row moved by a newer event may be left out of the pass that is under way, which the changed ledgerVersion tells.
+// A page of rows by latest event, newest first and rows without one last, then by session name, descending.
+// nextCursor names the last row's place (null on the last page); a page read with it starts after that place under
+// the same filters however rows change meanwhile, so a row moved by a newer event may be left out of the pass that is
+// under way, which the changed ledgerVersion tells.
 export const LedgerPage = v.object({ rows: v.array(LedgerRow), nextCursor: v.nullable(v.string()) });
 export type LedgerPage = v.InferOutput<typeof LedgerPage>;
+
+// A present local agent: its last contact (null when only a claim makes it present), whether it is in a wait, and
+// whether it holds a claim.
+export const AgentRow = v.object({
+  agentId: AgentId,
+  lastSeenAt: v.nullable(v.number()),
+  waiting: v.boolean(),
+  holdsJob: v.boolean(),
+});
+export type AgentRow = v.InferOutput<typeof AgentRow>;
+
+export const AGENT_PAGE_BYTES = 64 * 1024;
+export const AGENT_PAGE_ROWS = 100;
+
+// GET /api/agents: the present agents after the cursor (an agent ID), by agent ID.
+export const AgentQuery = v.object({ cursor: v.optional(AgentId) });
+export type AgentQuery = v.InferOutput<typeof AgentQuery>;
+
+export const AgentPage = v.object({ rows: v.array(AgentRow), nextCursor: v.nullable(v.string()) });
+export type AgentPage = v.InferOutput<typeof AgentPage>;
+
+// A repository with pull requests in the ledger, owner/name in GitHub's display case once a webhook has given it.
+export const RepoRow = v.object({ fullName: v.pipe(v.string(), v.maxLength(MAX_FULL_NAME_CHARS)) });
+export type RepoRow = v.InferOutput<typeof RepoRow>;
+
+export const REPO_PAGE_BYTES = 64 * 1024;
+export const REPO_PAGE_ROWS = 200;
+
+// GET /api/repos: the repositories after the cursor (owner/name in any case), by owner/name.
+export const RepoQuery = v.object({ cursor: v.optional(RepoName) });
+export type RepoQuery = v.InferOutput<typeof RepoQuery>;
+
+export const RepoPage = v.object({ rows: v.array(RepoRow), nextCursor: v.nullable(v.string()) });
+export type RepoPage = v.InferOutput<typeof RepoPage>;
 
 // A retry's body: the job's rev in the view the host retried from.
 export const RetryRequest = v.object({ expectedRev: v.pipe(v.number(), v.safeInteger(), v.minValue(0)) });

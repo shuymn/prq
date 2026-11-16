@@ -1,16 +1,25 @@
 import {
+  AGENT_PAGE_BYTES,
+  AGENT_PAGE_ROWS,
+  type AgentPage,
+  type AgentRow,
   type ClaimResponse,
   type ErrorResponse,
   type HubView,
   LEDGER_PAGE_BYTES,
   LEDGER_PAGE_ROWS,
   type LedgerPage,
+  type LedgerQuery,
   type LedgerRow,
+  MAX_AGENT_ID_CHARS,
+  MAX_FULL_NAME_CHARS,
   MAX_LEDGER_CURSOR_CHARS,
   MAX_ROW_CLAIMS,
-  MAX_VIEW_AGENTS,
   parseSessionName,
   type PrRef,
+  REPO_PAGE_BYTES,
+  REPO_PAGE_ROWS,
+  type RepoPage,
   WaitRequest,
   type WaitResponse,
 } from "@prq/protocol";
@@ -27,6 +36,7 @@ import {
   type Presence,
   presenceEnd,
   problemOf,
+  STALL_MS,
 } from "./ledger.ts";
 import { errorName, log } from "./log.ts";
 import { prSessionStub } from "./names.ts";
@@ -48,13 +58,21 @@ export function waitBoundMs(timeoutMs: number | undefined): number {
 
 type Notification = { session: string; gen: number };
 
-type AgentPresence = Presence & { claimedAt: number[] };
-
 // A stored ledger row as a page reads it.
-type StoredRow = { session: string; latest_event_at: number | null; entry: string };
+type StoredRow = { session: string; sort_at: number; entry: string };
 
-// A place in the list's order: a row's latest event time (null when it has none) and its session.
-type LedgerCursor = { at: number | null; session: string };
+// A place in the list's order: a row's sort_at (its latest event's time, -1 without one) and its session.
+type LedgerCursor = { at: number; session: string };
+
+// The ledger's filters as a query applies them: open rows only, one repository (canonical owner/name), and the rows
+// that need attention with a local agent present or without one (the column that says so).
+export type LedgerFilter = {
+  open: boolean;
+  repo: string | null;
+  attention: "attention_present" | "attention_absent" | null;
+};
+
+type Page<R> = { rows: R[]; nextCursor: string | null };
 
 const BAD_LEDGER_CURSOR: ErrorResponse = { error: "bad_request", detail: "the cursor names no place in the ledger" };
 
@@ -105,7 +123,7 @@ export class Hub extends Agent<Env, HubView> {
 
   // A contact from a local agent: a wait (at its start and end), a claim, a submit or a context.
   async touch(agentId: string): Promise<void> {
-    this.#contact(agentId, Date.now());
+    this.#contact(agentId, this.clock());
     await this.#poolChanged();
   }
 
@@ -122,46 +140,41 @@ export class Hub extends Agent<Env, HubView> {
   // Whether any local agent is present (docs/design.md, Presence): one in a wait, one whose last contact is less than
   // PRESENCE_MS ago, or one holding a claim made less than STALL_MS + PRESENCE_MS ago.
   isLocalPresent(): boolean {
-    return this.#localPresent(Date.now());
+    return this.#localPresent(this.clock());
   }
 
   #localPresent(now: number): boolean {
     return [...this.#presences(now).values()].some((presence) => isPresent(presence, now));
   }
 
-  // Each agent ID that may be present at now, with what its presence rests on, all on the Hub's clock.
-  #presences(now: number): Map<string, AgentPresence> {
-    const presences = new Map<string, AgentPresence>();
-    const of = (agentId: string): AgentPresence => {
-      let presence = presences.get(agentId);
-      if (presence === undefined) {
-        presence = { waiting: false, lastSeenAt: null, claimedAt: [] };
-        presences.set(agentId, presence);
-      }
-      return presence;
-    };
-    const recent = this.#sql.exec<{ agent_id: string; last_seen_at: number }>(
-      "SELECT agent_id, last_seen_at FROM prq_agents WHERE last_seen_at > ?",
+  // Each agent ID that may be present at now (a recent contact, a claim or a wait), with what its presence rests on, all
+  // on the Hub's clock.
+  #presences(now: number): Map<string, Presence> {
+    const recent = this.#sql.exec<{ agent_id: string }>(
+      "SELECT agent_id FROM prq_agents WHERE last_seen_at > ?",
       now - PRESENCE_MS,
     );
-    for (const row of recent) {
-      of(row.agent_id).lastSeenAt = row.last_seen_at;
-    }
-    for (const row of this.#sql.exec<{ agent_id: string; claimed_at: number }>(
-      "SELECT agent_id, claimed_at FROM prq_claims",
-    )) {
-      of(row.agent_id).claimedAt.push(row.claimed_at);
-    }
-    for (const waiter of this.#waiters) {
-      of(waiter.agentId).waiting = true;
-    }
-    for (const [agentId, presence] of presences) {
-      presence.lastSeenAt ??=
+    const holding = this.#sql.exec<{ agent_id: string }>("SELECT DISTINCT agent_id FROM prq_claims");
+    const ids = new Set([
+      ...[...recent, ...holding].map((row) => row.agent_id),
+      ...[...this.#waiters].map((waiter) => waiter.agentId),
+    ]);
+    return new Map([...ids].map((agentId) => [agentId, this.#presenceOf(agentId)]));
+  }
+
+  // What an agent ID's presence rests on: whether it is in a wait, its last contact, and its claims.
+  #presenceOf(agentId: string): Presence {
+    return {
+      waiting: [...this.#waiters].some((waiter) => waiter.agentId === agentId),
+      lastSeenAt:
         this.#sql
-          .exec<{ last_seen_at: number }>("SELECT last_seen_at FROM prq_agents WHERE agent_id = ?", agentId)
-          .toArray()[0]?.last_seen_at ?? null;
-    }
-    return presences;
+          .exec<{ at: number }>("SELECT last_seen_at AS at FROM prq_agents WHERE agent_id = ?", agentId)
+          .toArray()[0]?.at ?? null,
+      claimedAt: this.#sql
+        .exec<{ at: number }>("SELECT claimed_at AS at FROM prq_claims WHERE agent_id = ?", agentId)
+        .toArray()
+        .map((row) => row.at),
+    };
   }
 
   // After any change to the pool or the ledger, and at the Hub's start: presenceEnded at the next time an agent's
@@ -180,7 +193,7 @@ export class Hub extends Agent<Env, HubView> {
   // presenceEnded at the first whole second at or after the earliest time a present agent's presence ends, unless a
   // row for a later second than this one is due by then (a row due now may be the one running, which is ending).
   async #armPresenceEnded(): Promise<void> {
-    const now = Date.now();
+    const now = this.clock();
     const ends = [...this.#presences(now).values()].map(presenceEnd).filter((end) => end > now && end < Infinity);
     if (ends.length === 0) {
       return;
@@ -206,47 +219,67 @@ export class Hub extends Agent<Env, HubView> {
   // session's: each is placed on the Hub's clock by its age, and an agent whose claim is no longer listed (a submit or
   // a retry ended it) counts as seen when the claim stopped applying, so its presence ends PRESENCE_MS after that.
   async upsertLedger(session: string, rev: number, entry: LedgerEntry): Promise<void> {
-    if (parseSessionName(session) === null || !v.is(LedgerEntry, entry)) {
+    const pr = parseSessionName(session);
+    if (pr === null || !v.is(LedgerEntry, entry)) {
       log("prq.hub.ledger_refused", {}, "warn");
       return;
     }
-    const now = Date.now();
-    // Whether the row needs attention with a local agent present and without one: the Hub's counts follow each stored
-    // entry, so the view's count reads no row.
-    const present = Number(needsAttention(problemOf(entry, true)));
-    const absent = Number(needsAttention(problemOf(entry, false)));
+    const now = this.clock();
+    // What the list's order, its filters and the totals read of the row. Whether it needs attention is kept for a local
+    // agent present and for none: the counts follow each stored entry, so neither the view nor a filter parses a row.
+    const row = {
+      sortAt: entry.latestEvent?.at ?? -1,
+      repo: repoKey(pr),
+      open: Number(entry.details === null || entry.details.state === "open"),
+      present: Number(needsAttention(problemOf(entry, true))),
+      absent: Number(needsAttention(problemOf(entry, false))),
+      ...entry.jobs,
+    };
     const stored = this.ctx.storage.transactionSync(() => {
       const before = this.#sql
-        .exec<{ present: number; absent: number }>(
-          "SELECT attention_present AS present, attention_absent AS absent FROM prq_ledger WHERE session = ?",
+        .exec<{ present: number; absent: number; waiting: number; running: number; failed: number }>(
+          `SELECT attention_present AS present, attention_absent AS absent, jobs_waiting AS waiting,
+             jobs_running AS running, jobs_failed AS failed FROM prq_ledger WHERE session = ?`,
           session,
         )
-        .toArray()[0] ?? { present: 0, absent: 0 };
+        .toArray()[0] ?? { present: 0, absent: 0, waiting: 0, running: 0, failed: 0 };
       const applied = this.#sql
         .exec(
-          `INSERT INTO prq_ledger (session, rev, latest_event_at, entry, attention_present, attention_absent)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT (session) DO UPDATE SET rev = excluded.rev, latest_event_at = excluded.latest_event_at,
-             entry = excluded.entry, attention_present = excluded.attention_present,
-             attention_absent = excluded.attention_absent
+          `INSERT INTO prq_ledger (session, rev, entry, sort_at, repo, open, attention_present, attention_absent,
+             jobs_waiting, jobs_running, jobs_failed)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (session) DO UPDATE SET rev = excluded.rev, entry = excluded.entry, sort_at = excluded.sort_at,
+             open = excluded.open, attention_present = excluded.attention_present,
+             attention_absent = excluded.attention_absent, jobs_waiting = excluded.jobs_waiting,
+             jobs_running = excluded.jobs_running, jobs_failed = excluded.jobs_failed
            WHERE excluded.rev > prq_ledger.rev RETURNING rev`,
           session,
           rev,
-          entry.latestEvent?.at ?? null,
           JSON.stringify(entry),
-          present,
-          absent,
+          row.sortAt,
+          row.repo,
+          row.open,
+          row.present,
+          row.absent,
+          row.waiting,
+          row.running,
+          row.failed,
         )
         .toArray();
       if (applied.length === 0) {
         return this.#sql.exec<{ rev: number }>("SELECT rev FROM prq_ledger WHERE session = ?", session).one().rev;
       }
       this.#sql.exec(
-        `UPDATE prq_hub SET ledger_version = ledger_version + 1, attention_present = attention_present + ?,
-           attention_absent = attention_absent + ? WHERE id = 1`,
-        present - before.present,
-        absent - before.absent,
+        `UPDATE prq_ledger_totals SET version = version + 1, attention_present = attention_present + ?,
+           attention_absent = attention_absent + ?, jobs_waiting = jobs_waiting + ?, jobs_running = jobs_running + ?,
+           jobs_failed = jobs_failed + ? WHERE id = 1`,
+        row.present - before.present,
+        row.absent - before.absent,
+        row.waiting - before.waiting,
+        row.running - before.running,
+        row.failed - before.failed,
       );
+      this.#storeRepo(pr, entry);
       this.#replaceClaims(session, entry, now);
       return null;
     });
@@ -254,6 +287,31 @@ export class Hub extends Agent<Env, HubView> {
       log("prq.ledger.stale_rev", { pr: session, rev, stored }, "warn");
     }
     await this.#poolChanged();
+  }
+
+  // The row's repository, and its name in GitHub's display case once an entry gives one for it. A repository's first
+  // row adds its owner to the count when no other repository has that owner.
+  #storeRepo(pr: PrRef, entry: LedgerEntry): void {
+    const repo = repoKey(pr);
+    const added = this.#sql
+      .exec(
+        "INSERT INTO prq_repos (repo, owner, full_name) VALUES (?, ?, ?) ON CONFLICT (repo) DO NOTHING RETURNING repo",
+        repo,
+        pr.owner,
+        repo,
+      )
+      .toArray();
+    if (
+      added.length > 0 &&
+      this.#sql.exec<{ repos: number }>("SELECT count(*) AS repos FROM prq_repos WHERE owner = ?", pr.owner).one()
+        .repos === 1
+    ) {
+      this.#sql.exec("UPDATE prq_ledger_totals SET owners = owners + 1 WHERE id = 1");
+    }
+    const fullName = entry.details?.fullName;
+    if (fullName !== undefined && fullName.toLowerCase() === repo) {
+      this.#sql.exec("UPDATE prq_repos SET full_name = ? WHERE repo = ? AND full_name != ?", fullName, repo, fullName);
+    }
   }
 
   #replaceClaims(session: string, entry: LedgerEntry, now: number): void {
@@ -283,97 +341,142 @@ export class Hub extends Agent<Env, HubView> {
 
   // --- The view ---
 
-  // The Hub as the UI shows it (its Agent state), bounded whatever the number of rows and agents: presence, the first
-  // MAX_VIEW_AGENTS present agents by ID, the ledger's version and the count of rows that need attention. Nothing in
-  // it changes on a contact alone.
+  // The Hub as the UI shows it (its Agent state), the same size whatever the number of rows and agents: presence, the
+  // ledger's totals and its version. Nothing in it changes on a contact alone.
   view(): HubView {
-    const now = Date.now();
-    const present = [...this.#presences(now)]
-      .filter(([, presence]) => isPresent(presence, now))
-      .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    const hub = this.#sql
-      .exec<{ version: number; present: number; absent: number }>(
-        `SELECT ledger_version AS version, attention_present AS present, attention_absent AS absent
-         FROM prq_hub WHERE id = 1`,
+    const now = this.clock();
+    const presentAgents = [...this.#presences(now).values()].filter((presence) => isPresent(presence, now)).length;
+    const totals = this.#sql
+      .exec<{
+        version: number;
+        present: number;
+        absent: number;
+        waiting: number;
+        running: number;
+        failed: number;
+        owners: number;
+      }>(
+        `SELECT version, attention_present AS present, attention_absent AS absent, jobs_waiting AS waiting,
+           jobs_running AS running, jobs_failed AS failed, owners FROM prq_ledger_totals WHERE id = 1`,
       )
       .one();
-    const localAgentPresent = present.length > 0;
+    const localAgentPresent = presentAgents > 0;
     return {
       localAgentPresent,
-      presentAgents: present.length,
-      agents: present
-        .slice(0, MAX_VIEW_AGENTS)
-        .map(([agentId, presence]) => ({ agentId, holdsJob: presence.claimedAt.length > 0 })),
-      ledgerVersion: hub.version,
-      needsAttention: localAgentPresent ? hub.present : hub.absent,
+      presentAgents,
+      jobs: { waiting: totals.waiting, running: totals.running, failed: totals.failed },
+      needsAttention: localAgentPresent ? totals.present : totals.absent,
+      owners: totals.owners,
+      ledgerVersion: totals.version,
     };
   }
 
-  // A page of the ledger's rows after the cursor (from the first without one), each with the problem presence gives it
-  // now, within LEDGER_PAGE_BYTES and LEDGER_PAGE_ROWS. The order is the list's (latest event descending, rows without
-  // one last, then the session name) and the cursor a place in it, so a page goes on after the row the cursor names
-  // whatever changed meanwhile. A row is bounded (its fields and MAX_ROW_CLAIMS claims), far below a page; one that did
-  // not fit would be refused rather than sent over the budget.
-  ledgerPage(cursor?: string): LedgerPage | ErrorResponse {
-    const after = cursor === undefined ? undefined : parseLedgerCursor(cursor);
+  // A page of the ledger's rows after the cursor (from the first without one) that pass the query's filters, each with
+  // the problem presence gives it now, within the page's bytes and LEDGER_PAGE_ROWS. The order is the list's (latest
+  // event descending, rows without one last, then the session descending) and the cursor a place in it, so a page goes
+  // on after the place the cursor names whatever changed meanwhile. attention follows presence as the count does. A row
+  // is bounded (its fields and MAX_ROW_CLAIMS claims), far below a page; one that did not fit would be refused rather
+  // than sent over the budget.
+  ledgerPage(query: LedgerQuery): LedgerPage | ErrorResponse {
+    const after = query.cursor === undefined ? undefined : parseLedgerCursor(query.cursor);
     if (after === null) {
       return BAD_LEDGER_CURSOR;
     }
-    const present = this.#localPresent(Date.now());
-    const stored = this.#ledgerRows(after, LEDGER_PAGE_ROWS + 1);
-    const rows: LedgerRow[] = [];
-    let left = this.ledgerPageBytes() - jsonBytes({ rows: [], nextCursor: "x".repeat(MAX_LEDGER_CURSOR_CHARS) });
-    let last: StoredRow | undefined;
-    for (const row of stored.slice(0, LEDGER_PAGE_ROWS)) {
-      const pr = parseSessionName(row.session);
-      const entry = v.safeParse(LedgerEntry, JSON.parse(row.entry));
-      // A row stored before the entry's shape was checked is passed over; the cursor still moves past it.
-      if (pr !== null && entry.success) {
-        const shown = ledgerRow(pr, entry.output, present);
-        const bytes = jsonBytes(shown) + (rows.length > 0 ? 1 : 0);
-        if (bytes > left) {
-          if (last === undefined) {
-            log("prq.ledger.overflow", { pr: row.session }, "error");
-            return { error: "internal", detail: "a ledger row does not fit in a page" };
-          }
-          return { rows, nextCursor: ledgerCursor(last) };
-        }
-        left -= bytes;
-        rows.push(shown);
-      }
-      last = row;
-    }
-    const more = stored.length > LEDGER_PAGE_ROWS;
-    return { rows, nextCursor: more && last !== undefined ? ledgerCursor(last) : null };
+    const present = this.#localPresent(this.clock());
+    const filter: LedgerFilter = {
+      open: query.state !== "all",
+      repo: query.repo?.toLowerCase() ?? null,
+      attention: query.attention === undefined ? null : present ? "attention_present" : "attention_absent",
+    };
+    const select = ledgerSelect(filter, after, LEDGER_PAGE_ROWS + 1);
+    const stored = this.#sql.exec<StoredRow>(select.query, ...select.bindings).toArray();
+    const page = fitPage(
+      stored,
+      LEDGER_PAGE_ROWS,
+      this.ledgerPageBytes(),
+      MAX_LEDGER_CURSOR_CHARS,
+      (row) => {
+        const pr = parseSessionName(row.session);
+        const entry = v.safeParse(LedgerEntry, JSON.parse(row.entry));
+        // A row stored before the entry's shape was checked is passed over; the cursor still moves past it.
+        return pr !== null && entry.success ? ledgerRow(pr, entry.output, present) : undefined;
+      },
+      (row) => `${row.sort_at}.${row.session}`,
+    );
+    return page ?? overflow("ledger", stored[0]?.session);
   }
 
-  // The bytes a page may take (spied on in tests).
+  // The bytes a page of the ledger may take (spied on in tests).
   protected ledgerPageBytes(): number {
     return LEDGER_PAGE_BYTES;
   }
 
-  // Up to `limit` stored rows after a place in the list's order (NULLs sort last when descending, as the index does).
-  #ledgerRows(after: LedgerCursor | undefined, limit: number): StoredRow[] {
-    const select = "SELECT session, latest_event_at, entry FROM prq_ledger";
-    const order = "ORDER BY latest_event_at DESC, session LIMIT ?";
-    if (after === undefined) {
-      return this.#sql.exec<StoredRow>(`${select} ${order}`, limit).toArray();
-    }
-    if (after.at === null) {
-      return this.#sql
-        .exec<StoredRow>(`${select} WHERE latest_event_at IS NULL AND session > ? ${order}`, after.session, limit)
-        .toArray();
-    }
-    return this.#sql
-      .exec<StoredRow>(
-        `${select} WHERE latest_event_at < ? OR (latest_event_at = ? AND session > ?) OR latest_event_at IS NULL
-         ${order}`,
-        after.at,
-        after.at,
-        after.session,
-        limit,
+  // A page of the present agents after the cursor (an agent ID), by agent ID: each one's last contact, whether it
+  // waits and whether it holds a claim. The candidates come from the pool and the claims, each read from its index
+  // after the cursor under the condition that makes an agent present, and from the waits in memory; their first
+  // AGENT_PAGE_ROWS + 1 are the union's.
+  agentPage(cursor?: string): AgentPage | ErrorResponse {
+    const now = this.clock();
+    const after = cursor ?? "";
+    const limit = AGENT_PAGE_ROWS + 1;
+    const recent = this.#sql.exec<{ agent_id: string }>(
+      "SELECT agent_id FROM prq_agents WHERE agent_id > ? AND last_seen_at > ? ORDER BY agent_id LIMIT ?",
+      after,
+      now - PRESENCE_MS,
+      limit,
+    );
+    const holding = this.#sql.exec<{ agent_id: string }>(
+      "SELECT DISTINCT agent_id FROM prq_claims WHERE agent_id > ? AND claimed_at > ? ORDER BY agent_id LIMIT ?",
+      after,
+      now - STALL_MS - PRESENCE_MS,
+      limit,
+    );
+    const waiting = [...this.#waiters].map((waiter) => waiter.agentId).filter((agentId) => agentId > after);
+    const candidates = [...new Set([...[...recent, ...holding].map((row) => row.agent_id), ...waiting])].toSorted(
+      byCodeUnit,
+    );
+    const page = fitPage(
+      candidates.slice(0, limit),
+      AGENT_PAGE_ROWS,
+      AGENT_PAGE_BYTES,
+      MAX_AGENT_ID_CHARS,
+      (agentId) => this.#agentRow(agentId, now),
+      (agentId) => agentId,
+    );
+    return page ?? overflow("agents", candidates[0]);
+  }
+
+  // An agent as the pool shows it, or undefined when it is not present at now.
+  #agentRow(agentId: string, now: number): AgentRow | undefined {
+    const presence = this.#presenceOf(agentId);
+    return isPresent(presence, now)
+      ? { agentId, lastSeenAt: presence.lastSeenAt, waiting: presence.waiting, holdsJob: presence.claimedAt.length > 0 }
+      : undefined;
+  }
+
+  // A page of the repositories the ledger has rows of after the cursor (owner/name in any case), by owner/name.
+  repoPage(cursor?: string): RepoPage | ErrorResponse {
+    const stored = this.#sql
+      .exec<{ repo: string; full_name: string }>(
+        "SELECT repo, full_name FROM prq_repos WHERE repo > ? ORDER BY repo LIMIT ?",
+        cursor?.toLowerCase() ?? "",
+        REPO_PAGE_ROWS + 1,
       )
       .toArray();
+    const page = fitPage(
+      stored,
+      REPO_PAGE_ROWS,
+      REPO_PAGE_BYTES,
+      MAX_FULL_NAME_CHARS,
+      (row) => ({ fullName: row.full_name }),
+      (row) => row.repo,
+    );
+    return page ?? overflow("repos", stored[0]?.repo);
+  }
+
+  // The Hub's clock (spied on in tests, which set the time a presence ends and its alarm runs).
+  protected clock(): number {
+    return Date.now();
   }
 
   // The next value of the Hub's counter, which only grows.
@@ -400,7 +503,7 @@ export class Hub extends Agent<Env, HubView> {
        ON CONFLICT (session) DO UPDATE SET gen = excluded.gen`,
       session,
       gen,
-      Date.now(),
+      this.clock(),
     );
     for (const waiter of this.#waiters) {
       waiter.wake();
@@ -604,16 +707,87 @@ function ledgerRow(pr: PrRef, entry: LedgerEntry, localAgentPresent: boolean): L
   };
 }
 
-// A row's place in the list's order, as a cursor: its latest event time ("-" for none), a dot, and its session.
-function ledgerCursor(row: StoredRow): string {
-  return `${row.latest_event_at ?? "-"}.${row.session}`;
+// The canonical owner/name of a pull request's repository.
+function repoKey(pr: PrRef): string {
+  return `${pr.owner}/${pr.repo}`;
 }
 
+function byCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+// The query for up to `limit` rows of the list after a place in its order, under the filters. Each filter is a literal
+// condition, so the planner walks the index made for it (a partial index needs its condition in the query), and the
+// place is a row value, so a page is one range of that index read backwards.
+export function ledgerSelect(
+  filter: LedgerFilter,
+  after: LedgerCursor | undefined,
+  limit: number,
+): { query: string; bindings: unknown[] } {
+  const where: string[] = [];
+  const bindings: unknown[] = [];
+  if (filter.open) {
+    where.push("open = 1");
+  }
+  if (filter.repo !== null) {
+    where.push("repo = ?");
+    bindings.push(filter.repo);
+  }
+  if (filter.attention !== null) {
+    where.push(`${filter.attention} = 1`);
+  }
+  if (after !== undefined) {
+    where.push("(sort_at, session) < (?, ?)");
+    bindings.push(after.at, after.session);
+  }
+  const conditions = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  return {
+    query: `SELECT session, sort_at, entry FROM prq_ledger ${conditions} ORDER BY sort_at DESC, session DESC LIMIT ?`,
+    bindings: [...bindings, limit],
+  };
+}
+
+// The rows of a page: `stored` in order (up to limit + 1 of them, the last only telling that more follow), each as
+// `show` gives it (undefined passes it over, the cursor still moving past it), while the page's JSON stays within
+// `budget` bytes with a cursor of maxCursor characters. null when the first row alone does not fit.
+function fitPage<S, R>(
+  stored: readonly S[],
+  limit: number,
+  budget: number,
+  maxCursor: number,
+  show: (row: S) => R | undefined,
+  cursorOf: (row: S) => string,
+): Page<R> | null {
+  const rows: R[] = [];
+  let left = budget - jsonBytes({ rows: [], nextCursor: "x".repeat(maxCursor) });
+  let last: S | undefined;
+  for (const row of stored.slice(0, limit)) {
+    const shown = show(row);
+    if (shown !== undefined) {
+      const bytes = jsonBytes(shown) + (rows.length > 0 ? 1 : 0);
+      if (bytes > left) {
+        return last === undefined ? null : { rows, nextCursor: cursorOf(last) };
+      }
+      left -= bytes;
+      rows.push(shown);
+    }
+    last = row;
+  }
+  return { rows, nextCursor: stored.length > limit && last !== undefined ? cursorOf(last) : null };
+}
+
+// A page whose first row does not fit: refused, which the row bounds rule out.
+function overflow(page: string, first: string | undefined): ErrorResponse {
+  log("prq.page.overflow", { page, first }, "error");
+  return { error: "internal", detail: "a row does not fit in a page" };
+}
+
+// A cursor is a row's place in the list's order: its sort_at, a dot, and its session.
 function parseLedgerCursor(text: string): LedgerCursor | null {
-  const match = /^(-|0|[1-9][0-9]*)\.(.+)$/.exec(text);
-  const at = match?.[1] === "-" ? null : Number(match?.[1]);
+  const match = /^(-1|0|[1-9][0-9]*)\.(.+)$/.exec(text);
+  const at = Number(match?.[1]);
   const session = match?.[2];
-  if (session === undefined || parseSessionName(session) === null || (at !== null && !Number.isSafeInteger(at))) {
+  if (session === undefined || parseSessionName(session) === null || !Number.isSafeInteger(at)) {
     return null;
   }
   return { at, session };

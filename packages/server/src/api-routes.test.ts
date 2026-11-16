@@ -1,10 +1,19 @@
-import { ErrorResponse, LedgerPage, type LedgerRow, MAX_LEDGER_CURSOR_CHARS } from "@prq/protocol";
+import {
+  AgentPage,
+  ErrorResponse,
+  LedgerPage,
+  type LedgerRow,
+  MAX_LEDGER_CURSOR_CHARS,
+  RepoPage,
+  sessionName,
+} from "@prq/protocol";
 import { listDurableObjectIds, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import * as v from "valibot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type CallBound, ROUTE_CALL_MS } from "./http.ts";
+import { LedgerEntry } from "./ledger.ts";
 import { captureLogs, request } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
 import {
@@ -28,6 +37,7 @@ import {
   prSessionSeams,
   revOf,
   sessionSql,
+  setPool,
   tracked,
   within,
 } from "./test/session.ts";
@@ -232,18 +242,39 @@ describe("retry time limit", () => {
   });
 });
 
-function ledgerRequest(token: string | undefined, cursor?: string): Request {
-  return request(cursor === undefined ? "/api/ledger" : `/api/ledger?cursor=${encodeURIComponent(cursor)}`, token);
+// The entry the Hub stores for a session.
+async function stored(name: string): Promise<LedgerEntry> {
+  const entry = await runInDurableObject(
+    await hub(),
+    (_, state) =>
+      state.storage.sql.exec<{ entry: string }>("SELECT entry FROM prq_ledger WHERE session = ?", name).one().entry,
+  );
+  return v.parse(LedgerEntry, JSON.parse(entry));
+}
+
+// A GET of one of the Hub's pages with the given query.
+function pageRequest(path: string, token: string | undefined, query: Record<string, string> = {}): Request {
+  const search = new URLSearchParams(query).toString();
+  return request(search === "" ? path : `${path}?${search}`, token);
 }
 
 function bytesOf(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).length;
 }
 
-describe("ledger pages", () => {
-  it("walks the ledger page by page through each page's cursor", async () => {
+// A route bound that has always passed: the route answers 503, and the call it made is recorded.
+function alwaysTimedOut(bounds: { ms: number; what: string }[]): CallBound {
+  return (call, ms, what) => {
+    bounds.push({ ms, what });
+    void Promise.resolve(call).catch(() => undefined);
+    return Promise.reject(new WaitTimeout(`${what} expired`));
+  };
+}
+
+describe("the Hub's pages", () => {
+  it("walks the ledger page by page through each page's cursor, under its filters", async () => {
     captureLogs();
-    const { token } = await localSession("api", sockets, question("q1"));
+    const { token, ref } = await localSession("api", sockets, question("q1"));
     await localSession("api", sockets, question("q1"));
     await localSession("api", sockets, question("q1"));
     const all: LedgerRow[] = await ledgerRows();
@@ -253,51 +284,115 @@ describe("ledger pages", () => {
     await runInDurableObject(await hub(), (instance) => {
       vi.spyOn(hubSeams(instance), "ledgerPageBytes").mockReturnValue(envelope + largest);
     });
-    const walked: LedgerRow[] = [];
-    let pages = 0;
-    let cursor: string | undefined;
-    do {
-      const res = await exports.default.fetch(ledgerRequest(token, cursor));
-      expect(res.status).toBe(200);
-      expect(res.headers.get("Cache-Control")).toBe("no-store");
-      const page = v.parse(LedgerPage, await res.json());
-      walked.push(...page.rows);
-      pages += 1;
-      cursor = page.nextCursor ?? undefined;
-    } while (cursor !== undefined);
-    expect(pages).toBeGreaterThan(1);
-    expect(walked).toEqual(all);
+    const walk = async (query: Record<string, string>) => {
+      const walked: LedgerRow[] = [];
+      let pages = 0;
+      let cursor: string | undefined;
+      do {
+        const res = await exports.default.fetch(
+          pageRequest("/api/ledger", token, cursor === undefined ? query : { ...query, cursor }),
+        );
+        expect(res.status).toBe(200);
+        expect(res.headers.get("Cache-Control")).toBe("no-store");
+        const page = v.parse(LedgerPage, await res.json());
+        walked.push(...page.rows);
+        pages += 1;
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor !== undefined);
+      return { walked, pages };
+    };
+    const everything = await walk({ state: "all" });
+    expect(everything.pages).toBeGreaterThan(1);
+    expect(everything.walked).toEqual(all);
+    // The filters reach the Hub: one repository in any case, and the rows that need attention, which with no agent
+    // present are those whose work waits; another repository's such row is left out.
+    await (
+      await hub()
+    ).upsertLedger("octo~other~1", 1, {
+      ...(await stored(sessionName(ref))),
+      latestEvent: { kind: "question", at: Number.MAX_SAFE_INTEGER },
+    });
+    await setPool([]);
+    const needing = (await ledgerRows()).filter(
+      (row) => row.pr.repo === ref.repo && row.problem === "waiting_for_local_agent",
+    );
+    expect(needing.length).toBeGreaterThan(0);
+    const repo = await walk({ repo: `${ref.owner.toUpperCase()}/${ref.repo}`, attention: "1" });
+    expect(repo.walked).toEqual(needing);
   });
 
-  it("answers 400 to a cursor outside the query or the list, and 401 without a token", async () => {
+  it("pages the present agents and the repositories", async () => {
+    captureLogs();
+    const { token } = await localSession("api", sockets, question("q1"));
+    const agents = await exports.default.fetch(pageRequest("/api/agents", token));
+    expect(agents.status).toBe(200);
+    expect(v.parse(AgentPage, await agents.json()).rows.map((row) => row.agentId)).toEqual(["laptop"]);
+    const after = await exports.default.fetch(pageRequest("/api/agents", token, { cursor: "laptop" }));
+    expect(v.parse(AgentPage, await after.json())).toEqual({ rows: [], nextCursor: null });
+
+    const repos = await exports.default.fetch(pageRequest("/api/repos", token));
+    expect(repos.status).toBe(200);
+    expect(repos.headers.get("Cache-Control")).toBe("no-store");
+    const listed = v.parse(RepoPage, await repos.json()).rows.map((row) => row.fullName);
+    expect(listed).toContain("octo/api");
+    const past = await exports.default.fetch(pageRequest("/api/repos", token, { cursor: "OCTO/api" }));
+    expect(v.parse(RepoPage, await past.json())).toEqual({
+      rows: listed.filter((name) => name > "octo/api").map((fullName) => ({ fullName })),
+      nextCursor: null,
+    });
+  });
+
+  it("answers 400 to a query outside a page's schema or a cursor outside the list, and 401 without a token", async () => {
     captureLogs();
     const { token } = await localSession("api", sockets);
-    for (const cursor of ["", "x".repeat(MAX_LEDGER_CURSOR_CHARS + 1), "x", "1.hub", "01.octo~api~1"]) {
-      const res = await exports.default.fetch(ledgerRequest(token, cursor));
-      expect({ cursor, ...(await errorOf(res)) }).toEqual({ cursor, status: 400, error: "bad_request" });
+    const refused: [string, Record<string, string>][] = [
+      ...["", "x".repeat(MAX_LEDGER_CURSOR_CHARS + 1), "x", "1.hub", "01.octo~api~1"].map(
+        (cursor): [string, Record<string, string>] => ["/api/ledger", { cursor }],
+      ),
+      ["/api/ledger", { state: "closed" }],
+      ["/api/ledger", { repo: "octo" }],
+      ["/api/ledger", { repo: "octo/.." }],
+      ["/api/ledger", { attention: "0" }],
+      ["/api/agents", { cursor: "" }],
+      ["/api/agents", { cursor: "two words" }],
+      ["/api/repos", { cursor: "octo" }],
+    ];
+    for (const [path, query] of refused) {
+      const res = await exports.default.fetch(pageRequest(path, token, query));
+      expect({ path, query, ...(await errorOf(res)) }).toEqual({ path, query, status: 400, error: "bad_request" });
     }
-    expect(await errorOf(exports.default.fetch(ledgerRequest(undefined)))).toEqual({
-      status: 401,
-      error: "unauthorized",
-    });
+    for (const path of ["/api/ledger", "/api/agents", "/api/repos"]) {
+      expect({ path, ...(await errorOf(exports.default.fetch(pageRequest(path, undefined)))) }).toEqual({
+        path,
+        status: 401,
+        error: "unauthorized",
+      });
+    }
   });
 
   it("answers 503 when the Hub does not answer in time, and 500 for a row that does not fit in a page", async () => {
     const logs = captureLogs();
     const { token } = await localSession("api", sockets, question("q1"));
     const bounds: { ms: number; what: string }[] = [];
-    const timedOut: CallBound = (call, ms, what) => {
-      bounds.push({ ms, what });
-      void Promise.resolve(call).catch(() => undefined);
-      return Promise.reject(new WaitTimeout(`${what} expired`));
-    };
-    expect(await errorOf(fetchBounded(timedOut, ledgerRequest(token)))).toEqual({ status: 503, error: "unavailable" });
-    expect(bounds).toEqual([{ ms: ROUTE_CALL_MS, what: "the Hub's ledger page" }]);
+    for (const path of ["/api/ledger", "/api/agents", "/api/repos"]) {
+      expect(await errorOf(fetchBounded(alwaysTimedOut(bounds), pageRequest(path, token)))).toEqual({
+        status: 503,
+        error: "unavailable",
+      });
+    }
+    expect(bounds).toEqual([
+      { ms: ROUTE_CALL_MS, what: "the Hub's ledger page" },
+      { ms: ROUTE_CALL_MS, what: "the Hub's agent page" },
+      { ms: ROUTE_CALL_MS, what: "the Hub's repository page" },
+    ]);
 
     await runInDurableObject(await hub(), (instance) => {
       vi.spyOn(hubSeams(instance), "ledgerPageBytes").mockReturnValue(0);
     });
-    expect(await errorOf(exports.default.fetch(ledgerRequest(token)))).toEqual({ status: 500, error: "internal" });
-    expect(logs.some((log) => log.entry["event"] === "prq.ledger.overflow")).toBe(true);
+    expect(await errorOf(exports.default.fetch(pageRequest("/api/ledger", token)))).toEqual({
+      status: 500,
+      error: "internal",
+    });
+    expect(logs.some(({ entry }) => entry["event"] === "prq.page.overflow" && entry["page"] === "ledger")).toBe(true);
   });
 });

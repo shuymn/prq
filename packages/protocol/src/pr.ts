@@ -9,6 +9,10 @@ export const PrRef = v.object({
 });
 export type PrRef = v.InferOutput<typeof PrRef>;
 
+// A repository as owner/name, each part as PrRef takes it, in any case.
+export const RepoName = v.pipe(v.string(), v.regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/));
+export type RepoName = v.InferOutput<typeof RepoName>;
+
 // Owner and repository lowercased, so one pull request has one session.
 export function canonicalPrRef(ref: PrRef): PrRef {
   return { owner: ref.owner.toLowerCase(), repo: ref.repo.toLowerCase(), number: ref.number };
@@ -60,4 +64,5 @@ export type PrDetails = v.InferOutput<typeof PrDetails>;
 export const MessageId = v.pipe(v.string(), v.minLength(1), v.maxLength(256));
 
 // A local agent's self-declared ID (`--agent-id`, the host name by default): printable ASCII without spaces.
-export const AgentId = v.pipe(v.string(), v.regex(/^[\x21-\x7e]{1,128}$/));
+export const MAX_AGENT_ID_CHARS = 128;
+export const AgentId = v.pipe(v.string(), v.regex(new RegExp(`^[\\x21-\\x7e]{1,${MAX_AGENT_ID_CHARS}}$`)));

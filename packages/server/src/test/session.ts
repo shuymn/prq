@@ -54,12 +54,12 @@ export async function setPool(agentIds: readonly string[]): Promise<void> {
   }
 }
 
-// Every row of the Hub's ledger, read page by page as the UI reads them.
+// Every row of the Hub's ledger, read page by page as the UI reads them, closed pull requests included.
 export async function ledgerRows(): Promise<LedgerRow[]> {
   const rows: LedgerRow[] = [];
   let cursor: string | undefined;
   do {
-    const page = v.parse(LedgerPage, await (await hub()).ledgerPage(cursor));
+    const page = v.parse(LedgerPage, await (await hub()).ledgerPage({ cursor, state: "all" }));
     rows.push(...page.rows);
     cursor = page.nextCursor ?? undefined;
   } while (cursor !== undefined);
@@ -296,6 +296,7 @@ export type HubSeams = {
   claimSession(session: string, agentId: string, mode: "resume" | "fresh", attempt: number): Promise<unknown>;
   waitTimer(ms: number, end: () => void): () => void;
   ledgerPageBytes(): number;
+  clock(): number;
 };
 
 const HUB_SEAMS = [
@@ -305,6 +306,7 @@ const HUB_SEAMS = [
   "claimSession",
   "waitTimer",
   "ledgerPageBytes",
+  "clock",
 ] as const;
 
 function hasHubSeams(instance: object): instance is HubSeams {

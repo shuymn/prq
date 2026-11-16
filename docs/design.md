@@ -345,6 +345,10 @@ CLI exit codes: 0 ready, 2 timeout, 3 authentication failure, 4 claim mismatch, 
   seen when the claim stopped applying: at that moment, or 60 minutes after the claim if that came first. Presence
   then ends 10 minutes later, and a claim retried after 60 minutes does not make its agent present again.
 - When any one agent ID is present, "a local agent is present" is true.
+- The Hub's view carries whether a local agent is present and how many agent IDs are, which the header's status shows.
+  The pool's details come from `GET /api/agents`, read when the pool opens: every present agent ID by ID, at most 100
+  and 64 KiB a page, with its last contact (none when only a claim makes it present), whether it is in a `wait` and
+  whether it holds a claim. They are not in the view, so a contact sends the UI nothing.
 - The Hub runs `presenceEnded` at the first whole second at or after the next time a present agent's presence ends
   (re-checked when it runs, since the scheduler stores whole seconds), so the list and "Waiting for a local agent"
   follow presence without any other event. Every change to the pool or the ledger, and the Hub's start, arms it when
@@ -375,11 +379,11 @@ alarm set at the claim). The Hub adds only what it owns itself: whether a local 
   1. _Summary failed_ — the analysis of the current head failed and it has no completed analysis. Clears when one
      completes. Only the current head's analysis counts: an older head's analysis, failed and then superseded or left
      behind by a push, is no longer the PR's problem, and the current head's completed summary clears the label
-     whatever became of it. A job's failure stays from the statement that fails it to the statement that completes it, whatever
-     happens between: a retry does not clear it, so the label stays until the retried analysis completes. The label
-     follows the current head: an older head's failed analysis stops counting when a push moves the head, and counts
-     again if a push returns to its head before it completes (its retry while the head was older superseded it, and the
-     push revives it).
+     whatever became of it. A job's failure stays from the statement that fails it to the statement that completes it,
+     whatever happens between: a retry does not clear it, so the label stays until the retried analysis completes. The
+     label follows the current head: an older head's failed analysis stops counting when a push moves the head, and
+     counts again if a push returns to its head before it completes (its retry while the head was older superseded it,
+     and the push revives it).
   2. _Answer failed_ — a question's latest job failed. Clears when a retry of it completes (the failure stays through
      the retry).
   3. _Possibly stalled_ — a claimed job has no result 60 minutes after its claim. Clears when the job completes, fails
@@ -396,18 +400,30 @@ alarm set at the claim). The Hub adds only what it owns itself: whether a local 
      an analyzed head does not set it.
      "Needs attention" counts the PRs whose problem is one of the first four.
 - **The view:** the Hub's Agent state (`HubView` in `@prq/protocol`), which only the server sets, which has the same
-  bound whatever the number of PRs and agents, and which is broadcast only when it changed: whether a local agent is
-  present, how many agent IDs are, the first 32 of them by ID with whether each holds a claim, the ledger's version
-  (advanced by every entry the Hub stores), and the "Needs attention" count. A contact alone changes none of it. The
-  Hub keeps the count as it stores each entry (whether the row needs attention with an agent present and without one),
-  so no count reads every row.
-- **The rows:** the UI reads the rows (`LedgerRow`: details, owner, latest event, problem, its jobs by state and up to
-  8 of the claims held in it) a page at a time from `GET /api/ledger`, behind Access and bounded like every route. A
-  page holds at most 500 rows and 256 KiB, in the list's order. Its cursor names the last row's place in that order
-  (latest event, then the session name), and the next page starts after that place however rows change meanwhile, so
-  no row that kept its place is listed twice or left out. A row that a newer event moves ahead of the cursor is left
-  out of the pass under way, which the changed version tells: the UI reads the pages again when the version or
-  presence changes (a row's problem depends on presence).
+  size whatever the number of PRs and agents, and which is broadcast only when it changed: whether a local agent is
+  present and how many agent IDs are, the jobs of every PR (waiting, running, and failed: an unresolved failure as the
+  labels count one, so a retried job counts as failed until it completes, and an older head's analysis does not count),
+  the "Needs attention" count, how many owners the PRs' repositories have, and the ledger's version (advanced by every
+  entry the Hub stores). A contact alone changes none of it. The Hub keeps each count as it stores each entry, in the
+  step that stores it, from what the entry changes (for "Needs attention", whether the row needs it with an agent
+  present and without one), so no count reads every row.
+- **The rows:** the UI reads the rows (`LedgerRow`: details, owner, latest event, problem, its jobs and up to 8 of the
+  claims held in it) a page at a time from `GET /api/ledger`, behind Access and bounded like every route. A page holds
+  at most 500 rows and 256 KiB, in the list's order: latest event first, rows without one last, then the session name
+  descending. Its cursor names the last row's place in that order, and the next page starts after that place however
+  rows change meanwhile, so no row that kept its place is listed twice or left out. A row that a newer event moves
+  ahead of the cursor is left out of the pass under way, which the changed version tells: the UI reads the pages again
+  when the version or presence changes (a row's problem depends on presence).
+- **Filters:** the list's filters are the page's: `state=open` (the default: open PRs, and those whose state no webhook
+  has given yet) or `all`, `repo=owner/name` (any case), and `attention=1`, which keeps the rows whose problem needs
+  attention as presence is when the page is read, by the rule the count follows. They combine, and the cursor keeps
+  its meaning under them. Each filter has an index in the list's order, so its page is one range of that index; a
+  combination reads the index of one of them and checks the others on the way.
+- **Repositories:** the menu reads the repositories with rows a page at a time from `GET /api/repos` (by owner/name,
+  at most 200 and 64 KiB a page), in GitHub's display case once an entry has given it. A page rather than the view: the
+  repositories have no bound, the menu needs every one of them, and it is read only when it opens, so the view stays
+  the same size and a new repository does not change it. The view's owner count says whether a row can name its
+  repository without the owner.
 
 ### Instructions and skills
 
@@ -533,7 +549,8 @@ Browser and edge:
   cache and the Cache API are not used for them: every response is private and behind Access.
 - The UI keeps no data cache. It loads a PR's history over HTTP when it opens it; after that, conversation, jobs and the
   Hub's view come over the Agents SDK WebSocket, which resyncs the state after each successful reconnect. The ledger's
-  rows come over HTTP in pages, read again when the Hub's view says the ledger or presence changed. There is no
+  rows come over HTTP in pages, read again when the Hub's view says the ledger or presence changed, and so do the
+  present agents and the repositories, read when the pool or the repository menu opens. There is no
   service worker and no offline mode. Browser storage holds only view preferences (the rail collapsed, the list
   filters).
 - When reconnecting keeps failing (an expired Access session fails every attempt, and a WebSocket cannot follow the
@@ -595,8 +612,9 @@ Server:
   ledger entry the Hub refuses as older than the one it has (`prq.ledger.stale_rev`).
 - The UI shows, per PR, the job state (waiting, which agent ID is working on it, failed with its reason) and, per answer,
   the target SHA, the model and the tokens used. The job state reaches it as the session's Agent state
-  (`PrSessionView` in `@prq/protocol`), which only the server sets. The agent pool and the ledger's version reach it
-  as the Hub's Agent state (`HubView`), likewise, and the PR list as pages of rows (`GET /api/ledger`).
+  (`PrSessionView` in `@prq/protocol`), which only the server sets. Presence, the job counts and the ledger's version
+  reach it as the Hub's Agent state (`HubView`), likewise, and the PR list, the agents and the repositories as pages
+  (`GET /api/ledger`, `/api/agents` and `/api/repos`).
 - A failed job is kept as `failed` and can be retried from the UI.
 
 ### Billing limits
@@ -629,7 +647,7 @@ prq/
 │  │       ├─ pr.ts              pull request references and details, the canonical session name, the Hub's name
 │  │       ├─ cli.ts             jobs and what a local agent sends and receives
 │  │       ├─ messages.ts        the metadata of messages the server appends
-│  │       └─ views.ts           what the UI reads from the server (the version message, the session view, the retry answer, the Hub view and the ledger's pages)
+│  │       └─ views.ts           what the UI reads from the server (the version message, the session view, the retry answer, the Hub view and its pages)
 │  ├─ server/              @prq/server: the Worker (Hono + Agents SDK) and the UI
 │  │   ├─ src/
 │  │   │   ├─ index.ts           entry: the app and the Durable Object classes
@@ -646,7 +664,7 @@ prq/
 │  │   │   ├─ wait.ts            bounded waits: timeouts and the one-at-a-time queue
 │  │   │   ├─ webhook.ts         GitHub webhook (signature, own PRs only)
 │  │   │   ├─ cli-routes.ts      /cli/* (wait / claim / context / submit)
-│  │   │   ├─ api-routes.ts      /api/* (job retry, the ledger's pages)
+│  │   │   ├─ api-routes.ts      /api/* (job retry, the Hub's pages)
 │  │   │   ├─ hub.ts             Hub (ledger, pool, notifications, wait, its view)
 │  │   │   ├─ ledger.ts          the ledger's rules: problem labels and presence
 │  │   │   ├─ pr-session/        PrSession (intake, jobs, context assembly, tools)
