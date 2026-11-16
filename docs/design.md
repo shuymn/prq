@@ -136,7 +136,10 @@ UI, webhook and CLI input all enter through PrSession.
 - When the UI sends a message, it arrives in `onChatMessage`. PrSession runs no turn there: it creates a job for every
   user question that has none (deciding the owner at the session's first job) and hands the jobs on, to the Hub for a
   `local` session and to the cloud agent for a `cloud` one. A question can already be stored when a later turn starts,
-  which is why every question without a job gets one, not only the last message.
+  which is why every question without a job gets one, not only the last message. The questions are read from the stored
+  history, not from `this.messages`, which holds only the most recent part: a question stored before a stop can be
+  older than that. Questions are only appended and each step gives every question it finds a job, so the read goes
+  from the newest message and ends at the first question that has a job.
 - An analysis is made per push, at the pushed head SHA: GitHub sends one `pull_request` event per push, and the commits
   inside a push are not analyzed one by one.
 - When a webhook arrives, it goes to the PrSession, not to the Hub. The PrSession always records the pushed SHA as the

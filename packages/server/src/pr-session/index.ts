@@ -34,6 +34,7 @@ import {
   failPending,
   finalizingJobs,
   freshClaim,
+  hasAnswerJob,
   jobById,
   jobTarget,
   type JobRow,
@@ -48,7 +49,6 @@ import {
   resumeClaim,
   retry,
   startNext,
-  withoutJobs,
   writeNotify,
 } from "./jobs.ts";
 
@@ -70,7 +70,7 @@ type CloudOutcome = { failed: JobRow[]; started: { row: JobRow; agent: CloudAgen
 const NO_CLOUD_OUTCOME: CloudOutcome = { failed: [], started: null };
 
 // A question from the UI: a user message the server did not add (server messages carry metadata).
-function isQuestion(message: UIMessage): boolean {
+function isQuestion(message: { role: string; metadata?: unknown }): boolean {
   return message.role === "user" && message.metadata === undefined;
 }
 
@@ -259,23 +259,35 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return owner;
   }
 
-  #questionsWithoutJobs(): string[] {
-    return withoutJobs(
-      this.#sql,
-      this.messages.filter(isQuestion).map((message) => message.id),
-    );
+  // The stored questions that have no job, oldest first. They are read from storage, not this.messages, which holds the
+  // most recent history only: a question stored before a stop can be older than that. Each createJobs gives every
+  // question it finds a job in one step, and questions are only appended, so the questions with jobs come before those
+  // without: the walk reads one message at a time from the newest and ends at the first question that has a job.
+  async #questionsWithoutJobs(): Promise<string[]> {
+    const found: string[] = [];
+    for await (const message of this.sessions.session().history({ newestFirst: true })) {
+      if (isQuestion(message)) {
+        if (hasAnswerJob(this.#sql, message.id)) {
+          break;
+        }
+        found.push(message.id);
+      }
+    }
+    return found.toReversed();
   }
 
   // A job for every stored question that has none, in one step with what makes it reach an agent: the outbox row of a
   // local session, the cloud seam of a cloud one. Called by intake and by settle (spied on in tests).
   protected async createJobs(): Promise<void> {
-    if (this.#questionsWithoutJobs().length === 0) {
+    const questions = await this.#questionsWithoutJobs();
+    if (questions.length === 0) {
       return;
     }
     const owner = await this.#decideOwner();
     const now = Date.now();
     const { created, cloud } = this.ctx.storage.transactionSync(() => {
-      const rows = createAnswerJobs(this.#sql, this.#questionsWithoutJobs(), now);
+      // A question another step gave a job meanwhile keeps that one.
+      const rows = createAnswerJobs(this.#sql, questions, now);
       return { created: rows, cloud: rows.length > 0 ? this.#newWork(owner, now) : NO_CLOUD_OUTCOME };
     });
     for (const row of created) {

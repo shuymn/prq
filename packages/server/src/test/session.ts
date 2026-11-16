@@ -106,6 +106,15 @@ export async function cancelWakes(stub: DurableObjectStub<PrSession>): Promise<v
   });
 }
 
+// The cache (this.messages) as after a restart: the SDK's own hydration, under the given budget. Returns the cached IDs.
+export async function hydrateRecent(stub: DurableObjectStub<PrSession>, budget: number): Promise<string[]> {
+  return runInDurableObject(stub, async (instance) => {
+    instance.hydrationByteBudget = budget;
+    await Reflect.get(instance, "_hydrateMessages").call(instance);
+    return instance.messages.map((message) => message.id);
+  });
+}
+
 // A hold inside a Durable Object. Its latch is made and opened in the object's context (a promise continues in the
 // context that settles it). The spy that holds a call awaits `wait()`; the test sees that the call got there through
 // `reached()` and lets it go on with `open()`.

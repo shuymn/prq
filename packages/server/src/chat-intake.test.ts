@@ -1,9 +1,21 @@
-import { runInDurableObject } from "cloudflare:test";
+import { abortAllDurableObjects, runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { prSessionStub } from "./names.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
-import { gate, jobRows, newSession, prSessionSeams, setPool, submission, tracked, within } from "./test/session.ts";
+import {
+  cancelWakes,
+  gate,
+  jobRows,
+  newSession,
+  prSessionSeams,
+  setPool,
+  submission,
+  tracked,
+  within,
+} from "./test/session.ts";
 
 const sockets: AgentSocket[] = [];
 
@@ -56,6 +68,34 @@ describe("one job per question", () => {
       .filter((log) => log.entry["event"] === "prq.job.created")
       .map((log) => String(log.entry["jobId"]));
     expect(created.toSorted()).toEqual(jobs.map((job) => job.job_id).toSorted());
+  });
+});
+
+describe("questions outside the history in memory", () => {
+  it("gives a job after a restart to every stored question without one, older than the cached history included", async () => {
+    captureLogs();
+    await setPool(["laptop"]);
+    const { stub, ref, open } = await newSession("intake", sockets);
+    const client = await open();
+    await client.chat([Q1]);
+    client.close();
+    // Nine 4 MiB questions stored with no job, as a stop between their save and their job step leaves them. Together
+    // they are over the 32 MiB of history the SDK loads into this.messages at a start.
+    const large = Array.from({ length: 9 }, (_, n) => question(`large-${n}`, "x".repeat(4 * 1024 * 1024)));
+    await runInDurableObject(stub, async (instance) => {
+      for (const message of large) {
+        await instance.persistMessages([message]);
+      }
+    });
+    await cancelWakes(stub);
+    await abortAllDurableObjects();
+
+    // The start's settle creates the jobs.
+    const restarted = await prSessionStub(env, ref);
+    await restarted.view();
+    const cached = await runInDurableObject(restarted, (instance) => instance.messages.map((message) => message.id));
+    expect(cached).not.toContain("large-0");
+    expect((await jobRows(restarted)).map((job) => job.target)).toEqual(["q1", ...large.map((message) => message.id)]);
   });
 });
 
