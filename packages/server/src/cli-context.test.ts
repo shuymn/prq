@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROUTE_CALL_MS } from "./http.ts";
 import { PRESENCE_MS } from "./hub.ts";
-import { CONTEXT_PAGE_BYTES } from "./pr-session/context.ts";
+import { CONTEXT_PAGE_BYTES, take } from "./pr-session/context.ts";
 import { PrSession } from "./pr-session/index.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
@@ -277,6 +277,20 @@ describe("context pages", () => {
     }
     expect(joined === text).toBe(true);
     expect(pages.flatMap((page) => page.messages).at(-1)).toMatchObject({ id: "after", text: "the next one" });
+  });
+
+  it("never ends a part inside a surrogate pair, whatever room the page has", () => {
+    const message = { id: "emoji", role: "assistant", text: "\u{1F600}".repeat(64) } as const;
+    // From room for one character up: the cut falls on either half of a pair across these.
+    for (let left = 100; left <= 400; left += 1) {
+      let joined = "";
+      while (joined.length < message.text.length) {
+        const part = take(message, joined.length, left, true);
+        expect({ left, wellFormed: part?.text.isWellFormed() }).toEqual({ left, wellFormed: true });
+        joined += part?.text ?? "";
+      }
+      expect(joined === message.text).toBe(true);
+    }
   });
 
   it("refuses a cursor that names no place in the conversation with 400", async () => {
