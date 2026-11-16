@@ -22,12 +22,21 @@ describe("schema", () => {
     });
   });
 
-  it("adds a pull request's details to a session at the previous version, keeping its owner and jobs", async () => {
+  it("adds a pull request's details and the webhook inbox to a session from before them, keeping its owner and jobs", async () => {
     const stub = await prSessionStub(env, { owner: "octo", repo: "schema", number: 3 });
     await runInDurableObject(stub, (_, { storage }) => {
       const { sql } = storage;
       // The database as the version before the details left it.
-      for (const table of ["prq_schema", "prq_session", "prq_jobs", "prq_outbox", "prq_intake", "prq_claim_attempts"]) {
+      const tables = [
+        "prq_schema",
+        "prq_session",
+        "prq_jobs",
+        "prq_outbox",
+        "prq_intake",
+        "prq_claim_attempts",
+        "prq_inbox",
+      ];
+      for (const table of tables) {
         sql.exec(`DROP TABLE ${table}`);
       }
       migrate(
@@ -41,9 +50,10 @@ describe("schema", () => {
       migrate(storage, PR_SESSION_SCHEMA);
 
       expect(versions(storage)).toEqual([{ version: PR_SESSION_SCHEMA.length }]);
-      expect(sql.exec("SELECT owner, head_sha, title, pr_state FROM prq_session").toArray()).toEqual([
-        { owner: "local", head_sha: null, title: null, pr_state: null },
-      ]);
+      expect(
+        sql.exec("SELECT owner, head_sha, title, pr_state, head_at, details_at FROM prq_session").toArray(),
+      ).toEqual([{ owner: "local", head_sha: null, title: null, pr_state: null, head_at: null, details_at: null }]);
+      expect(sql.exec("SELECT count(*) AS rows FROM prq_inbox").one()).toEqual({ rows: 0 });
       expect(sql.exec("SELECT job_id, state, rev, run FROM prq_jobs").toArray()).toEqual([
         { job_id: "job", state: "pending", rev: 0, run: 1 },
       ]);

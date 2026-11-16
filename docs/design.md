@@ -170,13 +170,34 @@ UI, webhook and CLI input all enter through PrSession.
   that failed or stopped, and is dropped. Each job is created in one step with the removal of its row.
 - An analysis is made per push, at the pushed head SHA: GitHub sends one `pull_request` event per push, and the commits
   inside a push are not analyzed one by one.
-- When a webhook arrives, it goes to the PrSession, not to the Hub. A push (`opened`, `reopened`, `synchronize`) makes
-  its SHA the current head, in arrival order: deliveries A, B, A leave A current. If an analysis job for the same head
-  SHA already exists (waiting, claimed, running, done or failed), the system shall create no job and leave that job as
-  it is; a push back to an already analyzed head (after a force-push, for example) shows that head's stored summary,
-  and a failed one stays failed until the host retries it. A redelivery of the current head therefore changes nothing,
-  and no delivery ID is stored. `edited` and `closed` update the title and the state (`merged` when merged) and create
-  no job; only a push moves the head.
+- When a webhook arrives, it goes to the PrSession, not to the Hub. The session stores the verified delivery in its
+  inbox as the first step of the call, before anything awaits, and arms a wake; the route answers once that returns,
+  and `settle` takes the delivery in at the wake, seconds later. A delivery the route acknowledged is therefore never
+  lost to a failure after the answer: taking it in marks it processed in the same storage step as its effect, so it is
+  taken in once, and a step that fails leaves it stored for settle's retry. A delivery is stored once per
+  `X-GitHub-Delivery`, which a redelivery from GitHub repeats: one whose ID is stored gets `duplicate` and changes
+  nothing. Processed rows are kept, so a redelivery is known whenever it comes; there is one small row per event of
+  one pull request.
+- When the session is not reached within the route's bound (5 s, under the 10 s after which GitHub counts a delivery
+  failed), the route answers 503 and GitHub records the delivery as failed; GitHub does not send it again by itself. The
+  recovery is to redeliver it from the GitHub App's recent deliveries. A call that stored it after the 503 makes the
+  redelivery a duplicate, so it is taken in once either way.
+- Webhooks are ordered by what GitHub says, not by when the session gets to them, and without prq's clocks. A push
+  (`opened`, `reopened`, `synchronize`) makes its SHA the current head when its `pull_request.updated_at` is later than
+  the current head's, or is the same second and the push moved from the current head (`synchronize`'s `before`) or is
+  the current head. So deliveries of pushes A then B leave B current in whatever order they are taken in, and a
+  force-push back to A (`before` B, `after` A) makes A current again. Every push carries its own time, so a lost
+  delivery stalls nothing: the next push is later whether or not the one between was seen. `opened` and `reopened`
+  carry no `before` and are ordered by time alone. A push in the same second as the current head and not linked to it
+  leaves the head as it is: GitHub's time, in whole seconds, cannot order the two, keeping the head never moves it back,
+  and the next push corrects it. A push that does not become current creates no job.
+- If an analysis job for the current head SHA already exists (waiting, claimed, running, done or failed), the system
+  shall create no job and leave that job as it is; a push back to an already analyzed head (after a force-push, for
+  example) shows that head's stored summary, and a failed one stays failed until the host retries it. A new delivery
+  of the current head therefore changes nothing. `edited` and `closed` update the title and the state (`merged` when
+  merged) and create no job; only a push moves the head, except that a session with no head takes the event's. The
+  details other than the head (title, state, base, URL) follow the webhook with the latest `updated_at`, whether or not
+  it moved the head; among webhooks of the same second the last one taken in wins.
 - Analysis jobs that have not started are folded into the latest head: every push supersedes the waiting analyses of
   the other heads, so if A is running and B and C arrive, only C runs after A. A push back to a superseded head makes
   its job wait again, with the same `jobId` and a new run, so no answer from before the fold is accepted. A retry of an
@@ -218,11 +239,11 @@ UI, webhook and CLI input all enter through PrSession.
   retry), PrSession schedules a wake (`settle`, an Agents SDK schedule), so whenever work exists a wake already exists.
   A wake is a new schedule row each time: an idempotent one would match the row of a `settle` that is running and
   vanish when that run ends.
-- `settle` runs from the wake and at every start. It creates the jobs of the questions with intake rows, finishes
-  each `finalizing` job inside the history write queue (`done` when its message exists, else back to `claimed`), runs
-  the cloud hand-over, and delivers the outbox. A failed delivery keeps the row and schedules a retry (5 s, doubling to
-  60 s) only when no `settle` is scheduled for a later second; the check and the schedule run under one lock, so
-  failures during a Hub outage leave one retry, not one per failure.
+- `settle` runs from the wake and at every start. It takes in the stored webhook deliveries, creates the jobs of the
+  questions with intake rows, finishes each `finalizing` job inside the history write queue (`done` when its message
+  exists, else back to `claimed`), runs the cloud hand-over, and delivers the outbox. A failed delivery keeps the row
+  and schedules a retry (5 s, doubling to 60 s) only when no `settle` is scheduled for a later second; the check and
+  the schedule run under one lock, so failures during a Hub outage leave one retry, not one per failure.
 - Outbox rows and the Hub's notification rows carry a generation taken from a counter in the same object that only
   grows. A delivery or a check deletes the row only if its generation is still the one it read, so a row that was
   deleted and written again during a slow call is kept.
@@ -253,8 +274,9 @@ UI, webhook and CLI input all enter through PrSession.
   run its answer was produced under, which the server accepts only if no retry came since (see
   [Owner and jobs](#owner-and-jobs)). A late retry applies only if nothing changed the job after the view it came
   from, and otherwise gets 409 `stale_job`. A `wait` is aborted, which ends it in the Hub. A late `context` only reads.
-  A webhook's intake that lands late is a delivery arriving then: it creates no second job for its head, and by arrival
-  order its head is current until the next push.
+  The webhook route is bounded at 5 s instead, under GitHub's own limit (see [Intake](#intake)). A delivery its session
+  stores after the 503 is taken in like any other, GitHub's redelivery of it is then a duplicate, and which head is
+  current does not depend on when either lands.
 - An authentication failure (401 or 403) during `wait` is told apart from an ordinary timeout and ends with an error, so
   the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.
@@ -481,9 +503,9 @@ Server:
 - When a webhook arrives, the system shall accept it only if `X-Hub-Signature-256` is `sha256=` and the HMAC-SHA256 of
   the raw body under the webhook secret (compared in constant time), the event is `pull_request`, and
   `pull_request.user.id` is the host's. `sender` is whoever made the update, not necessarily the PR author. A delivery
-  that is refused (401 for the signature, 400 for a payload outside GitHub's shape) or ignored (another event, author
-  or action; 200) reaches no PrSession. When the webhook secret or the host's ID is missing or malformed, the Worker
-  shall refuse every delivery with 500; the Access check needs neither.
+  that is refused (401 for the signature, 400 for a payload outside GitHub's shape or without `X-GitHub-Delivery`) or
+  ignored (another event, author or action; 200) reaches no PrSession. When the webhook secret or the host's ID is
+  missing or malformed, the Worker shall refuse every delivery with 500; the Access check needs neither.
 - The GitHub App's private key is stored as PKCS#8. GitHub issues PKCS#1, which the WebCrypto-based path in workerd
   cannot read; convert it once with `openssl pkcs8 -topk8` before storing it as a secret.
 
@@ -548,7 +570,7 @@ prq/
 │  │   │   ├─ pr-session/        PrSession (intake, jobs, context assembly, tools)
 │  │   │   │   ├─ index.ts       the class: intake, jobs, the wake and the outbox, its chat hooks
 │  │   │   │   ├─ history.ts     append-only history: refused client frames, insert-only writes
-│  │   │   │   ├─ jobs.ts        job rows and their guarded transitions
+│  │   │   │   ├─ jobs.ts        job rows and their guarded transitions, the webhook inbox and GitHub's order
 │  │   │   │   └─ cloud.ts       the cloud agent seam
 │  │   │   ├─ github/            App token; attaching the token to outbound git traffic
 │  │   │   ├─ instructions/      prompts, skill registry, activate_skill / read_skill_resource
@@ -589,7 +611,9 @@ Only a deployment can show these.
 - **Real Access.** The Worker's check is tested with a local RS256 key pair and a stubbed key set. Real Access tokens,
   from a browser and from a service token, and Access's key set endpoint are checked on a deployment.
 - **Real GitHub.** App installation, webhook delivery, and token injection for a private repository (only a public
-  repository was reached in the prototype, with the injection written but not exercised).
+  repository was reached in the prototype, with the injection written but not exercised). What the webhook handling
+  takes from GitHub's documentation is checked on a deployment too: that `pull_request.updated_at` advances with each
+  push and `synchronize` carries `before`, that a redelivery repeats `X-GitHub-Delivery`, and the 10 s limit.
 - **Sandbox in production.** Start and rebuild times, and checkout time of a large repository. The local Docker
   numbers are not production values.
 - **Bundling by wrangler.** That the PKCS#8-only crypto path of `@octokit/auth-app` is the one wrangler bundles was

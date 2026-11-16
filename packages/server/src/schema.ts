@@ -61,6 +61,26 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
   "ALTER TABLE prq_session ADD COLUMN title TEXT",
   "ALTER TABLE prq_session ADD COLUMN pr_state TEXT CHECK (pr_state IN ('open', 'closed', 'merged'))",
   "ALTER TABLE prq_session ADD COLUMN url TEXT",
+  // GitHub's time (pull_request.updated_at, epoch ms) of the push that set head_sha, and of the webhook that set the
+  // other details: what orders the webhooks, whenever the session gets to them. NULL until the first.
+  "ALTER TABLE prq_session ADD COLUMN head_at INTEGER",
+  "ALTER TABLE prq_session ADD COLUMN details_at INTEGER",
+  // The webhook inbox: each verified delivery, stored before it is acknowledged and taken in by settle. Kept once
+  // processed, so a delivery that comes again is known by its ID.
+  `CREATE TABLE prq_inbox (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    delivery_id TEXT NOT NULL UNIQUE,
+    action TEXT NOT NULL,
+    push INTEGER NOT NULL CHECK (push IN (0, 1)),
+    at INTEGER NOT NULL,
+    before_sha TEXT,
+    head_sha TEXT NOT NULL,
+    base_sha TEXT NOT NULL,
+    full_name TEXT NOT NULL,
+    title TEXT NOT NULL,
+    pr_state TEXT NOT NULL CHECK (pr_state IN ('open', 'closed', 'merged')),
+    url TEXT NOT NULL,
+    processed INTEGER NOT NULL DEFAULT 0 CHECK (processed IN (0, 1)))`,
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {

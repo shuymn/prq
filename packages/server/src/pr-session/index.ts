@@ -10,7 +10,6 @@ import {
   MessageMetadata,
   type Owner,
   parseSessionName,
-  type PrDetails,
   type PrRef,
   type PrSessionView,
   type RetryResponse,
@@ -28,10 +27,12 @@ import { SerialQueue, WaitTimeout, withTimeout } from "../wait.ts";
 import { CLOUD_NOT_CONFIGURED, type CloudAgent } from "./cloud.ts";
 import { addedMessages, isChatList, questionsOnly, refusedChatResponse, refusedFrame } from "./history.ts";
 import {
+  addInbox,
   addIntake,
   allJobs,
   createAnswerJobs,
   decideOwner,
+  type Delivery,
   deleteOutbox,
   endFinalizing,
   failPending,
@@ -44,9 +45,11 @@ import {
   type JobRow,
   type JobState,
   jobView,
+  moveHead,
   outboxRow,
   type Peek,
   peekJobs,
+  pendingInbox,
   readDetails,
   readOwner,
   recordAttempt,
@@ -56,6 +59,7 @@ import {
   resumeClaim,
   retry,
   startNext,
+  takeInbox,
   writeDetails,
   writeNotify,
 } from "./jobs.ts";
@@ -398,22 +402,50 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   // --- Webhooks ---
 
-  // A push (opened, reopened, synchronize): the pull request's details, with the pushed head as the current head, and
-  // its analysis (docs/design.md, Intake). Arrival order decides: the push that reaches this step last is the current
-  // head. Every other head's waiting analysis is superseded; the head's own job is created if it has none, revived if
-  // it was superseded, and otherwise left as it is, so a redelivery of the current head changes no job. A new or
-  // revived analysis reaches an agent in the same step, as a question's job does. Returns once the change is stored;
-  // the analysis itself runs later.
-  async ingestHead(details: PrDetails): Promise<void> {
+  // A verified delivery (/webhook). It is stored in the inbox as this call's first step, before anything awaits, so a
+  // delivery the route acknowledges is never lost; the wake that takes it in is armed before the call returns. A
+  // delivery whose ID is stored already is a duplicate and is not stored again. Taking it in is settle's.
+  async receive(delivery: Delivery): Promise<"received" | "duplicate"> {
+    const stored = addInbox(this.#sql, delivery);
+    if (stored !== "processed") {
+      await this.#armWake();
+    }
+    return stored === "new" ? "received" : "duplicate";
+  }
+
+  // Takes in each stored delivery, in the order stored; the order of heads comes from GitHub (moveHead), so it does
+  // not depend on this one. A delivery whose step fails stays stored for the next settle, which settle's retry wake
+  // runs.
+  async #drainInbox(): Promise<void> {
+    for (const delivery of pendingInbox(this.#sql)) {
+      await (delivery.push ? this.#takePush(delivery) : this.#takeUpdate(delivery));
+    }
+  }
+
+  // A push (opened, reopened, synchronize), taken in once: its details, and its head when GitHub's order makes it the
+  // current head (docs/design.md, Intake). Every other head's waiting analysis is then superseded; the head's own job
+  // is created if it has none, revived if it was superseded, and otherwise left as it is, so a push of the current head
+  // changes no job. A new or revived analysis reaches an agent in the same step, as a question's job does.
+  async #takePush(delivery: Delivery): Promise<void> {
     await this.#armWake();
     const owner = await this.#decideOwner();
     const now = Date.now();
     const change = this.ctx.storage.transactionSync(() => {
-      writeDetails(this.#sql, details, true);
-      const jobs = ingestHeadJobs(this.#sql, details.headSha, now);
+      if (!takeInbox(this.#sql, delivery.deliveryId)) {
+        return null;
+      }
+      const moved = moveHead(this.#sql, delivery);
+      writeDetails(this.#sql, delivery);
+      const jobs = moved
+        ? ingestHeadJobs(this.#sql, delivery.details.headSha, now)
+        : { folded: [], created: undefined, revived: undefined };
       const waiting = jobs.created ?? jobs.revived;
-      return { ...jobs, waiting, cloud: waiting === undefined ? NO_CLOUD_OUTCOME : this.#newWork(owner, now) };
+      return { moved, ...jobs, waiting, cloud: waiting === undefined ? NO_CLOUD_OUTCOME : this.#newWork(owner, now) };
     });
+    if (change === null) {
+      return;
+    }
+    this.#logTaken(delivery, change.moved);
     for (const row of change.folded) {
       log("prq.job.superseded", { ...this.#jobFields(row), from: "pending", to: "superseded" });
     }
@@ -433,11 +465,24 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     }
   }
 
-  // An edit or a close: the pull request's details. The head stays where the pushes put it (a session that has seen no
-  // push takes the event's), and no job is made.
-  updatePr(details: PrDetails): void {
-    writeDetails(this.#sql, details, false);
-    this.#publishView();
+  // An edit or a close, taken in once: the pull request's details, when no later webhook has given them. No job.
+  #takeUpdate(delivery: Delivery): void {
+    const taken = this.ctx.storage.transactionSync(() => {
+      const fresh = takeInbox(this.#sql, delivery.deliveryId);
+      if (fresh) {
+        writeDetails(this.#sql, delivery);
+      }
+      return fresh;
+    });
+    if (taken) {
+      this.#logTaken(delivery, false);
+      this.#publishView();
+    }
+  }
+
+  #logTaken(delivery: Delivery, headMoved: boolean): void {
+    const { deliveryId, action, details } = delivery;
+    log("prq.inbox.taken", { pr: this.name, deliveryId, action, headSha: details.headSha, headMoved });
   }
 
   // --- Local jobs ---
@@ -651,9 +696,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     await this.schedule(delayS, "settle", undefined, { idempotent: false });
   }
 
-  // Run by the wake and at every start: finishes what a stop or a failure left. Each step is idempotent, and a failing
-  // step does not stop the others.
+  // Run by the wake and at every start: takes in the stored webhook deliveries, and finishes what a stop or a failure
+  // left. Each step is idempotent, and a failing step does not stop the others.
   async settle(): Promise<void> {
+    await this.#attempt("inbox", () => this.#drainInbox());
     await this.#attempt("create_jobs", () => this.createJobs());
     await this.#attempt("sweep", () => this.#writes.run(() => this.#sweepFinalizing()));
     await this.#attempt("cloud", () => this.#settleCloud());

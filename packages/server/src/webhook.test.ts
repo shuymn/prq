@@ -4,24 +4,26 @@ import { env } from "cloudflare:workers";
 import * as v from "valibot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ROUTE_CALL_MS } from "./http.ts";
 import app from "./index.ts";
 import { prSessionStub } from "./names.ts";
 import { captureLogs, type LogEntry } from "./test/access.ts";
 import { fetchBounded, heldBound } from "./test/cli.ts";
-import { gate, jobRows, setPool, tracked, within } from "./test/session.ts";
+import { gate, jobRows, laterWakes, prSessionSeams, setPool, tracked, wakes, within } from "./test/session.ts";
 import {
   BASE,
   deliver,
   deliveryRequest,
   HOST_ID,
+  inbox,
   OTHER_ID,
   pullRequestEvent,
   push,
   send,
   sha,
   signature,
+  takeIn,
 } from "./test/webhook.ts";
+import { WEBHOOK_CALL_MS } from "./webhook.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -122,6 +124,7 @@ describe("signature", () => {
     const before = await sessionCount();
     expect(await outcome(deliver({ body: JSON.stringify(pullRequestEvent(pr)) }))).toEqual(RECEIVED);
     expect(await sessionCount()).toBe(before + 1);
+    await takeIn(pr);
     expect((await view(pr)).jobs).toMatchObject([{ target: { kind: "analysis", headSha: sha("head") } }]);
   });
 });
@@ -145,6 +148,7 @@ describe("author, not sender", () => {
     const body = JSON.stringify(pullRequestEvent(pr, { author: HOST_ID, sender: OTHER_ID }));
 
     expect(await outcome(deliver({ body }))).toEqual(RECEIVED);
+    await takeIn(pr);
     expect((await view(pr)).jobs).toMatchObject([{ state: expect.any(String), target: { headSha: sha("head") } }]);
   });
 });
@@ -171,6 +175,10 @@ describe("deliveries that reach no session", () => {
     expect(await refused(deliver({ body: "not json" }))).toEqual({ status: 400, error: "bad_request" });
     const noHead = { ...event, pull_request: { ...event.pull_request, head: { sha: "main" } } };
     expect(await refused(deliver({ body: JSON.stringify(noHead) }))).toEqual({ status: 400, error: "bad_request" });
+    const noTime = { ...event, pull_request: { ...event.pull_request, updated_at: "yesterday" } };
+    expect(await refused(deliver({ body: JSON.stringify(noTime) }))).toEqual({ status: 400, error: "bad_request" });
+    const noId = deliver({ body: JSON.stringify(event), deliveryId: null });
+    expect(await refused(noId)).toEqual({ status: 400, error: "bad_request" });
 
     expect(await sessionCount()).toBe(before);
   });
@@ -257,13 +265,73 @@ describe("logs", () => {
   });
 });
 
-describe("webhook time limit", () => {
-  it("answers 503 when the session does not answer in time; the late intake makes no second job", async () => {
+describe("inbox", () => {
+  it("answers once the delivery is stored, and takes it in later", async () => {
+    captureLogs();
+    await setPool([]);
+    const pr = newPr();
+
+    expect(await outcome(deliver({ body: JSON.stringify(pullRequestEvent(pr, { head: sha("A") })) }))).toEqual(
+      RECEIVED,
+    );
+
+    // Stored, with a wake armed to take it in; nothing taken in yet.
+    expect(await inbox(pr)).toMatchObject([{ action: "synchronize", head_sha: sha("A"), processed: 0 }]);
+    expect(await wakes(await prSessionStub(env, pr))).toBeGreaterThan(0);
+    expect(await view(pr)).toMatchObject({ details: null, owner: null, jobs: [] });
+
+    await takeIn(pr);
+    expect(await inbox(pr)).toMatchObject([{ processed: 1 }]);
+    expect(await view(pr)).toMatchObject({ details: { headSha: sha("A") }, jobs: [{ target: { headSha: sha("A") } }] });
+  });
+
+  it("keeps a delivery whose taking in fails, arms a retry, and takes it in on the next settle", async () => {
+    const logs = captureLogs();
+    await setPool(["laptop"]);
+    const pr = newPr();
+    const stub = await prSessionStub(env, pr);
+    await runInDurableObject(stub, (instance) => {
+      vi.spyOn(prSessionSeams(instance), "readPool").mockRejectedValueOnce(new Error("the Hub is away"));
+    });
+    await deliver({ body: JSON.stringify(pullRequestEvent(pr, { head: sha("A") })) });
+
+    await takeIn(pr);
+    expect(await inbox(pr)).toMatchObject([{ processed: 0 }]);
+    expect(await laterWakes(stub)).toBeGreaterThan(0);
+    expect(events(logs, "prq.settle.failed")).toMatchObject([{ step: "inbox", error: "Error" }]);
+    expect((await view(pr)).jobs).toEqual([]);
+
+    await takeIn(pr);
+    expect(await inbox(pr)).toMatchObject([{ processed: 1 }]);
+    expect((await view(pr)).jobs).toMatchObject([{ state: "pending", target: { headSha: sha("A") } }]);
+  });
+
+  it("answers a delivery whose ID it has as a duplicate and takes it in once", async () => {
+    const logs = captureLogs();
+    await setPool([]);
+    const pr = newPr();
+    const deliveryId = crypto.randomUUID();
+    const body = JSON.stringify(pullRequestEvent(pr, { head: sha("A") }));
+    const duplicate = { status: 200, body: { status: "duplicate" }, cacheControl: "no-store" };
+
+    expect(await outcome(deliver({ body, deliveryId }))).toEqual(RECEIVED);
+    expect(await outcome(deliver({ body, deliveryId }))).toEqual(duplicate);
+    await takeIn(pr);
+    const after = await jobRows(await prSessionStub(env, pr));
+    expect(await outcome(deliver({ body, deliveryId }))).toEqual(duplicate);
+    await takeIn(pr);
+
+    expect(await inbox(pr)).toHaveLength(1);
+    expect(events(logs, "prq.inbox.taken")).toHaveLength(1);
+    expect(await jobRows(await prSessionStub(env, pr))).toEqual(after);
+  });
+
+  it("answers 503 when the session does not store the delivery in time; the delivery stored before is taken in once", async () => {
     captureLogs();
     await setPool(["laptop"]);
     const pr = newPr();
     const stub = await prSessionStub(env, pr);
-    // The intake is held in the session while it arms its wake, before anything is stored.
+    // The session is held after storing the delivery, while it arms the wake.
     const held = await gate(stub);
     await runInDurableObject(stub, (instance) => {
       const schedule = instance.schedule.bind(instance);
@@ -272,24 +340,28 @@ describe("webhook time limit", () => {
         return schedule(...args);
       });
     });
+    const deliveryId = crypto.randomUUID();
     const body = JSON.stringify(pullRequestEvent(pr, { head: sha("A") }));
     const limit = heldBound();
-    const res = tracked(fetchBounded(limit.bound, await deliveryRequest({ body })));
+    const res = tracked(fetchBounded(limit.bound, await deliveryRequest({ body, deliveryId })));
     await held.reached();
-    // A sentinel read of the session goes through while the intake is held.
-    expect(await stub.view()).toMatchObject({ details: null, jobs: [] });
+    // A sentinel read of the session goes through while the call is held: the delivery is stored.
+    expect(await inbox(pr)).toMatchObject([{ processed: 0 }]);
     expect(res.settled()).toBe(false);
 
     limit.expire();
     expect(await refused(within(res.promise, 3000))).toEqual({ status: 503, error: "unavailable" });
-    expect(limit.bounds).toEqual([{ ms: ROUTE_CALL_MS, what: "the session's intake" }]);
-    // GitHub's redelivery is taken in; then the held intake lands.
-    expect(await outcome(deliver({ body }))).toEqual(RECEIVED);
+    expect(limit.bounds).toEqual([{ ms: WEBHOOK_CALL_MS, what: "the session's inbox" }]);
+    // The owner's redelivery from GitHub carries the same ID; the stored delivery is taken in, then the held call ends.
+    expect(await outcome(deliver({ body, deliveryId }))).toMatchObject({ status: 200, body: { status: "duplicate" } });
+    await takeIn(pr);
     await held.open();
-    await limit.late();
+    expect(await limit.late()).toBe("received");
+    await takeIn(pr);
 
-    const analyses = (await jobRows(stub)).filter((row) => row.kind === "analysis");
-    expect(analyses).toMatchObject([{ target: sha("A"), state: "pending", run: 1 }]);
-    expect((await stub.view()).details?.headSha).toBe(sha("A"));
+    expect((await jobRows(stub)).filter((row) => row.kind === "analysis")).toMatchObject([
+      { target: sha("A"), state: "pending", run: 1 },
+    ]);
+    expect(await inbox(pr)).toMatchObject([{ processed: 1 }]);
   });
 });

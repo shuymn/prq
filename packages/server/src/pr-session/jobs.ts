@@ -68,17 +68,133 @@ export function readDetails(sql: SqlStorage): PrDetails | null {
   return { fullName, title, state, url, headSha, baseSha };
 }
 
-// Stores a webhook's details. A push moves the head; any other webhook sets it only when no head is known yet.
-export function writeDetails(sql: SqlStorage, details: PrDetails, push: boolean): void {
-  const head = push ? "?" : "coalesce(head_sha, ?)";
+// A verified webhook delivery, as the route hands it to the session and the inbox keeps it. at is GitHub's time of the
+// pull request's state the event carries (pull_request.updated_at, epoch ms); before is the head a synchronize event
+// moved from (none for other actions).
+export type Delivery = {
+  deliveryId: string;
+  action: string;
+  push: boolean;
+  at: number;
+  before: string | null;
+  details: PrDetails;
+};
+
+type InboxRow = {
+  delivery_id: string;
+  action: string;
+  push: 0 | 1;
+  at: number;
+  before_sha: string | null;
+  head_sha: string;
+  base_sha: string;
+  full_name: string;
+  title: string;
+  pr_state: PrDetails["state"];
+  url: string;
+};
+
+// Stores a delivery in the inbox unless its ID is there. Returns whether it was new, or how far the stored one got.
+export function addInbox(sql: SqlStorage, delivery: Delivery): "new" | "pending" | "processed" {
+  const { details } = delivery;
+  const added = sql
+    .exec(
+      `INSERT INTO prq_inbox (delivery_id, action, push, at, before_sha, head_sha, base_sha, full_name, title, pr_state,
+         url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (delivery_id) DO NOTHING RETURNING seq`,
+      delivery.deliveryId,
+      delivery.action,
+      delivery.push ? 1 : 0,
+      delivery.at,
+      delivery.before,
+      details.headSha,
+      details.baseSha,
+      details.fullName,
+      details.title,
+      details.state,
+      details.url,
+    )
+    .toArray();
+  if (added.length === 1) {
+    return "new";
+  }
+  const { processed } = sql
+    .exec<{ processed: number }>("SELECT processed FROM prq_inbox WHERE delivery_id = ?", delivery.deliveryId)
+    .one();
+  return processed === 1 ? "processed" : "pending";
+}
+
+// The deliveries not processed yet, in the order they were stored.
+export function pendingInbox(sql: SqlStorage): Delivery[] {
+  return sql
+    .exec<InboxRow>("SELECT * FROM prq_inbox WHERE processed = 0 ORDER BY seq")
+    .toArray()
+    .map((row) => ({
+      deliveryId: row.delivery_id,
+      action: row.action,
+      push: row.push === 1,
+      at: row.at,
+      before: row.before_sha,
+      details: {
+        fullName: row.full_name,
+        title: row.title,
+        state: row.pr_state,
+        url: row.url,
+        headSha: row.head_sha,
+        baseSha: row.base_sha,
+      },
+    }));
+}
+
+// Marks a delivery processed, unless it already is. Returns whether this call did: the step that does is the one
+// that takes it in.
+export function takeInbox(sql: SqlStorage, deliveryId: string): boolean {
+  return (
+    sql
+      .exec("UPDATE prq_inbox SET processed = 1 WHERE delivery_id = ? AND processed = 0 RETURNING seq", deliveryId)
+      .toArray().length === 1
+  );
+}
+
+// A push's head becomes the current head when GitHub says it is newer: its time is later than the current head's, or
+// it is the same second and the push moved from the current head (the next one in the chain). A push of the current
+// head itself applies and changes nothing. A push that ties without that link is kept out: GitHub's time cannot order
+// it, and a later webhook corrects the head. Returns whether the head moved to (or stayed at) the push's head.
+export function moveHead(sql: SqlStorage, delivery: Delivery): boolean {
+  const { at, before, details } = delivery;
+  return (
+    sql
+      .exec(
+        `UPDATE prq_session SET head_sha = ?, head_at = ?
+         WHERE id = 1 AND (head_at IS NULL OR ? > head_at OR (? = head_at AND (? = head_sha OR ? = head_sha)))
+         RETURNING id`,
+        details.headSha,
+        at,
+        at,
+        at,
+        details.headSha,
+        before,
+      )
+      .toArray().length === 1
+  );
+}
+
+// Stores a webhook's details (all but the head) unless a webhook with a later GitHub time has stored them; among
+// webhooks of the same second the last one taken in wins. The head is a push's to move, except that a session with no
+// head takes the event's.
+export function writeDetails(sql: SqlStorage, delivery: Delivery): void {
+  const { at, details } = delivery;
   sql.exec(
-    `UPDATE prq_session SET head_sha = ${head}, base_sha = ?, full_name = ?, title = ?, pr_state = ?, url = ? WHERE id = 1`,
+    `UPDATE prq_session SET head_sha = coalesce(head_sha, ?), base_sha = ?, full_name = ?, title = ?, pr_state = ?,
+       url = ?, details_at = ?
+     WHERE id = 1 AND (details_at IS NULL OR ? >= details_at)`,
     details.headSha,
     details.baseSha,
     details.fullName,
     details.title,
     details.state,
     details.url,
+    at,
+    at,
   );
 }
 

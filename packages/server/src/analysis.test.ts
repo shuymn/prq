@@ -8,7 +8,7 @@ import type { PrSession } from "./pr-session/index.ts";
 import type { JobRow } from "./pr-session/jobs.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
-import { accepted, claimOver, localSession, post, retryOver, submitOver } from "./test/cli.ts";
+import { accepted, claimOver, fetchBounded, heldBound, localSession, post, retryOver, submitOver } from "./test/cli.ts";
 import {
   clearQueue,
   gate,
@@ -21,7 +21,7 @@ import {
   setPool,
   tracked,
 } from "./test/session.ts";
-import { push, sha } from "./test/webhook.ts";
+import { deliver, deliveryRequest, inbox, nextAt, pullRequestEvent, push, send, sha, takeIn } from "./test/webhook.ts";
 
 const sockets: AgentSocket[] = [];
 
@@ -158,10 +158,14 @@ describe("known head", () => {
       const before = await analyses(stub);
       expect(before).toMatchObject([{ target: sha("A"), state }]);
 
-      await push(ref, "A");
+      // Delivered and taken in; settle goes on to steps that wait for a held submit, so its end is awaited last.
+      await deliver({ body: JSON.stringify(pullRequestEvent(ref, { head: sha("A") })) });
+      const settled = tracked(takeIn(ref));
+      await vi.waitFor(async () => expect((await inbox(ref)).at(-1)?.processed).toBe(1), { timeout: 3000 });
 
       expect(await analyses(stub)).toEqual(before);
       await end?.();
+      await settled.promise;
     },
   );
 });
@@ -285,18 +289,22 @@ describe("redelivery and reordering", () => {
     captureLogs();
     const { stub, ref, token } = await localSession("order", sockets);
     await push(ref, "A");
-    await push(ref, "B");
+    const body = JSON.stringify(pullRequestEvent(ref, { head: sha("B") }));
+    await deliver({ body });
+    await takeIn(ref);
     const rows = await jobRows(stub);
     const view = await stub.view();
 
-    await push(ref, "B");
+    // GitHub's UI sends it again under a new ID.
+    await deliver({ body });
+    await takeIn(ref);
 
     expect(await jobRows(stub)).toEqual(rows);
     expect(await stub.view()).toEqual(view);
     expect(claimed(await claimOver(token, "laptop"))).toBe(sha("B"));
   });
 
-  it("makes the last delivery's head current: A, B, A leaves A waiting", async () => {
+  it("makes the newest push's head current: A, B, then A again leaves A waiting", async () => {
     captureLogs();
     const { stub, ref, token } = await localSession("order", sockets);
     await push(ref, "A");
@@ -310,6 +318,131 @@ describe("redelivery and reordering", () => {
       [(await analysisOf(stub, "B")).job_id, "superseded"],
     ]);
     expect(claimed(await claimOver(token, "laptop"))).toBe(sha("A"));
+  });
+});
+
+describe("GitHub's order", () => {
+  it("keeps B current when A's call, held until its route answered 503, lands after B", async () => {
+    captureLogs();
+    const { stub, ref, token } = await localSession("github-order", sockets);
+    // A's call is held in the session while it arms its wake.
+    const held = await gate(stub);
+    await runInDurableObject(stub, (instance) => {
+      const schedule = instance.schedule.bind(instance);
+      vi.spyOn(instance, "schedule").mockImplementationOnce(async (...args) => {
+        await held.wait();
+        return schedule(...args);
+      });
+    });
+    const limit = heldBound();
+    const a = JSON.stringify(pullRequestEvent(ref, { head: sha("A") }));
+    const res = tracked(fetchBounded(limit.bound, await deliveryRequest({ body: a })));
+    await held.reached();
+    expect((await stub.view()).details).toBeNull();
+    limit.expire();
+    expect((await res.promise).status).toBe(503);
+
+    await push(ref, "B");
+    expect((await stub.view()).details?.headSha).toBe(sha("B"));
+    await held.open();
+    await limit.late();
+    await takeIn(ref);
+
+    expect((await stub.view()).details?.headSha).toBe(sha("B"));
+    expect(claimed(await claimOver(token, "laptop"))).toBe(sha("B"));
+  });
+
+  it("keeps the newer head when an older push is taken in after it, and none of its details", async () => {
+    captureLogs();
+    const { stub, ref } = await localSession("github-order", sockets);
+    const older = JSON.stringify(pullRequestEvent(ref, { head: sha("A"), title: "older" }));
+    await push(ref, "B", { title: "newer" });
+
+    await deliver({ body: older });
+    await takeIn(ref);
+
+    expect((await stub.view()).details).toMatchObject({ headSha: sha("B"), title: "newer" });
+    expect((await analyses(stub)).map((row) => row.target)).toEqual([sha("B")]);
+  });
+
+  it("takes in deliveries stored out of GitHub's order with the newest head current", async () => {
+    captureLogs();
+    const { stub, ref, token } = await localSession("github-order", sockets);
+    const a = JSON.stringify(pullRequestEvent(ref, { head: sha("A") }));
+    const b = JSON.stringify(pullRequestEvent(ref, { head: sha("B") }));
+    await deliver({ body: b });
+    await deliver({ body: a });
+
+    await takeIn(ref);
+
+    expect((await stub.view()).details?.headSha).toBe(sha("B"));
+    expect((await analyses(stub)).map((row) => [row.target, row.state])).toEqual([[sha("B"), "pending"]]);
+    expect(claimed(await claimOver(token, "laptop"))).toBe(sha("B"));
+  });
+
+  it("applies a force-push back to an older head, also within the same second", async () => {
+    captureLogs();
+    const { stub, ref } = await localSession("github-order", sockets);
+    await push(ref, "A");
+    const at = nextAt();
+    await push(ref, "B", { at, before: sha("A") });
+    await push(ref, "A", { at, before: sha("B") });
+
+    expect((await stub.view()).details?.headSha).toBe(sha("A"));
+    expect(await analysisOf(stub, "A")).toMatchObject({ state: "pending", run: 2 });
+  });
+
+  it("does not stall on a lost delivery: a later push moves the head whatever it moved from", async () => {
+    captureLogs();
+    const { stub, ref } = await localSession("github-order", sockets);
+    await push(ref, "A");
+    // B's push is never delivered.
+    await push(ref, "C", { before: sha("B") });
+
+    expect((await stub.view()).details?.headSha).toBe(sha("C"));
+    expect(await analysisOf(stub, "C")).toMatchObject({ state: "pending" });
+  });
+
+  it("orders opened and reopened, which name no head before, by time alone", async () => {
+    captureLogs();
+    const { stub, ref } = await localSession("github-order", sockets);
+    const at = nextAt();
+    await push(ref, "A", { at });
+    // The same second, and nothing links it to A: the head stays.
+    await send(ref, { action: "opened", head: sha("X"), at });
+    expect((await stub.view()).details?.headSha).toBe(sha("A"));
+    expect((await analyses(stub)).map((row) => row.target)).toEqual([sha("A")]);
+
+    await send(ref, { action: "reopened", head: sha("X") });
+    expect((await stub.view()).details?.headSha).toBe(sha("X"));
+  });
+
+  it("takes the next push of the chain on a tie, whichever is taken in first", async () => {
+    captureLogs();
+    for (const order of ["chain first", "chain last"]) {
+      const { stub, ref } = await localSession("github-order", sockets);
+      const at = nextAt();
+      const opened = JSON.stringify(pullRequestEvent(ref, { action: "opened", head: sha("A"), at }));
+      const next = JSON.stringify(pullRequestEvent(ref, { head: sha("B"), at, before: sha("A") }));
+      for (const body of order === "chain first" ? [next, opened] : [opened, next]) {
+        await deliver({ body });
+        await takeIn(ref);
+      }
+      expect({ order, head: (await stub.view()).details?.headSha }).toEqual({ order, head: sha("B") });
+    }
+  });
+
+  it("stores an event's details by their own time, though its head is kept out", async () => {
+    captureLogs();
+    const { stub, ref } = await localSession("github-order", sockets);
+    const earlier = nextAt();
+    const at = nextAt();
+    await push(ref, "A", { at, title: "one" });
+
+    await send(ref, { action: "synchronize", head: sha("X"), at, title: "two" });
+    expect((await stub.view()).details).toMatchObject({ headSha: sha("A"), title: "two" });
+    await send(ref, { action: "edited", head: sha("A"), at: earlier, title: "older" });
+    expect((await stub.view()).details).toMatchObject({ headSha: sha("A"), title: "two" });
   });
 });
 
