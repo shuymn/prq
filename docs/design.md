@@ -70,9 +70,11 @@ UI:    React + Vite (Workers Static Assets), connected to PrSession with useAgen
   is safe in URLs and cannot appear in a GitHub owner or repository name. The name is canonical (`sessionName` in
   `@prq/protocol`): owner and repository in lower case, since GitHub treats them case-insensitively, and the number
   without leading zeros, so one pull request has one instance.
-- **Agents routes.** `/agents/*` reaches only the Hub named `hub` and PrSessions under a canonical name. Any other name
-  (a case variant, a leading zero, an extra segment, a percent-encoded `~`), a binding the Agents SDK does not know, and
-  a sub-agent path below an instance get 404 and create no instance. Only `names.ts` addresses a Durable Object.
+- **Agents routes.** `/agents/*` serves a WebSocket to the Hub named `hub` or to a PrSession under its canonical name,
+  and a GET of a session's stored history (`/agents/pr-session/<name>/get-messages`). Any other request (another name,
+  a case variant, a leading zero, a percent-encoded `~`, a binding the Agents SDK does not know, a sub-agent path or any
+  other path below an instance, a plain HTTP request to an instance) gets 404 before the SDK router runs, so it creates
+  no instance. Only `names.ts` addresses a Durable Object.
 - **Hub.** One `Agent` instance, named `hub`, that holds the PR ledger for the list view, the pool (which agent IDs are
   present), the notification queue for local agents, and the instructions (the two prompts and the skill registry). It
   does not hold job state; it asks PrSession (`peek`, `claim`). Each ledger entry keeps what a list row shows (see
@@ -132,10 +134,15 @@ UI, webhook and CLI input all enter through PrSession.
   `waitUntilStable()` first and then `saveMessages` in its function form, which receives the latest history, and it
   never uses a stale `this.messages`.
 - The stored conversation is append-only: whatever a client sends, a stored message keeps its content and place and
-  none is removed. A chat request carries the client's whole list; PrSession adds only the messages whose IDs are not
-  stored, after the stored ones, and sends the saved list to every connection, the sender included. Every history
-  write goes through one queue, so each starts from the history the previous one left.
-- The client frames that would clear or rewrite stored messages (`cf_agent_chat_clear`, `cf_agent_chat_messages`,
+  none is removed. A client adds questions only: a chat request carries the client's whole list, and PrSession adds
+  the user messages whose IDs are not stored, after the stored ones. A new answer or system message in a chat request
+  is dropped and logged as `prq.chat.refused`; answers come from the server. Every history write goes through one
+  queue, so each starts from the history the previous one left.
+- After each write PrSession sends the stored history to every connection, the sender included, and a client replaces
+  its list with it. The history is read within the budget the Agents SDK keeps it in memory under
+  (`hydrationByteBudget`, 32 MiB). A longer history is not sent (`prq.chat.history_not_sent`): its most recent part
+  would replace the whole list a client loaded through `get-messages`.
+- The client frames other than a chat request that write history (`cf_agent_chat_clear`, `cf_agent_chat_messages`,
   `cf_agent_tool_result`, `cf_agent_tool_approval`) are refused and logged as `prq.chat.refused`. prq has no
   client-side tools.
 - A local answer never replaces the whole conversation. PrSession checks the question's message ID against the latest
