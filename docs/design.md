@@ -264,7 +264,9 @@ UI, webhook and CLI input all enter through PrSession.
   vanish when that run ends.
 - `settle` runs from the wake and at every start. It takes in the stored webhook deliveries, creates the jobs of the
   questions with intake rows, finishes each `finalizing` job inside the history write queue (`done` when its message
-  exists, else back to `claimed`), runs the cloud hand-over, and delivers the outbox. A failed delivery keeps the row
+  exists, else back to `claimed`), runs the cloud hand-over, schedules any held claim's missing `claimAged` check
+  whose deadline is still ahead, and delivers the outbox (`notify` and the [PR ledger](#pr-ledger) entry, each on its
+  own). A failed delivery keeps the row
   and schedules a retry (5 s, doubling to 60 s) only when no `settle` is scheduled for a later second; the check and
   the schedule run under one lock, so failures during a Hub outage leave one retry, not one per failure.
 - Outbox rows and the Hub's notification rows carry a generation taken from a counter in the same object that only
@@ -332,8 +334,18 @@ CLI exit codes: 0 ready, 2 timeout, 3 authentication failure, 4 claim mismatch, 
   command.
 - An agent ID counts as present while it is in `wait`, and while it holds an unfinished claim (up to 60 minutes after
   the claim). Presence ends 10 minutes after neither applies, so a long analysis does not make presence lapse and send
-  new PRs to cloud.
+  new PRs to cloud. Exactly: an agent ID is present while it is in `wait`, or less than 10 minutes after its last
+  contact (the start and the end of a `wait`, a `claim`, a `submit`, a `context`), or while it holds a claim made less
+  than 70 minutes ago (60 minutes of the claim, then the 10-minute tail).
+- The Hub learns the claims from the [PR ledger](#pr-ledger) entries. Each entry gives a claim's age by its session's
+  clock, and the Hub places the claim on its own clock by that age, so no time from one object's clock is compared
+  with another's. When an entry no longer lists a claim (a submit or a retry ended it), the Hub counts the agent as
+  seen when the claim stopped applying: at that moment, or 60 minutes after the claim if that came first. Presence
+  then ends 10 minutes later, and a claim retried after 60 minutes does not make its agent present again.
 - When any one agent ID is present, "a local agent is present" is true.
+- The Hub runs `presenceEnded` at the first whole second at or after the next time a present agent's presence ends
+  (re-checked when it runs, since the scheduler stores whole seconds), so the list and "Waiting for a local agent"
+  follow presence without any other event.
 
 ### PR ledger
 
@@ -341,20 +353,42 @@ The Hub's entry per PR is what the list shows without asking each PrSession. PrS
 Hub whenever a push arrives, a question is saved, one of its jobs changes state, or a claim reaches 60 minutes (an
 alarm set at the claim). The Hub adds only what it owns itself: whether a local agent is present.
 
+- **Delivery:** an entry goes through the session's outbox like a notify. The step that changes the entry writes the
+  outbox row `ledger` with the next generation of the session's counter, and that generation is the entry's
+  revision; the entry is built from the session as it is when the row is read, in the same step. The Hub stores an
+  entry only when its revision is newer than the stored one, decided in the statement that stores it, so an older
+  entry that lands late (an overlapping or retried delivery) changes nothing and is logged; one at the stored
+  revision is a redelivery. A failed delivery keeps the row for a retry, and a row written again during a delivery
+  stays for the next one, so the newest entry reaches the Hub. A claim and a submit arm the wake before their change,
+  so a session that stops before delivering delivers when its wake runs.
 - **Latest event:** a push received, a question sent, a summary completed or an answer completed, with its time. Rows
-  are ordered by it. Claims, heartbeats and streaming are not events.
+  are ordered by it. Claims, heartbeats and streaming are not events. A push is an event when it changes the head
+  (the first push, or a newer head); a push of the current head, or an edit or a close, is not. A question's event is
+  when it gets its job. The time is the session's when it took the event in; rows are ordered newest first, rows
+  without an event last.
 - **Problem:** at most one label, the first that applies in this order:
   1. _Summary failed_ — the analysis of the current head failed and it has no completed analysis. Clears when one
-     completes.
-  2. _Answer failed_ — a question's latest job failed. Clears when a retry of it completes.
+     completes. A job's failure stays from the statement that fails it to the statement that completes it, whatever
+     happens between: a retry does not clear it, so the label stays until the retried analysis completes. The label
+     follows the current head: an older head's failed analysis stops counting when a push moves the head, and counts
+     again if a push returns to its head before it completes (its retry while the head was older superseded it, and the
+     push revives it).
+  2. _Answer failed_ — a question's latest job failed. Clears when a retry of it completes (the failure stays through
+     the retry).
   3. _Possibly stalled_ — a claimed job has no result 60 minutes after its claim. Clears when the job completes, fails
-     or is retried.
+     or is retried. Every claim and resume schedules `claimAged` at the first whole second at or after 60 minutes after
+     the claim; when it runs it checks the claim again: before the deadline it schedules itself for it, and for a claim
+     that has ended it changes nothing. The session view marks the job `stalled` as well.
   4. _Waiting for a local agent_ — a `local` session has waiting work (sent by PrSession) and no local agent is
      present (known to the Hub). Clears when an agent is present again.
   5. _New push not summarized_ — the current head has no completed analysis. It is derived from the current head, not
      from the latest completed summary, so a completed analysis of an older head does not clear it and a push back to
      an analyzed head does not set it.
      "Needs attention" counts the PRs whose problem is one of the first four.
+- **The view:** the Hub's Agent state (`HubView` in `@prq/protocol`), which only the server sets and which is
+  broadcast only when it changed: whether a local agent is present, the present agent IDs (last contact, whether in a
+  `wait`, whether holding a claim), every PR's row (`LedgerRow`: details, owner, latest event, problem, its jobs by
+  state and the claims held in it) by latest event, and the "Needs attention" count.
 
 ### Instructions and skills
 
@@ -537,10 +571,12 @@ Server:
 ### Observability
 
 - Workers observability (logs) is enabled. Webhook receipt, job state changes, LLM and tool errors, and compactions are
-  logged with the PR key and `jobId`.
+  logged with the PR key and `jobId`. A claim that reaches 60 minutes is logged (`prq.job.stalled`), and so is a
+  ledger entry the Hub refuses as older than the one it has (`prq.ledger.stale_rev`).
 - The UI shows, per PR, the job state (waiting, which agent ID is working on it, failed with its reason) and, per answer,
   the target SHA, the model and the tokens used. The job state reaches it as the session's Agent state
-  (`PrSessionView` in `@prq/protocol`), which only the server sets.
+  (`PrSessionView` in `@prq/protocol`), which only the server sets. The PR list and the agent pool reach it as the
+  Hub's Agent state (`HubView`), likewise.
 - A failed job is kept as `failed` and can be retried from the UI.
 
 ### Billing limits
@@ -573,7 +609,7 @@ prq/
 │  │       ├─ pr.ts              pull request references and details, the canonical session name, the Hub's name
 │  │       ├─ cli.ts             jobs and what a local agent sends and receives
 │  │       ├─ messages.ts        the metadata of messages the server appends
-│  │       └─ views.ts           what the UI reads from the server (the version message, the session view, the retry answer)
+│  │       └─ views.ts           what the UI reads from the server (the version message, the session view, the retry answer, the Hub view and its ledger rows)
 │  ├─ server/              @prq/server: the Worker (Hono + Agents SDK) and the UI
 │  │   ├─ src/
 │  │   │   ├─ index.ts           entry: the app and the Durable Object classes
@@ -591,7 +627,8 @@ prq/
 │  │   │   ├─ webhook.ts         GitHub webhook (signature, own PRs only)
 │  │   │   ├─ cli-routes.ts      /cli/* (wait / claim / context / submit)
 │  │   │   ├─ api-routes.ts      /api/* (job retry; the PR list later)
-│  │   │   ├─ hub.ts             Hub (ledger, pool, notifications, wait)
+│  │   │   ├─ hub.ts             Hub (ledger, pool, notifications, wait, its view)
+│  │   │   ├─ ledger.ts          the ledger's rules: problem labels and presence
 │  │   │   ├─ pr-session/        PrSession (intake, jobs, context assembly, tools)
 │  │   │   │   ├─ index.ts       the class: intake, jobs, the wake and the outbox, its chat hooks
 │  │   │   │   ├─ history.ts     append-only history: refused client frames, insert-only writes
@@ -654,7 +691,3 @@ Only a deployment can show these.
   a script under `allowed-tools` in the Sandbox, and materializing skills into a local worktree.
 - **Browser client.** `useAgentChat` with a local owner (an appended answer, reconnection) was exercised through a Node
   client speaking the same WebSocket protocol, not in a browser.
-- **Stuck-job display.** The 60-minute "stalled" indication and the retry button are designed, not built.
-- **Presence timing.** The prototype treats an agent as present from its last contact within the timeout, or during a
-  long-poll; the design above also covers the whole period of an unfinished claim. The difference is to be removed in
-  the implementation.

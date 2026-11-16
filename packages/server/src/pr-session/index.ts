@@ -39,29 +39,37 @@ import {
   failPending,
   finalizingJobs,
   freshClaim,
+  heldJobs,
   ingestHeadJobs,
   intakeIds,
+  isHeld,
   jobById,
   jobTarget,
   type JobRow,
   type JobState,
   jobView,
+  ledgerEntry,
   moveHead,
+  type OutboxKind,
   outboxRow,
   type Peek,
   peekJobs,
   pendingInbox,
   readDetails,
+  readHead,
   readOwner,
   recordAttempt,
+  recordEvent,
   removeIntake,
   reserve,
   resultMessageId,
   resumeClaim,
   retry,
+  stallDeadline,
   startNext,
   takeInbox,
   writeDetails,
+  writeLedger,
   writeNotify,
 } from "./jobs.ts";
 
@@ -84,6 +92,15 @@ export type Submission = {
   target: JobTarget;
   text: string;
 };
+
+// A claim's 60-minute check (claimAged): the job and the claim it was armed for.
+type ClaimRef = { jobId: string; claimId: string };
+
+// The first whole second at or after a time: the SDK stores a schedule's time in whole seconds, rounding a Date down,
+// which would run a check before its deadline.
+function wholeSecondFrom(ms: number): Date {
+  return new Date(Math.ceil(ms / 1000) * 1000);
+}
 
 // What one step that can make jobs waiting did beyond its own change: cloud jobs failed or handed over.
 type CloudOutcome = { failed: JobRow[]; started: { row: JobRow; agent: CloudAgent } | null };
@@ -246,11 +263,12 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   // The session as the UI shows it (also its Agent state).
   view(): PrSessionView {
+    const now = Date.now();
     return {
       pr: this.#pr(),
       details: readDetails(this.#sql),
       owner: readOwner(this.#sql),
-      jobs: allJobs(this.#sql).map(jobView),
+      jobs: allJobs(this.#sql).map((row) => jobView(row, now)),
     };
   }
 
@@ -286,7 +304,14 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       return stored;
     }
     const decided: Owner = (await this.readPool()) ? "local" : "cloud";
-    if (decideOwner(this.#sql, decided)) {
+    const set = this.ctx.storage.transactionSync(() => {
+      const first = decideOwner(this.#sql, decided);
+      if (first) {
+        writeLedger(this.#sql);
+      }
+      return first;
+    });
+    if (set) {
       log("prq.owner.decided", { pr: this.name, owner: decided });
     }
     return this.#storedOwner();
@@ -336,13 +361,18 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       // A question another step gave a job meanwhile keeps that one.
       const rows = createAnswerJobs(this.#sql, questions, now);
       removeIntake(this.#sql, questions);
-      return { created: rows, cloud: rows.length > 0 ? this.#newWork(owner, now) : NO_CLOUD_OUTCOME };
+      if (rows.length === 0) {
+        return { created: rows, cloud: NO_CLOUD_OUTCOME };
+      }
+      recordEvent(this.#sql, "question", now);
+      writeLedger(this.#sql);
+      return { created: rows, cloud: this.#newWork(owner, now) };
     });
     for (const row of created) {
       log("prq.job.created", { ...this.#jobFields(row), to: this.#stateAfter(row, cloud) });
     }
     this.#afterNewWork(cloud);
-    if (owner === "local" && created.length > 0) {
+    if (created.length > 0) {
       await this.#deliverOutbox();
     }
   }
@@ -432,8 +462,15 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       if (!takeInbox(this.#sql, delivery.deliveryId)) {
         return null;
       }
+      const before = readHead(this.#sql);
       const moved = moveHead(this.#sql, delivery);
+      // A push is an event when it changes the head: the first push, or a newer head. A push of the current head is
+      // not one.
+      if (moved && (!before.pushed || before.headSha !== delivery.details.headSha)) {
+        recordEvent(this.#sql, "push", now);
+      }
       writeDetails(this.#sql, delivery);
+      writeLedger(this.#sql);
       const jobs = moved
         ? ingestHeadJobs(this.#sql, delivery.details.headSha, now)
         : { folded: [], created: undefined, revived: undefined };
@@ -458,17 +495,17 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       log("prq.job.revived", { ...this.#jobFields(change.revived), from: "superseded", to });
     }
     this.#afterNewWork(change.cloud);
-    if (owner === "local" && change.waiting !== undefined) {
-      await this.#deliverOutbox();
-    }
+    await this.#deliverOutbox();
   }
 
-  // An edit or a close, taken in once: the pull request's details, when no later webhook has given them. No job.
+  // An edit or a close, taken in once: the pull request's details, when no later webhook has given them. No job. Its
+  // ledger entry goes with the delivery at the end of the settle that takes it in.
   #takeUpdate(delivery: Delivery): void {
     const taken = this.ctx.storage.transactionSync(() => {
       const fresh = takeInbox(this.#sql, delivery.deliveryId);
       if (fresh) {
         writeDetails(this.#sql, delivery);
+        writeLedger(this.#sql);
       }
       return fresh;
     });
@@ -495,10 +532,16 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   // resume: the agent's own claimed job, under a new claimId (the old one stops working). fresh: the next pending job.
   // A job claimed by one agent ID is never returned to another. attempt: the Hub's number for this claim call; an
-  // attempt older than one the agent has claimed under here claims nothing.
+  // attempt older than one the agent has claimed under here claims nothing. A claim that will likely take a job arms
+  // the wake first, so the claim's ledger entry and its claimAged check are finished by settle if this call stops after
+  // the claim.
   async claim(agentId: string, mode: "resume" | "fresh", attempt: number): Promise<ClaimResponse> {
     if ((await this.ownerOf()) !== "local") {
       return { job: null };
+    }
+    const peek = peekJobs(this.#sql, agentId);
+    if (mode === "resume" ? peek.resume : peek.fresh) {
+      await this.#armWake();
     }
     const claimId = crypto.randomUUID();
     const now = Date.now();
@@ -509,6 +552,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
           : freshClaim(this.#sql, agentId, claimId, attempt, now);
       if (claimed !== undefined) {
         recordAttempt(this.#sql, agentId, attempt);
+        writeLedger(this.#sql);
       }
       return claimed;
     });
@@ -523,7 +567,52 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       agentId,
     });
     this.#publishView();
+    await this.#attempt("claim_aged", () => this.#armClaimAged(row));
+    await this.#deliverOutbox();
     return { job: this.#job(row), claimId, resumed: mode === "resume" };
+  }
+
+  // Schedules a held job's claimAged check at the first whole second at or after its deadline. A row for the same claim
+  // is not added twice.
+  async #armClaimAged(row: JobRow): Promise<void> {
+    if (row.claim_id === null) {
+      return;
+    }
+    const payload: ClaimRef = { jobId: row.job_id, claimId: row.claim_id };
+    await this.schedule(wholeSecondFrom(stallDeadline(row)), "claimAged", payload, { idempotent: true });
+  }
+
+  // A claim's 60-minute check (docs/design.md, PR ledger). With the claim still held and its deadline passed, the
+  // ledger entry and the view now show the job possibly stalled. Run before the deadline, it schedules itself again
+  // (a new row: an idempotent one would match this running one). For a claim that has ended, nothing changes.
+  async claimAged(payload: ClaimRef): Promise<void> {
+    const held = (): JobRow | undefined => {
+      const row = jobById(this.#sql, payload.jobId);
+      return row?.claim_id === payload.claimId && isHeld(row) ? row : undefined;
+    };
+    const row = held();
+    if (row === undefined) {
+      return;
+    }
+    const deadline = stallDeadline(row);
+    if (Date.now() < deadline) {
+      await this.schedule(wholeSecondFrom(deadline), "claimAged", payload, { idempotent: false });
+      return;
+    }
+    await this.#armWake();
+    const aged = this.ctx.storage.transactionSync(() => {
+      const still = held();
+      if (still !== undefined) {
+        writeLedger(this.#sql);
+      }
+      return still;
+    });
+    if (aged === undefined) {
+      return;
+    }
+    log("prq.job.stalled", { ...this.#jobFields(aged), agentId: aged.agent_id });
+    this.#publishView();
+    await this.#deliverOutbox();
   }
 
   // What a local agent works on its claimed job from (/cli/context): the pull request, its details, the job as its claim
@@ -569,8 +658,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (row === undefined) {
       return { error: "unknown_job" };
     }
-    const held = row.state === "claimed" || row.state === "finalizing";
-    if (!held || row.claim_id !== claimId || row.agent_id !== agentId) {
+    if (!isHeld(row) || row.claim_id !== claimId || row.agent_id !== agentId) {
       return { error: "stale_claim", detail: "the claim is not the job's current one" };
     }
     return row;
@@ -647,15 +735,20 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   // A submit that fails on the way (the conversation does not settle, the queue or the append fails) answers internal
   // and leaves the job claimed, so the agent can submit again.
   async submit(submission: Submission): Promise<SubmitResponse | ErrorResponse> {
+    let response: SubmitResponse | ErrorResponse;
     try {
       if (!(await this.waitUntilStable({ timeout: STABLE_WAIT_MS }))) {
         throw new WaitTimeout(`the conversation did not settle within ${STABLE_WAIT_MS} ms`);
       }
-      return await this.#writes.run(() => this.#finalize(submission));
+      // The ledger entry of the completed job is written in the queue; the wake delivers it if this call stops first.
+      await this.#armWake();
+      response = await this.#writes.run(() => this.#finalize(submission));
     } catch (error) {
       log("prq.job.submit_failed", { pr: this.name, jobId: submission.jobId, error: errorName(error) }, "error");
       return { error: "internal" };
     }
+    await this.#deliverOutbox();
+    return response;
   }
 
   async #finalize(submission: Submission): Promise<SubmitResponse | ErrorResponse> {
@@ -708,10 +801,19 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return error;
   }
 
-  // Inside the history queue: a finalizing job becomes done when its message is stored, else claimed again.
+  // Inside the history queue: a finalizing job becomes done when its message is stored, else claimed again. A done job
+  // is the session's latest event (a summary or an answer completed) and changes its ledger entry.
   async #endFinalizing(row: JobRow, event: "prq.job.submitted" | "prq.job.swept"): Promise<void> {
     const stored = (await this.#message(resultMessageId(row))) !== undefined;
-    const ended = endFinalizing(this.#sql, row, stored, Date.now());
+    const now = Date.now();
+    const ended = this.ctx.storage.transactionSync(() => {
+      const next = endFinalizing(this.#sql, row, stored, now);
+      if (next?.state === "done") {
+        recordEvent(this.#sql, next.kind === "analysis" ? "summary" : "answer", now);
+        writeLedger(this.#sql);
+      }
+      return next;
+    });
     if (ended !== undefined) {
       log(event, { ...this.#jobFields(ended), from: "finalizing", to: ended.state, agentId: ended.agent_id });
       this.#publishView();
@@ -730,7 +832,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       return { error: "unknown_job" };
     }
     if (before.state !== "claimed" && before.state !== "failed") {
-      return { error: "not_retryable", detail: `the job is ${jobView(before).state}` };
+      return { error: "not_retryable", detail: `the job is ${jobView(before, Date.now()).state}` };
     }
     await this.#armWake();
     const owner = this.#storedOwner();
@@ -741,6 +843,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       if (row === undefined) {
         return null;
       }
+      writeLedger(this.#sql);
       return { from, row, cloud: row.state === "pending" ? this.#newWork(owner, now) : NO_CLOUD_OUTCOME };
     });
     if (change === null) {
@@ -753,9 +856,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       to: this.#stateAfter(change.row, change.cloud),
     });
     this.#afterNewWork(change.cloud);
-    if (waiting && owner === "local") {
-      await this.#deliverOutbox();
-    }
+    await this.#deliverOutbox();
     return { status: waiting ? "retried" : "superseded" };
   }
 
@@ -774,7 +875,19 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     await this.#attempt("create_jobs", () => this.createJobs());
     await this.#attempt("sweep", () => this.#writes.run(() => this.#sweepFinalizing()));
     await this.#attempt("cloud", () => this.#settleCloud());
+    await this.#attempt("claim_aged", () => this.#rearmClaimAged());
     await this.#deliverOutbox();
+  }
+
+  // Every held job whose claim has not reached its deadline has its claimAged check (one a stop between the claim and
+  // its schedule left without). A claim past its deadline is not armed again: the entry built from then on shows it.
+  async #rearmClaimAged(): Promise<void> {
+    const now = Date.now();
+    for (const row of heldJobs(this.#sql)) {
+      if (stallDeadline(row) > now) {
+        await this.#armClaimAged(row);
+      }
+    }
   }
 
   async #attempt(step: string, run: () => Promise<void> | void): Promise<void> {
@@ -796,19 +909,46 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   #settleCloud(): void {
     if (readOwner(this.#sql) === "cloud") {
-      this.#afterNewWork(this.ctx.storage.transactionSync(() => this.#cloudSeam(Date.now())));
+      const cloud = this.ctx.storage.transactionSync(() => {
+        const outcome = this.#cloudSeam(Date.now());
+        if (outcome.failed.length > 0 || outcome.started !== null) {
+          writeLedger(this.#sql);
+        }
+        return outcome;
+      });
+      this.#afterNewWork(cloud);
     }
   }
 
-  // Delivers the outbox row to the Hub (spied on in tests). The row is deleted only if it is still the generation that
-  // was read, so a row written again during the call stays for the next delivery.
+  // Delivers the outbox rows to the Hub (spied on in tests), each on its own: a failed one does not keep the other
+  // back, and the first failure is thrown once both were tried. A row is deleted only if it is still the generation
+  // that was read, so a row written again during the call stays for the next delivery.
   protected async deliver(): Promise<void> {
-    const row = outboxRow(this.#sql);
+    const failures: unknown[] = [];
+    for (const kind of ["notify", "ledger"] as const) {
+      try {
+        await this.#deliverRow(kind);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw failures[0];
+    }
+  }
+
+  // notify is idempotent. A ledger row's generation is the entry's revision: the entry is built from the session as it
+  // is when the row is read, in the same synchronous step, and the Hub keeps only an entry newer than the one it has.
+  async #deliverRow(kind: OutboxKind): Promise<void> {
+    const row = outboxRow(this.#sql, kind);
     if (row === undefined) {
       return;
     }
+    const entry = kind === "ledger" ? ledgerEntry(this.#sql, Date.now()) : null;
     const hub = await hubStub(this.env);
-    await withTimeout(hub.notify(this.name), HUB_CALL_MS, "the Hub's notify");
+    await (entry === null
+      ? withTimeout(hub.notify(this.name), HUB_CALL_MS, "the Hub's notify")
+      : withTimeout(hub.upsertLedger(this.name, row.gen, entry), HUB_CALL_MS, "the Hub's ledger"));
     if (deleteOutbox(this.#sql, row)) {
       log("prq.outbox.delivered", { pr: this.name, kind: row.kind, gen: row.gen });
     }

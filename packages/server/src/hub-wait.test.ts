@@ -1,7 +1,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PRESENCE_MS } from "./hub.ts";
+import { PRESENCE_MS } from "./ledger.ts";
 import { captureLogs, request } from "./test/access.ts";
 import { type AgentSocket, hostToken, question } from "./test/chat.ts";
 import { controlWaitTimers, lastSeenAgo, localSession, waitOver, waitStatus, watchChecks } from "./test/cli.ts";

@@ -12,7 +12,7 @@ import * as v from "valibot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROUTE_CALL_MS } from "./http.ts";
-import { PRESENCE_MS } from "./hub.ts";
+import { PRESENCE_MS, STALL_MS } from "./ledger.ts";
 import { CONTEXT_PAGE_BYTES, jsonBytes, take } from "./pr-session/context.ts";
 import { PrSession } from "./pr-session/index.ts";
 import { captureLogs } from "./test/access.ts";
@@ -22,6 +22,7 @@ import {
   claimOver,
   fetchBounded,
   heldBound,
+  claimedAgo,
   lastSeenAgo,
   localSession,
   post,
@@ -219,6 +220,8 @@ describe("context", () => {
     const { ref, token } = await localSession("context", sockets, question("q1"));
     const claim = holding(await claimOver(token, "laptop"));
 
+    // Neither the agent's last contact nor its claim keeps it present.
+    await claimedAgo(STALL_MS + PRESENCE_MS);
     await lastSeenAgo(PRESENCE_MS + 1);
     expect(await (await hub()).isLocalPresent()).toBe(false);
     await refused(post("/cli/context", token, { ...contextBody(ref, claim, "laptop"), claimId: crypto.randomUUID() }));

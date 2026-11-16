@@ -32,9 +32,14 @@ export {
 export { PRQ_VERSION_HEADER } from "./version.ts";
 export {
   HistoryChangedMessage,
+  HubView,
   JobView,
+  LatestEvent,
+  LedgerRow,
   Owner,
+  PoolAgent,
   PrSessionView,
+  Problem,
   RetryRequest,
   RetryResponse,
   ServerVersionMessage,

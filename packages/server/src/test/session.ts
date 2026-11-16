@@ -40,11 +40,13 @@ export function hub(): Promise<DurableObjectStub<Hub>> {
   return hubStub(env);
 }
 
-// The pool as a test needs it: no agent present, or the given agents present (a contact just now).
+// The pool as a test needs it: no agent present, or the given agents present (a contact just now). The claims the
+// ledger gave the Hub go too, since a claim keeps its agent present.
 export async function setPool(agentIds: readonly string[]): Promise<void> {
   const stub = await hub();
   await runInDurableObject(stub, (_, state) => {
     state.storage.sql.exec("DELETE FROM prq_agents");
+    state.storage.sql.exec("DELETE FROM prq_claims");
   });
   for (const agentId of agentIds) {
     await stub.touch(agentId);

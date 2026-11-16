@@ -14,6 +14,14 @@ export const HUB_SCHEMA: SchemaSteps = [
   // The notification queue: sessions that may have local work, with the generation of their latest notify.
   `CREATE TABLE prq_notifications (
     session TEXT PRIMARY KEY, gen INTEGER NOT NULL, notified_at INTEGER NOT NULL)`,
+  // The ledger: each session's newest entry (JSON) with its revision, and the time of its latest event (NULL until
+  // one), which orders the list.
+  `CREATE TABLE prq_ledger (
+    session TEXT PRIMARY KEY, rev INTEGER NOT NULL, latest_event_at INTEGER, entry TEXT NOT NULL)`,
+  // The claims the ledger entries hold, per session and job: the agent ID and the claim's time on the Hub's clock.
+  `CREATE TABLE prq_claims (
+    session TEXT NOT NULL, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, claimed_at INTEGER NOT NULL,
+    PRIMARY KEY (session, job_id))`,
 ];
 
 export const PR_SESSION_SCHEMA: SchemaSteps = [
@@ -81,6 +89,19 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
     pr_state TEXT NOT NULL CHECK (pr_state IN ('open', 'closed', 'merged')),
     url TEXT NOT NULL,
     processed INTEGER NOT NULL DEFAULT 0 CHECK (processed IN (0, 1)))`,
+  // The ledger row's latest event (a push that changed the head, a question, a completed summary or answer) and the
+  // session's time of it, NULL until the first.
+  "ALTER TABLE prq_session ADD COLUMN latest_event_kind TEXT CHECK (latest_event_kind IN ('push', 'question', 'summary', 'answer'))",
+  "ALTER TABLE prq_session ADD COLUMN latest_event_at INTEGER",
+  // unresolved_failure: 1 from the statement that fails the job to the statement that completes it, whatever happens
+  // between (a retry, a supersede, a revival).
+  "ALTER TABLE prq_jobs ADD COLUMN unresolved_failure INTEGER NOT NULL DEFAULT 0 CHECK (unresolved_failure IN (0, 1))",
+  "UPDATE prq_jobs SET unresolved_failure = 1 WHERE state = 'failed'",
+  // The outbox's second kind, ledger: the session's entry for the Hub. SQLite cannot change a CHECK in place.
+  "CREATE TABLE prq_outbox_next (kind TEXT PRIMARY KEY CHECK (kind IN ('notify', 'ledger')), gen INTEGER NOT NULL)",
+  "INSERT INTO prq_outbox_next (kind, gen) SELECT kind, gen FROM prq_outbox",
+  "DROP TABLE prq_outbox",
+  "ALTER TABLE prq_outbox_next RENAME TO prq_outbox",
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {

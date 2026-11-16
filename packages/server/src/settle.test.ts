@@ -36,8 +36,11 @@ async function hubLists(name: string, timeout = 10_000): Promise<void> {
   await vi.waitFor(async () => expect(await queued()).toContain(name), { timeout, interval: 200 });
 }
 
+// The session's notify row (its ledger row is the ledger tests').
 async function outbox(stub: DurableObjectStub) {
-  return runInDurableObject(stub, (_, state) => state.storage.sql.exec("SELECT kind, gen FROM prq_outbox").toArray());
+  return runInDurableObject(stub, (_, state) =>
+    state.storage.sql.exec("SELECT kind, gen FROM prq_outbox WHERE kind = 'notify'").toArray(),
+  );
 }
 
 async function forgetSession(name: string): Promise<void> {

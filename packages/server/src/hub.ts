@@ -1,17 +1,34 @@
-import { type ClaimResponse, parseSessionName, type PrRef, WaitRequest, type WaitResponse } from "@prq/protocol";
+import {
+  type ClaimResponse,
+  type HubView,
+  type LedgerRow,
+  parseSessionName,
+  type PoolAgent,
+  type PrRef,
+  WaitRequest,
+  type WaitResponse,
+} from "@prq/protocol";
 import { Agent, type Connection } from "agents";
 import * as v from "valibot";
 
 import { refuseSubAgent, sendServerVersion } from "./agents.ts";
+import {
+  claimReleasedAt,
+  isPresent,
+  LedgerEntry,
+  needsAttention,
+  PRESENCE_MS,
+  type Presence,
+  presenceEnd,
+  problemOf,
+} from "./ledger.ts";
 import { errorName, log } from "./log.ts";
 import { prSessionStub } from "./names.ts";
 import type { PrSession } from "./pr-session/index.ts";
 import type { Peek } from "./pr-session/jobs.ts";
 import { HUB_SCHEMA, migrate } from "./schema.ts";
-import { withTimeout } from "./wait.ts";
+import { SerialQueue, withTimeout } from "./wait.ts";
 
-// An agent ID counts as present until this long after its last contact (docs/design.md, Presence).
-export const PRESENCE_MS = 10 * 60_000;
 // How long a call to a PrSession may take, the session's start included.
 const SESSION_CALL_MS = 10_000;
 // The longest a wait lasts; the agent then waits again.
@@ -24,17 +41,28 @@ export function waitBoundMs(timeoutMs: number | undefined): number {
 
 type Notification = { session: string; gen: number };
 
-// The one Hub (HUB_NAME): the pool of local agents and the queue of sessions that may have work for them. It holds no
-// job state: it asks each PrSession (peek, claim), and each PrSession asks it about presence.
-export class Hub extends Agent<Env> {
+type AgentPresence = Presence & { claimedAt: number[] };
+
+// The one Hub (HUB_NAME): the pool of local agents, the queue of sessions that may have work for them, and the ledger
+// of every session's row. It holds no job state: it asks each PrSession (peek, claim), each PrSession asks it about
+// presence, and each sends it its ledger entry. Its view (HubView) is its Agent state.
+export class Hub extends Agent<Env, HubView> {
   readonly #sql: SqlStorage;
-  // The waits in flight, each with the wake-up a notify gives it. In memory only: a wait ends with its request.
-  readonly #waiters = new Set<{ wake(): void }>();
+  // The waits in flight, each with its agent ID and the wake-up a notify gives it. In memory only: a wait ends with its
+  // request.
+  readonly #waiters = new Set<{ agentId: string; wake(): void }>();
+  // Arming presenceEnded: a check for an earlier row, then a schedule, one pool change at a time.
+  readonly #presenceAlarm = new SerialQueue("the presence alarm");
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#sql = ctx.storage.sql;
     migrate(ctx.storage, HUB_SCHEMA);
+  }
+
+  // Presence may have ended while the Hub was not running.
+  override async onStart(): Promise<void> {
+    await this.#poolChanged();
   }
 
   override onConnect(connection: Connection): void {
@@ -45,25 +73,202 @@ export class Hub extends Agent<Env> {
     return refuseSubAgent();
   }
 
+  // The view is the server's: a client's state update is refused (the SDK answers it with cf_agent_state_error).
+  override validateStateChange(_next: HubView, source: Connection | "server"): void {
+    if (source !== "server") {
+      log("prq.state.refused", {}, "warn");
+      throw new Error("the Hub view is set by the server only");
+    }
+  }
+
   // --- The pool ---
 
   // A contact from a local agent: a wait (at its start and end), a claim, a submit or a context.
-  touch(agentId: string): void {
+  async touch(agentId: string): Promise<void> {
+    this.#contact(agentId, Date.now());
+    await this.#poolChanged();
+  }
+
+  // Sets an agent's last contact, unless a later one is stored.
+  #contact(agentId: string, at: number): void {
     this.#sql.exec(
       `INSERT INTO prq_agents (agent_id, last_seen_at) VALUES (?, ?)
-       ON CONFLICT (agent_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
+       ON CONFLICT (agent_id) DO UPDATE SET last_seen_at = max(last_seen_at, excluded.last_seen_at)`,
       agentId,
-      Date.now(),
+      at,
     );
   }
 
-  // Whether any local agent is present: one in a wait, or one whose last contact is less than PRESENCE_MS ago.
+  // Whether any local agent is present (docs/design.md, Presence): one in a wait, one whose last contact is less than
+  // PRESENCE_MS ago, or one holding a claim made less than STALL_MS + PRESENCE_MS ago.
   isLocalPresent(): boolean {
-    if (this.#waiters.size > 0) {
-      return true;
+    const now = Date.now();
+    return [...this.#presences(now).values()].some((presence) => isPresent(presence, now));
+  }
+
+  // Each agent ID that may be present at now, with what its presence rests on, all on the Hub's clock.
+  #presences(now: number): Map<string, AgentPresence> {
+    const presences = new Map<string, AgentPresence>();
+    const of = (agentId: string): AgentPresence => {
+      let presence = presences.get(agentId);
+      if (presence === undefined) {
+        presence = { waiting: false, lastSeenAt: null, claimedAt: [] };
+        presences.set(agentId, presence);
+      }
+      return presence;
+    };
+    const recent = this.#sql.exec<{ agent_id: string; last_seen_at: number }>(
+      "SELECT agent_id, last_seen_at FROM prq_agents WHERE last_seen_at > ?",
+      now - PRESENCE_MS,
+    );
+    for (const row of recent) {
+      of(row.agent_id).lastSeenAt = row.last_seen_at;
     }
-    const since = Date.now() - PRESENCE_MS;
-    return this.#sql.exec("SELECT 1 FROM prq_agents WHERE last_seen_at > ? LIMIT 1", since).toArray().length > 0;
+    for (const row of this.#sql.exec<{ agent_id: string; claimed_at: number }>(
+      "SELECT agent_id, claimed_at FROM prq_claims",
+    )) {
+      of(row.agent_id).claimedAt.push(row.claimed_at);
+    }
+    for (const waiter of this.#waiters) {
+      of(waiter.agentId).waiting = true;
+    }
+    for (const [agentId, presence] of presences) {
+      presence.lastSeenAt ??=
+        this.#sql
+          .exec<{ last_seen_at: number }>("SELECT last_seen_at FROM prq_agents WHERE agent_id = ?", agentId)
+          .toArray()[0]?.last_seen_at ?? null;
+    }
+    return presences;
+  }
+
+  // After any change to the pool or the ledger: the view, set only when it changed, and presenceEnded at the next
+  // time an agent's presence ends. Neither failure undoes the change that called it: a later change sets both again.
+  async #poolChanged(): Promise<void> {
+    try {
+      const view = this.view();
+      if (JSON.stringify(view) !== JSON.stringify(this.state)) {
+        this.setState(view);
+      }
+    } catch (error) {
+      log("prq.hub.view_failed", { error: errorName(error) }, "error");
+    }
+    try {
+      await this.#presenceAlarm.run(() => this.#armPresenceEnded());
+    } catch (error) {
+      log("prq.hub.presence_alarm_failed", { error: errorName(error) }, "error");
+    }
+  }
+
+  // presenceEnded at the first whole second at or after the earliest time a present agent's presence ends, unless a
+  // row for a later second than this one is due by then (a row due now may be the one running, which is ending).
+  async #armPresenceEnded(): Promise<void> {
+    const now = Date.now();
+    const ends = [...this.#presences(now).values()].map(presenceEnd).filter((end) => end > now && end < Infinity);
+    if (ends.length === 0) {
+      return;
+    }
+    const due = Math.ceil(Math.min(...ends) / 1000) * 1000;
+    const armed = await this.listSchedules({ timeRange: { start: new Date(now + 1000), end: new Date(due) } });
+    if (!armed.some((schedule) => schedule.callback === "presenceEnded")) {
+      await this.schedule(new Date(due), "presenceEnded", undefined, { idempotent: false });
+    }
+  }
+
+  // Run when an agent's presence may have ended: the view follows, so "Waiting for a local agent" appears without any
+  // other event, and the next end is armed.
+  async presenceEnded(): Promise<void> {
+    await this.#poolChanged();
+  }
+
+  // --- The ledger ---
+
+  // A session's entry at its revision (its outbox generation, which only grows). The Hub keeps an entry only when it is
+  // newer than the stored one, decided in the statement that stores it, so an older delivery that lands late changes
+  // nothing; a stale one is logged, one at the stored revision is a redelivery. The entry's claims replace the
+  // session's: each is placed on the Hub's clock by its age, and an agent whose claim is no longer listed (a submit or
+  // a retry ended it) counts as seen when the claim stopped applying, so its presence ends PRESENCE_MS after that.
+  async upsertLedger(session: string, rev: number, entry: LedgerEntry): Promise<void> {
+    if (parseSessionName(session) === null || !v.is(LedgerEntry, entry)) {
+      log("prq.hub.ledger_refused", {}, "warn");
+      return;
+    }
+    const now = Date.now();
+    const stored = this.ctx.storage.transactionSync(() => {
+      const applied = this.#sql
+        .exec(
+          `INSERT INTO prq_ledger (session, rev, latest_event_at, entry) VALUES (?, ?, ?, ?)
+           ON CONFLICT (session) DO UPDATE SET rev = excluded.rev, latest_event_at = excluded.latest_event_at,
+             entry = excluded.entry
+           WHERE excluded.rev > prq_ledger.rev RETURNING rev`,
+          session,
+          rev,
+          entry.latestEvent?.at ?? null,
+          JSON.stringify(entry),
+        )
+        .toArray();
+      if (applied.length === 0) {
+        return this.#sql.exec<{ rev: number }>("SELECT rev FROM prq_ledger WHERE session = ?", session).one().rev;
+      }
+      this.#replaceClaims(session, entry, now);
+      return null;
+    });
+    if (stored !== null && rev < stored) {
+      log("prq.ledger.stale_rev", { pr: session, rev, stored }, "warn");
+    }
+    await this.#poolChanged();
+  }
+
+  #replaceClaims(session: string, entry: LedgerEntry, now: number): void {
+    const listed = new Set(entry.claims.map((claim) => `${claim.agentId}\n${claim.jobId}`));
+    const before = this.#sql
+      .exec<{ job_id: string; agent_id: string; claimed_at: number }>(
+        "SELECT job_id, agent_id, claimed_at FROM prq_claims WHERE session = ?",
+        session,
+      )
+      .toArray();
+    for (const claim of before) {
+      if (!listed.has(`${claim.agent_id}\n${claim.job_id}`)) {
+        this.#contact(claim.agent_id, claimReleasedAt(claim.claimed_at, now));
+      }
+    }
+    this.#sql.exec("DELETE FROM prq_claims WHERE session = ?", session);
+    for (const claim of entry.claims) {
+      this.#sql.exec(
+        "INSERT INTO prq_claims (session, job_id, agent_id, claimed_at) VALUES (?, ?, ?, ?)",
+        session,
+        claim.jobId,
+        claim.agentId,
+        now - claim.ageMs,
+      );
+    }
+  }
+
+  // --- The view ---
+
+  // The Hub as the UI shows it: the present agents, and every row by latest event with its problem.
+  view(): HubView {
+    const now = Date.now();
+    const agents: PoolAgent[] = [...this.#presences(now)]
+      .filter(([, presence]) => isPresent(presence, now))
+      .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([agentId, presence]) => ({
+        agentId,
+        lastSeenAt: presence.lastSeenAt,
+        waiting: presence.waiting,
+        holdsJob: presence.claimedAt.length > 0,
+      }));
+    const localAgentPresent = agents.length > 0;
+    const prs = this.#sql
+      .exec<{ session: string; entry: string }>(
+        "SELECT session, entry FROM prq_ledger ORDER BY latest_event_at IS NULL, latest_event_at DESC, session",
+      )
+      .toArray()
+      .flatMap((row) => {
+        const pr = parseSessionName(row.session);
+        const entry = v.safeParse(LedgerEntry, JSON.parse(row.entry));
+        return pr === null || !entry.success ? [] : [ledgerRow(pr, entry.output, localAgentPresent)];
+      });
+    return { localAgentPresent, agents, prs, needsAttention: prs.filter((row) => needsAttention(row.problem)).length };
   }
 
   // The next value of the Hub's counter, which only grows.
@@ -145,11 +350,11 @@ export class Hub extends Agent<Env> {
   async #wait(agentId: string, timeoutMs: number | undefined, signal: AbortSignal): Promise<WaitResponse> {
     const waitMs = waitBoundMs(timeoutMs);
     const end = waitEnd(signal, (ended) => this.waitTimer(waitMs, ended));
-    const waiter = { wake: () => {} };
+    const waiter = { agentId, wake: () => {} };
     this.#waiters.add(waiter);
     try {
       // The start is a contact. Written inside the try, so a failed write still drops the waiter and the timer.
-      this.touch(agentId);
+      await this.touch(agentId);
       while (!end.ended()) {
         const seen = this.#gen();
         if ((await end.race(this.hasWork(agentId))) === true) {
@@ -167,7 +372,7 @@ export class Hub extends Agent<Env> {
     } finally {
       end.dispose();
       this.#waiters.delete(waiter);
-      this.touch(agentId);
+      await this.touch(agentId);
     }
   }
 
@@ -183,7 +388,7 @@ export class Hub extends Agent<Env> {
   // job, session by session. The call is one attempt, numbered from the Hub's counter: a session lets no older attempt
   // of the agent replace what a newer one claimed.
   async claim(agentId: string): Promise<ClaimResponse> {
-    this.touch(agentId);
+    await this.touch(agentId);
     const attempt = this.#next();
     for (const mode of ["resume", "fresh"] as const) {
       for (const { session } of this.#queue()) {
@@ -271,4 +476,17 @@ function sessionRef(session: string): PrRef {
     throw new TypeError("the queue holds canonical session names only");
   }
   return ref;
+}
+
+// A row of the list: the session's entry, with the problem the Hub picks from it and whether an agent is present.
+function ledgerRow(pr: PrRef, entry: LedgerEntry, localAgentPresent: boolean): LedgerRow {
+  return {
+    pr,
+    details: entry.details,
+    owner: entry.owner,
+    latestEvent: entry.latestEvent,
+    problem: problemOf(entry, localAgentPresent),
+    jobs: entry.jobs,
+    claims: entry.claims.map(({ agentId, jobId, since }) => ({ agentId, jobId, since })),
+  };
 }
