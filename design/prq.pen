@@ -6095,15 +6095,53 @@
                   "alignItems": "center",
                   "children": [
                     {
-                      "type": "text",
-                      "id": "hbMbu",
-                      "name": "product",
-                      "fill": "$color-fg-default",
-                      "content": "prq",
-                      "lineHeight": "$text-heading-line-height",
-                      "fontFamily": "$text-heading-font-family",
-                      "fontSize": "$text-heading-font-size",
-                      "fontWeight": "$text-heading-font-weight"
+                      "type": "frame",
+                      "id": "dMUgz",
+                      "name": "brand",
+                      "gap": "$gap-related",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "n4AO7J",
+                          "name": "mark-box",
+                          "context": "asset grid=12x8; moves the mark 1px down so it centres on the x-height of the lowercase name (translate: 0 1px in code)",
+                          "width": 24,
+                          "height": 16,
+                          "layout": "none",
+                          "children": [
+                            {
+                              "id": "R1vSZ",
+                              "type": "ref",
+                              "ref": "SCqq9",
+                              "name": "mark",
+                              "x": 0,
+                              "y": 1,
+                              "width": 24,
+                              "height": 16,
+                              "context": "asset grid=12x8",
+                              "descendants": {
+                                "BwkvG": {
+                                  "width": 24,
+                                  "height": 16,
+                                  "context": "asset grid=12x8"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "hbMbu",
+                          "name": "product",
+                          "fill": "$color-fg-default",
+                          "content": "prq",
+                          "lineHeight": "$text-heading-line-height",
+                          "fontFamily": "$text-heading-font-family",
+                          "fontSize": "$text-heading-font-size",
+                          "fontWeight": "$text-heading-font-weight"
+                        }
+                      ]
                     },
                     {
                       "type": "frame",
@@ -27691,6 +27729,209 @@
           "content": "States: panel.unavailable. Guides: design-token-reactivity, color, icons, responsive-design, size-aware-styling."
         }
       }
+    },
+    {
+      "type": "frame",
+      "id": "c6fQuy",
+      "x": 5612,
+      "y": 0,
+      "name": "Brand",
+      "fill": "$color-bg-canvas",
+      "layout": "vertical",
+      "gap": "$gap-section",
+      "padding": "$inset-page",
+      "children": [
+        {
+          "type": "text",
+          "id": "uWDKv",
+          "name": "title",
+          "fill": "$color-fg-default",
+          "content": "Brand",
+          "lineHeight": "$text-title-line-height",
+          "fontFamily": "$text-title-font-family",
+          "fontSize": "$text-title-font-size",
+          "fontWeight": "$text-title-font-weight"
+        },
+        {
+          "type": "frame",
+          "id": "zD9xn",
+          "name": "BrandMark",
+          "layout": "vertical",
+          "gap": "$gap-group",
+          "children": [
+            {
+              "type": "text",
+              "id": "TPp3H",
+              "name": "group-label",
+              "fill": "$color-fg-muted",
+              "content": "BrandMark",
+              "lineHeight": "$text-small-strong-line-height",
+              "fontFamily": "$text-small-strong-font-family",
+              "fontSize": "$text-small-strong-font-size",
+              "fontWeight": "$text-small-strong-font-weight"
+            },
+            {
+              "type": "frame",
+              "id": "Y3UD2w",
+              "name": "variants",
+              "gap": "$gap-group",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "xdYTa",
+                  "name": "BrandMark/brand",
+                  "context": "asset grid=16",
+                  "reusable": true,
+                  "width": 16,
+                  "height": 16,
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "path",
+                      "id": "ZhJsu",
+                      "x": 0,
+                      "y": 0,
+                      "name": "tile",
+                      "context": "asset grid=16",
+                      "geometry": "M2 0h12v1h1v1h1v12h-1v1h-1v1h-12v-1h-1v-1h-1v-12h1v-1h1z",
+                      "viewBox": [
+                        0,
+                        0,
+                        16,
+                        16
+                      ],
+                      "fill": "$color-accent-emphasis",
+                      "width": 16,
+                      "height": 16
+                    },
+                    {
+                      "type": "path",
+                      "id": "YK2BL",
+                      "x": 0,
+                      "y": 0,
+                      "name": "face",
+                      "context": "asset grid=16",
+                      "geometry": "M2 4h5v4h-3v4h-2z m2 1v2h2v-2z m5-1h5v8h-2v-4h-3z m1 1v2h2v-2z m-4 4h4v2h-1v-1h-1v2h-2z",
+                      "viewBox": [
+                        0,
+                        0,
+                        16,
+                        16
+                      ],
+                      "fill": "$color-fg-on-emphasis",
+                      "width": 16,
+                      "height": 16
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "SCqq9",
+                  "name": "BrandMark/face",
+                  "context": "asset grid=12x8",
+                  "reusable": true,
+                  "width": 12,
+                  "height": 8,
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "path",
+                      "id": "BwkvG",
+                      "x": 0,
+                      "y": 0,
+                      "name": "face",
+                      "context": "asset grid=12x8",
+                      "geometry": "M2 4h5v4h-3v4h-2z m2 1v2h2v-2z m5-1h5v8h-2v-4h-3z m1 1v2h2v-2z m-4 4h4v2h-1v-1h-1v2h-2z",
+                      "viewBox": [
+                        2,
+                        4,
+                        12,
+                        8
+                      ],
+                      "fill": "$color-accent-fg",
+                      "width": 12,
+                      "height": 8
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "FQ3VN",
+              "name": "sizes",
+              "gap": "$gap-group",
+              "alignItems": "end",
+              "children": [
+                {
+                  "id": "s8VtZ",
+                  "type": "ref",
+                  "ref": "xdYTa",
+                  "name": "BrandMark 32",
+                  "width": 32,
+                  "height": 32,
+                  "context": "asset grid=16",
+                  "descendants": {
+                    "ZhJsu": {
+                      "width": 32,
+                      "height": 32,
+                      "context": "asset grid=16"
+                    },
+                    "YK2BL": {
+                      "width": 32,
+                      "height": 32,
+                      "context": "asset grid=16"
+                    }
+                  }
+                },
+                {
+                  "id": "UsyJV",
+                  "type": "ref",
+                  "ref": "xdYTa",
+                  "name": "BrandMark 48",
+                  "width": 48,
+                  "height": 48,
+                  "context": "asset grid=16",
+                  "descendants": {
+                    "ZhJsu": {
+                      "width": 48,
+                      "height": 48,
+                      "context": "asset grid=16"
+                    },
+                    "YK2BL": {
+                      "width": 48,
+                      "height": 48,
+                      "context": "asset grid=16"
+                    }
+                  }
+                },
+                {
+                  "id": "R1yB2",
+                  "type": "ref",
+                  "ref": "xdYTa",
+                  "name": "BrandMark 128",
+                  "width": 128,
+                  "height": 128,
+                  "context": "asset grid=16",
+                  "descendants": {
+                    "ZhJsu": {
+                      "width": 128,
+                      "height": 128,
+                      "context": "asset grid=16"
+                    },
+                    "YK2BL": {
+                      "width": 128,
+                      "height": 128,
+                      "context": "asset grid=16"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ],
   "variables": {

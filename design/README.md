@@ -106,6 +106,13 @@ Pencil drops a variable bound to a width or height, so a fixed size is the token
 node's `context` (`tokens width=size.icon height=size.icon`). A size that fits its content up to a maximum records
 `width<=size.column.repo` and shows the fitted width. The audit checks the value against the variable.
 
+An asset drawn on a pixel grid, the BrandMark, is the exception: it stays crisp only at whole multiples of its grid, so
+its sizes are not tokens. Each of its nodes records the grid instead (`asset grid=16`, or `asset grid=12x8` for the face
+alone, width by height), and the audit accepts any width or height that is a multiple of it. Its colors are variables
+like everywhere else. It is also placed on whole pixels: next to a name it centres on the name's cap height, or on its
+x-height when the name is lowercase only ("prq"), rounded to the nearest whole pixel; a layout frame around it records
+the offset in its `context`.
+
 ### Checking the document
 
 `pencil-audit.js` reports every fill, stroke, radius, padding, gap, text property or shadow that is not bound to a
