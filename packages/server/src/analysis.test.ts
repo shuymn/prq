@@ -249,6 +249,37 @@ describe("revive", () => {
   });
 });
 
+describe("revision", () => {
+  it("advances an analysis's rev with each change: a fold, a revival, a claim, an old-head retry", async () => {
+    captureLogs();
+    const { stub, ref, token } = await localSession("rev", sockets);
+    await push(ref, "A");
+    const jobId = (await analysisOf(stub, "A")).job_id;
+    let before = await revOf(stub, jobId);
+    // The changes whose step left the rev as it was.
+    const unchanged: string[] = [];
+    const change = async (step: string, made: () => Promise<unknown>) => {
+      await made();
+      const after = await revOf(stub, jobId);
+      if (after !== before + 1) {
+        unchanged.push(step);
+      }
+      before = after;
+    };
+
+    await change("fold", () => push(ref, "B"));
+    await change("revival", () => push(ref, "A"));
+    await change("claim", () => claimOver(token, "laptop"));
+    // A claimed analysis is no push's to change.
+    await push(ref, "B");
+    expect(await revOf(stub, jobId)).toBe(before);
+    await change("old-head retry", () => retried(retryOver(token, ref, jobId, before)));
+
+    expect(unchanged).toEqual([]);
+    expect(await analysisOf(stub, "A")).toMatchObject({ state: "superseded" });
+  });
+});
+
 describe("redelivery and reordering", () => {
   it("changes nothing on a redelivery of the current head", async () => {
     captureLogs();

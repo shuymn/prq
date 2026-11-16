@@ -19,7 +19,7 @@ import {
   postRequest,
   submitOver,
 } from "./test/cli.ts";
-import { clearQueue, gate, hub, jobRows, tracked, within } from "./test/session.ts";
+import { clearQueue, gate, holdInsert, hub, jobRows, tracked, within } from "./test/session.ts";
 import { BASE, push, sha } from "./test/webhook.ts";
 import { SERVER_VERSION } from "./version.ts";
 
@@ -129,6 +129,24 @@ describe("context", () => {
     await client.chat([question("q1"), question("q2")]);
     const afterAnalysis = holding(await claimOver(token, "desk-2"));
     expect(afterAnalysis.job).toMatchObject({ target: { messageId: "q2" }, workspaceSha: sha("A") });
+  });
+
+  it("gives the context while the claim's own submit appends its answer", async () => {
+    captureLogs();
+    const { ref, token, stub } = await localSession("context", sockets, question("q1"));
+    const claim = holding(await claimOver(token, "laptop"));
+    const held = await holdInsert(stub, "before");
+    const submit = tracked(submitOver(token, ref, claim, "laptop"));
+    await held.reached();
+
+    // The context goes through while the submit is held in its append, the job finalizing under the same claim.
+    expect((await jobRows(stub)).map((row) => row.state)).toEqual(["finalizing"]);
+    const read = await contextOf(post("/cli/context", token, contextBody(ref, claim, "laptop")));
+    expect(read.job).toEqual(claim.job);
+    expect(submit.settled()).toBe(false);
+
+    await held.open();
+    expect(await accepted(submit.promise)).toMatchObject({ status: "accepted" });
   });
 
   it("refuses any other claim with 409, and an unknown job with 404", async () => {
