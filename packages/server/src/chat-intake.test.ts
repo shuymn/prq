@@ -1,8 +1,10 @@
+import type { AIChatAgent } from "@cloudflare/ai-chat";
 import { abortAllDurableObjects, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { prSessionStub } from "./names.ts";
+import type { PrSession } from "./pr-session/index.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import {
@@ -69,6 +71,112 @@ describe("one job per question", () => {
       .map((log) => String(log.entry["jobId"]));
     expect(created.toSorted()).toEqual(jobs.map((job) => job.job_id).toSorted());
   });
+});
+
+async function intakeRows(stub: DurableObjectStub<PrSession>): Promise<string[]> {
+  return runInDurableObject(stub, (_, state) =>
+    state.storage.sql
+      .exec<{ question_id: string }>("SELECT question_id FROM prq_intake ORDER BY seq")
+      .toArray()
+      .map((row) => row.question_id),
+  );
+}
+
+// Holds the SDK's insert of the next write, before it stores anything or after it has stored the messages.
+async function holdInsert(stub: DurableObjectStub<PrSession>, where: "before" | "after") {
+  const held = await gate(stub);
+  await runInDurableObject(stub, (instance) => {
+    const base: AIChatAgent<Env> = Object.getPrototypeOf(Object.getPrototypeOf(instance));
+    const save = base.persistMessages.bind(instance);
+    vi.spyOn(base, "persistMessages").mockImplementationOnce(async (...args) => {
+      if (where === "after") {
+        await save(...args);
+      }
+      await held.wait();
+      if (where === "before") {
+        await save(...args);
+      }
+    });
+  });
+  return held;
+}
+
+// The session's write of a question is lost at the hold, and a new instance starts on the same storage.
+async function loseWrite(session: Awaited<ReturnType<typeof newSession>>, where: "before" | "after") {
+  const held = await holdInsert(session.stub, where);
+  const write = session.stub.persistMessages([Q2]).catch((error: unknown) => error);
+  await held.reached();
+  const state = { stored: await storedIds(session), intake: await intakeRows(session.stub) };
+  await cancelWakes(session.stub);
+  await abortAllDurableObjects();
+  await write;
+  const restarted = await prSessionStub(env, session.ref);
+  // The start's settle.
+  await restarted.view();
+  return { state, restarted };
+}
+
+async function storedIds(session: { path: string; token: string }): Promise<string[]> {
+  return (await storedMessages(session.path, session.token)).map((message) => message.id);
+}
+
+describe("intake", () => {
+  it("writes a question's intake row before the question, so a stop on either side leaves no question without a job", async () => {
+    captureLogs();
+    await setPool(["laptop"]);
+    const before = await newSession("intake", sockets);
+    await (await before.open()).chat([Q1]);
+    const lostBefore = await loseWrite(before, "before");
+    // The row is written and the question is not stored yet; after the stop the row is dropped and nothing remains.
+    expect(lostBefore.state).toEqual({ stored: ["q1"], intake: ["q2"] });
+    expect(await storedIds(before)).toEqual(["q1"]);
+    expect((await jobRows(lostBefore.restarted)).map((job) => job.target)).toEqual(["q1"]);
+    expect(await intakeRows(lostBefore.restarted)).toEqual([]);
+
+    const after = await newSession("intake", sockets);
+    await (await after.open()).chat([Q1]);
+    const lostAfter = await loseWrite(after, "after");
+    // The question is stored with its row and no job yet; the start turns the row into its job.
+    expect(lostAfter.state).toEqual({ stored: ["q1", "q2"], intake: ["q2"] });
+    expect((await jobRows(lostAfter.restarted)).map((job) => job.target)).toEqual(["q1", "q2"]);
+    expect(await intakeRows(lostAfter.restarted)).toEqual([]);
+  });
+
+  it("keeps the intake row of a question whose insert is under way when settle runs", async () => {
+    captureLogs();
+    await setPool(["laptop"]);
+    const { stub, open } = await newSession("intake", sockets);
+    const client = await open();
+    const held = await holdInsert(stub, "before");
+    const asked = client.chat([Q1]);
+    await held.reached();
+    const settling = tracked(stub.settle());
+    // The session keeps serving; settle waits for the write.
+    expect((await stub.view()).jobs).toEqual([]);
+    expect(settling.settled()).toBe(false);
+
+    await held.open();
+    await Promise.all([settling.promise, asked]);
+    expect((await jobRows(stub)).map((job) => job.target)).toEqual(["q1"]);
+    expect(await intakeRows(stub)).toEqual([]);
+  });
+
+  it("gives a job to each of 10,003 questions stored without one, however deep the history", async () => {
+    captureLogs();
+    await setPool(["laptop"]);
+    const { stub } = await newSession("intake", sockets);
+    // One write of 10,003 questions with no job step after it (as a stop leaves them): more than the 10,000 messages
+    // the SDK walks from the newest.
+    const many = Array.from({ length: 10_003 }, (_, n) => question(`many-${n}`, "?"));
+    await runInDurableObject(stub, (instance) => instance.persistMessages(many));
+    await cancelWakes(stub);
+
+    await stub.settle();
+    const targets = (await jobRows(stub)).map((job) => job.target);
+    expect(targets).toHaveLength(10_003);
+    expect(targets.slice(0, 2)).toEqual(["many-0", "many-1"]);
+    expect(await intakeRows(stub)).toEqual([]);
+  }, 60_000);
 });
 
 describe("questions outside the history in memory", () => {

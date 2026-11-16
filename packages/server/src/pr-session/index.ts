@@ -26,6 +26,7 @@ import { SerialQueue, WaitTimeout, withTimeout } from "../wait.ts";
 import { CLOUD_NOT_CONFIGURED, type CloudAgent } from "./cloud.ts";
 import { addedMessages, isChatList, questionsOnly, refusedChatResponse, refusedFrame } from "./history.ts";
 import {
+  addIntake,
   allJobs,
   createAnswerJobs,
   decideOwner,
@@ -34,7 +35,7 @@ import {
   failPending,
   finalizingJobs,
   freshClaim,
-  hasAnswerJob,
+  intakeIds,
   jobById,
   jobTarget,
   type JobRow,
@@ -44,6 +45,7 @@ import {
   type Peek,
   peekJobs,
   readOwner,
+  removeIntake,
   reserve,
   resultMessageId,
   resumeClaim,
@@ -70,7 +72,7 @@ type CloudOutcome = { failed: JobRow[]; started: { row: JobRow; agent: CloudAgen
 const NO_CLOUD_OUTCOME: CloudOutcome = { failed: [], started: null };
 
 // A question from the UI: a user message the server did not add (server messages carry metadata).
-function isQuestion(message: { role: string; metadata?: unknown }): boolean {
+function isQuestion(message: UIMessage): boolean {
   return message.role === "user" && message.metadata === undefined;
 }
 
@@ -175,7 +177,8 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // Inside the write queue: decides what is new against the history as it is now, not as it was when the write was
-  // requested. New questions arm the wake first, so a question stored just before a stop still gets its job.
+  // requested. New questions arm the wake first, then get their intake rows, then are stored: a stored question always
+  // has its job or its row, and the wake that turns the row into a job is set before either is written.
   protected async insertMessages(messages: UIMessage[]): Promise<void> {
     const cached = new Set(this.messages.map((message) => message.id));
     // this.messages holds the most recent history only (hydrationByteBudget); an ID outside it is looked up in storage.
@@ -184,8 +187,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       messages,
       async (id) => cached.has(id) || (await session.getMessage(id)) !== null,
     );
-    if (added.some(isQuestion)) {
+    const questions = added.filter(isQuestion).map((message) => message.id);
+    if (questions.length > 0) {
       await this.#armWake();
+      addIntake(this.#sql, questions);
     }
     await super.persistMessages([...this.messages, ...added]);
     await this.#sendHistory();
@@ -259,27 +264,32 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return owner;
   }
 
-  // The stored questions that have no job, oldest first. They are read from storage, not this.messages, which holds the
-  // most recent history only: a question stored before a stop can be older than that. Each createJobs gives every
-  // question it finds a job in one step, and questions are only appended, so the questions with jobs come before those
-  // without: the walk reads one message at a time from the newest and ends at the first question that has a job.
-  async #questionsWithoutJobs(): Promise<string[]> {
-    const found: string[] = [];
-    for await (const message of this.sessions.session().history({ newestFirst: true })) {
-      if (isQuestion(message)) {
-        if (hasAnswerJob(this.#sql, message.id)) {
-          break;
-        }
-        found.push(message.id);
+  // The questions waiting for their job, in the order they were stored: their intake rows. Read inside the write queue,
+  // where no question is between its row and its insert, so a row whose question is not stored was left by a write
+  // that failed or stopped there and is dropped.
+  async #intake(): Promise<string[]> {
+    const session = this.sessions.session();
+    const stored: string[] = [];
+    for (const id of intakeIds(this.#sql)) {
+      if ((await session.getMessage(id)) === null) {
+        removeIntake(this.#sql, [id]);
+        log("prq.intake.dropped", { pr: this.name, messageId: id }, "warn");
+      } else {
+        stored.push(id);
       }
     }
-    return found.toReversed();
+    return stored;
   }
 
-  // A job for every stored question that has none, in one step with what makes it reach an agent: the outbox row of a
-  // local session, the cloud seam of a cloud one. Called by intake and by settle (spied on in tests).
+  // A job for every question waiting for one, in one step with what makes it reach an agent (the outbox row of a local
+  // session, the cloud seam of a cloud one) and with the removal of its intake row. Called by intake and by settle
+  // (spied on in tests).
   protected async createJobs(): Promise<void> {
-    const questions = await this.#questionsWithoutJobs();
+    // No row, nothing to wait in the queue for: a row written later has its wake armed before it.
+    if (intakeIds(this.#sql).length === 0) {
+      return;
+    }
+    const questions = await this.#writes.run(() => this.#intake());
     if (questions.length === 0) {
       return;
     }
@@ -288,6 +298,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const { created, cloud } = this.ctx.storage.transactionSync(() => {
       // A question another step gave a job meanwhile keeps that one.
       const rows = createAnswerJobs(this.#sql, questions, now);
+      removeIntake(this.#sql, questions);
       return { created: rows, cloud: rows.length > 0 ? this.#newWork(owner, now) : NO_CLOUD_OUTCOME };
     });
     for (const row of created) {

@@ -137,10 +137,12 @@ UI, webhook and CLI input all enter through PrSession.
 - When the UI sends a message, it arrives in `onChatMessage`. PrSession runs no turn there: it creates a job for every
   user question that has none (deciding the owner at the session's first job) and hands the jobs on, to the Hub for a
   `local` session and to the cloud agent for a `cloud` one. A question can already be stored when a later turn starts,
-  which is why every question without a job gets one, not only the last message. The questions are read from the stored
-  history, not from `this.messages`, which holds only the most recent part: a question stored before a stop can be
-  older than that. Questions are only appended and each step gives every question it finds a job, so the read goes
-  from the newest message and ends at the first question that has a job.
+  which is why every question without a job gets one, not only the last message.
+- Which questions wait for a job is kept in its own table, not found by reading the history. The history write that
+  adds questions (one at a time, in the write queue) writes an intake row for each before storing it, so a stored
+  question always has its job or its row, however long the history. Creating jobs reads the intake rows inside the same
+  queue, where no question is between its row and its insert: a row whose question is not stored was left by a write
+  that failed or stopped, and is dropped. Each job is created in one step with the removal of its row.
 - An analysis is made per push, at the pushed head SHA: GitHub sends one `pull_request` event per push, and the commits
   inside a push are not analyzed one by one.
 - When a webhook arrives, it goes to the PrSession, not to the Hub. The PrSession always records the pushed SHA as the
@@ -185,7 +187,7 @@ UI, webhook and CLI input all enter through PrSession.
   retry), PrSession schedules a wake (`settle`, an Agents SDK schedule), so whenever work exists a wake already exists.
   A wake is a new schedule row each time: an idempotent one would match the row of a `settle` that is running and
   vanish when that run ends.
-- `settle` runs from the wake and at every start. It creates the jobs of stored questions that have none, finishes
+- `settle` runs from the wake and at every start. It creates the jobs of the questions with intake rows, finishes
   each `finalizing` job inside the history write queue (`done` when its message exists, else back to `claimed`), runs
   the cloud hand-over, and delivers the outbox. A failed delivery keeps the row and schedules a retry (5 s, doubling to
   60 s) only when no `settle` is scheduled for a later second; the check and the schedule run under one lock, so
