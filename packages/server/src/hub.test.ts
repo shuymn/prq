@@ -5,15 +5,18 @@ import { PRESENCE_MS } from "./hub.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
 import {
+  claimIn,
   clearQueue,
   gate,
   hub,
   hubSeams,
   jobRows,
   newSession,
+  prSessionSeams,
   queued,
   sessionSql,
   setPool,
+  submission,
   tracked,
 } from "./test/session.ts";
 
@@ -89,13 +92,41 @@ async function unreachableClaim(name: string) {
   await runInDurableObject(await hub(), (instance) => {
     const seams = hubSeams(instance);
     const claim = seams.claimSession.bind(instance);
-    vi.spyOn(seams, "claimSession").mockImplementation(async (session, agentId, mode) => {
+    vi.spyOn(seams, "claimSession").mockImplementation(async (session, agentId, mode, attempt) => {
       if (session === name) {
         throw new Error("session unreachable");
       }
-      return claim(session, agentId, mode);
+      return claim(session, agentId, mode, attempt);
     });
   });
+}
+
+// Holds the session's claim calls in the session, before they choose a job: the first `pass` calls go on, the next one
+// is held. The Hub stops waiting for that call at once (its bound on a session call is made 1 ms for that call only).
+async function holdLateClaim(stub: Awaited<ReturnType<typeof localSessionWithJob>>["stub"], pass: number) {
+  const held = await gate(stub);
+  await runInDurableObject(stub, (instance) => {
+    const seams = prSessionSeams(instance);
+    const owner = seams.ownerOf.bind(instance);
+    const spy = vi.spyOn(seams, "ownerOf");
+    for (let call = 0; call < pass; call += 1) {
+      spy.mockImplementationOnce(owner);
+    }
+    spy.mockImplementationOnce(async () => {
+      await held.wait();
+      return owner();
+    });
+  });
+  await runInDurableObject(await hub(), (instance) => {
+    const seams = hubSeams(instance);
+    const bound = seams.sessionCallMs.bind(instance);
+    const spy = vi.spyOn(seams, "sessionCallMs");
+    for (let call = 0; call < pass; call += 1) {
+      spy.mockImplementationOnce(bound);
+    }
+    spy.mockReturnValueOnce(1);
+  });
+  return held;
 }
 
 describe("presence", () => {
@@ -136,7 +167,7 @@ describe("claim fan-out", () => {
     const second = await localSessionWithJob();
     const stub = await hub();
 
-    const claimed = await second.stub.claim("laptop", "fresh");
+    const claimed = await claimIn(second.stub, "laptop", "fresh");
     const resumed = await stub.claim("laptop");
     expect(resumed).toMatchObject({ job: { jobId: claimed.job?.jobId }, resumed: true });
     expect(resumed.job === null ? null : resumed.claimId).not.toBe(claimed.job === null ? null : claimed.claimId);
@@ -153,6 +184,46 @@ describe("claim fan-out", () => {
     expect(await (await hub()).claim("laptop")).toMatchObject({ job: { jobId: reachable.jobId } });
     expect(await queued()).toContain(unreachableSession.name);
     expect(logs.some((log) => log.entry["event"] === "prq.hub.session_failed")).toBe(true);
+  });
+});
+
+describe("late claims", () => {
+  it("lets no resume that lands after a newer claim replace that claim", async () => {
+    captureLogs();
+    const { stub, jobId } = await localSessionWithJob();
+    await claimIn(stub, "laptop", "fresh");
+    // The Hub's resume in the session is held there, and the Hub stops waiting for it.
+    const held = await holdLateClaim(stub, 0);
+    expect(await (await hub()).claim("laptop")).toEqual({ job: null });
+    await held.reached();
+    expect((await stub.view()).jobs).toMatchObject([{ jobId, state: "claimed" }]);
+
+    const next = await (await hub()).claim("laptop");
+    expect(next).toMatchObject({ job: { jobId }, resumed: true });
+    await held.open();
+    // The late resume has run; the job keeps the newer claim.
+    expect((await jobRows(stub))[0]?.claim_id).toBe(next.job === null ? null : next.claimId);
+    expect(await stub.submit(submission(next, "laptop"))).toMatchObject({ status: "accepted" });
+  });
+
+  it("lets no fresh claim that lands after a newer claim take another job", async () => {
+    captureLogs();
+    const session = await localSessionWithJob();
+    const { stub, open } = session;
+    await (await open()).chat([Q1, question("q2")]);
+    // The Hub's resume in the session goes on (there is nothing to resume); its fresh claim is held there.
+    const held = await holdLateClaim(stub, 1);
+    expect(await (await hub()).claim("laptop")).toEqual({ job: null });
+    await held.reached();
+    expect((await stub.view()).jobs.map((job) => job.state)).toEqual(["pending", "pending"]);
+
+    expect(await (await hub()).claim("laptop")).toMatchObject({ job: { jobId: session.jobId }, resumed: false });
+    await held.open();
+    // The late claim has run and took nothing: Q2 still waits for any agent.
+    expect((await jobRows(stub)).map((job) => [job.target, job.state, job.agent_id])).toEqual([
+      ["q1", "claimed", "laptop"],
+      ["q2", "pending", null],
+    ]);
   });
 });
 
@@ -255,7 +326,7 @@ describe("cloud sessions", () => {
     await (await hub()).notify(name);
 
     expect(await stub.peek("laptop")).toEqual({ resume: false, fresh: false, open: false });
-    expect(await stub.claim("laptop", "fresh")).toEqual({ job: null });
+    expect(await claimIn(stub, "laptop", "fresh")).toEqual({ job: null });
     expect(await (await hub()).hasWork("laptop")).toBe(false);
     expect(await (await hub()).claim("laptop")).toEqual({ job: null });
   });

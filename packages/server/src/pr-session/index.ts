@@ -365,15 +365,18 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // resume: the agent's own claimed job, under a new claimId (the old one stops working). fresh: the next pending job.
-  // A job claimed by one agent ID is never returned to another.
-  async claim(agentId: string, mode: "resume" | "fresh"): Promise<ClaimResponse> {
+  // A job claimed by one agent ID is never returned to another. attempt: the Hub's number for this claim call; an
+  // attempt older than one the agent has claimed under here claims nothing.
+  async claim(agentId: string, mode: "resume" | "fresh", attempt: number): Promise<ClaimResponse> {
     if ((await this.ownerOf()) !== "local") {
       return { job: null };
     }
     const claimId = crypto.randomUUID();
     const now = Date.now();
     const row =
-      mode === "resume" ? resumeClaim(this.#sql, agentId, claimId, now) : freshClaim(this.#sql, agentId, claimId, now);
+      mode === "resume"
+        ? resumeClaim(this.#sql, agentId, claimId, attempt, now)
+        : freshClaim(this.#sql, agentId, claimId, attempt, now);
     if (row === undefined) {
       return { job: null };
     }

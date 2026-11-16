@@ -67,6 +67,25 @@ export async function queued(): Promise<string[]> {
   );
 }
 
+// The next attempt number from the Hub's counter, for a claim made on a session directly.
+async function nextAttempt(): Promise<number> {
+  return runInDurableObject(
+    await hub(),
+    (_, state) =>
+      state.storage.sql.exec<{ gen: number }>("UPDATE prq_hub SET gen = gen + 1 WHERE id = 1 RETURNING gen").one().gen,
+  );
+}
+
+// A claim made on a session directly, as the Hub makes it: under the next attempt.
+export async function claimIn(
+  stub: DurableObjectStub<PrSession>,
+  agentId: string,
+  mode: "resume" | "fresh",
+): Promise<ClaimResponse> {
+  const attempt = await nextAttempt();
+  return stub.claim(agentId, mode, attempt);
+}
+
 export async function jobRows(stub: DurableObjectStub<PrSession>): Promise<JobRow[]> {
   return runInDurableObject(stub, (_, state) =>
     state.storage.sql.exec<JobRow>("SELECT * FROM prq_jobs ORDER BY seq").toArray(),
@@ -214,7 +233,7 @@ export type HubSeams = {
   sessionStub(session: string): Promise<DurableObjectStub<PrSession>>;
   sessionCallMs(): number;
   peekSession(session: string, agentId: string): Promise<{ resume: boolean; fresh: boolean; open: boolean }>;
-  claimSession(session: string, agentId: string, mode: "resume" | "fresh"): Promise<unknown>;
+  claimSession(session: string, agentId: string, mode: "resume" | "fresh", attempt: number): Promise<unknown>;
 };
 
 const HUB_SEAMS = ["sessionStub", "sessionCallMs", "peekSession", "claimSession"] as const;

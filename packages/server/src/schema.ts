@@ -5,7 +5,8 @@
 type SchemaSteps = readonly string[];
 
 export const HUB_SCHEMA: SchemaSteps = [
-  // gen: the counter notification rows take their generation from; it only grows.
+  // gen: the Hub's counter, which only grows. Notification rows take their generation from it, and claim calls their
+  // attempt number.
   "CREATE TABLE prq_hub (id INTEGER PRIMARY KEY CHECK (id = 1), gen INTEGER NOT NULL DEFAULT 0)",
   "INSERT INTO prq_hub (id) VALUES (1)",
   // The pool: each local agent ID and its last contact (epoch ms).
@@ -41,6 +42,8 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
     UNIQUE (kind, target))`,
   // What still has to reach the Hub: one row per kind, with the generation of its latest change.
   "CREATE TABLE prq_outbox (kind TEXT PRIMARY KEY CHECK (kind IN ('notify')), gen INTEGER NOT NULL)",
+  // The Hub's attempt number of the claim that holds the job (or completed it).
+  "ALTER TABLE prq_jobs ADD COLUMN claim_attempt INTEGER",
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {

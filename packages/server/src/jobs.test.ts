@@ -9,6 +9,7 @@ import { prSessionStub } from "./names.ts";
 import { captureLogs, type LogEntry } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import {
+  claimIn,
   gate,
   jobOf,
   jobRows,
@@ -61,24 +62,24 @@ describe("claim", () => {
     const session = await localSession(Q1);
     const { stub, client } = session;
 
-    const a1 = claimed(await stub.claim("agent-a", "fresh"));
+    const a1 = claimed(await claimIn(stub, "agent-a", "fresh"));
     await client.chat([Q1, Q2]);
     await sessionSql(stub, "UPDATE prq_jobs SET claimed_at = 1 WHERE target = 'q1'");
     // A's resume pass returns Q1 again under a new claim, with the claim time set again.
-    const a2 = claimed(await stub.claim("agent-a", "resume"));
+    const a2 = claimed(await claimIn(stub, "agent-a", "resume"));
     expect(a2).toMatchObject({ jobId: a1.jobId, resumed: true });
     expect(a2.claimId).not.toBe(a1.claimId);
     expect((await jobOf(stub, "q1")).claimed_at).toBeGreaterThan(1);
     // B gets Q2, and its resume returns Q2 under a new claim.
-    expect(await stub.claim("agent-b", "resume")).toEqual({ job: null });
-    const b1 = claimed(await stub.claim("agent-b", "fresh"));
+    expect(await claimIn(stub, "agent-b", "resume")).toEqual({ job: null });
+    const b1 = claimed(await claimIn(stub, "agent-b", "fresh"));
     expect(b1.target).toEqual({ kind: "answer", messageId: "q2" });
-    const b2 = claimed(await stub.claim("agent-b", "resume"));
+    const b2 = claimed(await claimIn(stub, "agent-b", "resume"));
     expect(b2.jobId).toBe(b1.jobId);
     expect(b2.claimId).not.toBe(b1.claimId);
     // C gets nothing: both jobs are claimed by other agents.
-    expect(await stub.claim("agent-c", "resume")).toEqual({ job: null });
-    expect(await stub.claim("agent-c", "fresh")).toEqual({ job: null });
+    expect(await claimIn(stub, "agent-c", "resume")).toEqual({ job: null });
+    expect(await claimIn(stub, "agent-c", "fresh")).toEqual({ job: null });
   });
 
   it("gives two claims let go at the same moment different jobs", async () => {
@@ -95,8 +96,8 @@ describe("claim", () => {
         return owner();
       });
     });
-    const claimA = tracked(stub.claim("agent-a", "fresh"));
-    const claimB = tracked(stub.claim("agent-b", "fresh"));
+    const claimA = tracked(claimIn(stub, "agent-a", "fresh"));
+    const claimB = tracked(claimIn(stub, "agent-b", "fresh"));
     await held.reached(2);
     expect((await stub.peek("agent-a")).fresh).toBe(true);
     expect([claimA.settled(), claimB.settled()]).toEqual([false, false]);
@@ -110,7 +111,7 @@ describe("claim", () => {
   it("gives the question's text and no workspace before any analysis", async () => {
     captureLogs();
     const { stub, ref } = await localSession(question("q1", "Why is this needed?"));
-    const claim = await stub.claim("agent-a", "fresh");
+    const claim = await claimIn(stub, "agent-a", "fresh");
     expect(claim).toMatchObject({
       job: {
         pr: ref,
@@ -128,7 +129,7 @@ describe("submit", () => {
     captureLogs();
     const session = await localSession(Q1, Q2);
     const { stub } = session;
-    const claim = await stub.claim("agent-a", "fresh");
+    const claim = await claimIn(stub, "agent-a", "fresh");
     const good = submission(claim, "agent-a");
     const before = await jobRows(stub);
 
@@ -150,7 +151,7 @@ describe("submit", () => {
     captureLogs();
     const session = await localSession(Q1, Q2);
     const { stub } = session;
-    const good = submission(await stub.claim("agent-a", "fresh"), "agent-a");
+    const good = submission(await claimIn(stub, "agent-a", "fresh"), "agent-a");
     const accepted = await stub.submit(good);
     expect(accepted).toMatchObject({ status: "accepted" });
     const done = await jobRows(stub);
@@ -168,7 +169,7 @@ describe("submit", () => {
     captureLogs();
     const session = await localSession(Q1, Q2);
     const { stub } = session;
-    const claim1 = await stub.claim("agent-a", "fresh");
+    const claim1 = await claimIn(stub, "agent-a", "fresh");
     const first = await stub.submit(submission(claim1, "agent-a", "first text"));
     expect(first).toMatchObject({ status: "accepted" });
     expect(await stub.submit(submission(claim1, "agent-a", "second text"))).toEqual({
@@ -177,7 +178,7 @@ describe("submit", () => {
     });
 
     // Queued: the second submit enters the history queue while the first holds it.
-    const claim2 = await stub.claim("agent-a", "fresh");
+    const claim2 = await claimIn(stub, "agent-a", "fresh");
     const held = await gate(stub);
     await runInDurableObject(stub, (instance) => {
       const seams = prSessionSeams(instance);
@@ -207,8 +208,8 @@ describe("submit", () => {
     captureLogs();
     const session = await localSession(Q1, Q2);
     const { stub, client } = session;
-    const claimA = await stub.claim("agent-a", "fresh");
-    const claimB = await stub.claim("agent-b", "fresh");
+    const claimA = await claimIn(stub, "agent-a", "fresh");
+    const claimB = await claimIn(stub, "agent-b", "fresh");
     // A's write is held inside the SDK's save, with its list already built.
     const held = await gate(stub);
     await runInDurableObject(stub, (instance) => {
@@ -241,7 +242,7 @@ describe("submit", () => {
   it("puts the job, the question, the workspace and the agent in the answer's metadata", async () => {
     captureLogs();
     const session = await localSession(Q1);
-    const claim = claimed(await session.stub.claim("agent-a", "fresh"));
+    const claim = claimed(await claimIn(session.stub, "agent-a", "fresh"));
     await session.stub.submit({ ...claim, agentId: "agent-a", text: "the answer" });
     expect(await answers(session)).toEqual([
       {
@@ -263,7 +264,7 @@ describe("submit", () => {
     captureLogs();
     const session = await localSession(Q1);
     const { stub } = session;
-    const claim = await stub.claim("agent-a", "fresh");
+    const claim = await claimIn(stub, "agent-a", "fresh");
     await runInDurableObject(stub, (instance) => {
       vi.spyOn(prSessionSeams(instance), "waitUntilStable").mockResolvedValueOnce(false);
     });
@@ -276,7 +277,7 @@ describe("submit", () => {
     captureLogs();
     const session = await localSession(Q1);
     const { stub } = session;
-    const claim = await stub.claim("agent-a", "fresh");
+    const claim = await claimIn(stub, "agent-a", "fresh");
     await runInDurableObject(stub, (instance) => {
       vi.spyOn(prSessionSeams(instance), "insertMessages").mockRejectedValueOnce(new Error("storage failed"));
     });
@@ -292,7 +293,7 @@ describe("submit against retry and resume", () => {
     captureLogs();
     const session = await localSession(Q1);
     const { stub } = session;
-    const claimA = await stub.claim("agent-a", "fresh");
+    const claimA = await claimIn(stub, "agent-a", "fresh");
     const held = await gate(stub);
     await runInDurableObject(stub, (instance) => {
       const seams = prSessionSeams(instance);
@@ -305,7 +306,7 @@ describe("submit against retry and resume", () => {
     const a = tracked(stub.submit(submission(claimA, "agent-a", "answer A")));
     await held.reached();
     expect(await stub.retryJob(claimA.job?.jobId ?? "")).toEqual({ status: "retried" });
-    const claimB = await stub.claim("agent-b", "fresh");
+    const claimB = await claimIn(stub, "agent-b", "fresh");
     expect(a.settled()).toBe(false);
     await held.open();
 
@@ -318,7 +319,7 @@ describe("submit against retry and resume", () => {
     captureLogs();
     const session = await localSession(Q1);
     const { stub } = session;
-    const claimA = await stub.claim("agent-a", "fresh");
+    const claimA = await claimIn(stub, "agent-a", "fresh");
     const jobId = claimA.job?.jobId ?? "";
     const held = await gate(stub);
     await runInDurableObject(stub, (instance) => {
@@ -332,7 +333,7 @@ describe("submit against retry and resume", () => {
     const a = tracked(stub.submit(submission(claimA, "agent-a", "answer A")));
     await held.reached();
     expect(await stub.retryJob(jobId)).toMatchObject({ error: "not_retryable" });
-    expect(await stub.claim("agent-a", "resume")).toEqual({ job: null });
+    expect(await claimIn(stub, "agent-a", "resume")).toEqual({ job: null });
     const settling = tracked(stub.settle());
     expect((await stub.view()).jobs).toMatchObject([{ jobId, state: "running" }]);
     expect(a.settled()).toBe(false);
@@ -349,7 +350,7 @@ async function lostDuringSubmit(where: "after" | "before") {
   captureLogs();
   const session = await localSession(Q1);
   const { stub } = session;
-  const claim = await stub.claim("agent-a", "fresh");
+  const claim = await claimIn(stub, "agent-a", "fresh");
   const held = await gate(stub);
   await runInDurableObject(stub, (instance) => {
     const seams = prSessionSeams(instance);
@@ -391,20 +392,20 @@ describe("retry", () => {
     const session = await localSession(Q1, Q2);
     const { stub } = session;
     // The same agent claims again after a retry: only the new claimId is its claim.
-    const firstA = await stub.claim("agent-a", "fresh");
+    const firstA = await claimIn(stub, "agent-a", "fresh");
     expect(await stub.retryJob(claimed(firstA).jobId)).toEqual({ status: "retried" });
-    const againA = await stub.claim("agent-a", "fresh");
+    const againA = await claimIn(stub, "agent-a", "fresh");
     expect(claimed(againA).jobId).toBe(claimed(firstA).jobId);
     expect(await stub.submit(submission(firstA, "agent-a"))).toMatchObject({ error: "stale_claim" });
     expect(await stub.submit(submission(againA, "agent-a"))).toMatchObject({ status: "accepted" });
     expect(await stub.submit(submission(firstA, "agent-a"))).toMatchObject({ error: "stale_claim" });
 
     // Another agent claims after a retry.
-    const claimA = await stub.claim("agent-a", "fresh");
+    const claimA = await claimIn(stub, "agent-a", "fresh");
     const jobId = claimA.job?.jobId ?? "";
     expect(await stub.retryJob(jobId)).toEqual({ status: "retried" });
     expect((await jobOf(stub, "q2")).state).toBe("pending");
-    const claimB = await stub.claim("agent-b", "fresh");
+    const claimB = await claimIn(stub, "agent-b", "fresh");
     expect(claimed(claimB)).toMatchObject({ jobId, resumed: false });
     expect(claimed(claimB).claimId).not.toBe(claimed(claimA).claimId);
     expect(await stub.submit(submission(claimA, "agent-a"))).toMatchObject({ error: "stale_claim" });
@@ -459,10 +460,10 @@ describe("logs", () => {
   it("logs each operation with the session, the job and the change, and no message text", async () => {
     const logs = captureLogs();
     const { stub, name } = await localSession(question("q1", "secret question"));
-    const claimA = await stub.claim("agent-a", "fresh");
-    await stub.claim("agent-a", "resume");
+    const claimA = await claimIn(stub, "agent-a", "fresh");
+    await claimIn(stub, "agent-a", "resume");
     await stub.retryJob(claimA.job?.jobId ?? "");
-    const claimB = await stub.claim("agent-b", "fresh");
+    const claimB = await claimIn(stub, "agent-b", "fresh");
     await stub.submit(submission(claimB, "agent-b", "secret answer"));
     await stub.submit(submission(claimB, "agent-b", "secret answer"));
     await stub.submit(submission(claimA, "agent-a", "secret answer"));

@@ -53,18 +53,21 @@ export class Hub extends Agent<Env> {
     return this.#sql.exec("SELECT 1 FROM prq_agents WHERE last_seen_at > ? LIMIT 1", since).toArray().length > 0;
   }
 
+  // The next value of the Hub's counter, which only grows.
+  #next(): number {
+    return this.#sql.exec<{ gen: number }>("UPDATE prq_hub SET gen = gen + 1 WHERE id = 1 RETURNING gen").one().gen;
+  }
+
   // --- The notification queue ---
 
-  // A session may have local work. Its row takes the next value of the Hub's counter, which only grows: a check that
-  // read an older generation then never deletes it. Only a canonical session name is queued.
+  // A session may have local work. Its row takes the next value of the Hub's counter: a check that read an older
+  // generation then never deletes it. Only a canonical session name is queued.
   notify(session: string): void {
     if (parseSessionName(session) === null) {
       log("prq.hub.notify_refused", {}, "warn");
       return;
     }
-    const { gen } = this.#sql
-      .exec<{ gen: number }>("UPDATE prq_hub SET gen = gen + 1 WHERE id = 1 RETURNING gen")
-      .one();
+    const gen = this.#next();
     this.#sql.exec(
       `INSERT INTO prq_notifications (session, gen, notified_at) VALUES (?, ?, ?)
        ON CONFLICT (session) DO UPDATE SET gen = excluded.gen`,
@@ -103,14 +106,16 @@ export class Hub extends Agent<Env> {
   }
 
   // The agent's own claimed job first, from any queued session (a resume, under a new claimId), then the next pending
-  // job, session by session.
+  // job, session by session. The call is one attempt, numbered from the Hub's counter: a session lets no older attempt
+  // of the agent replace what a newer one claimed.
   async claim(agentId: string): Promise<ClaimResponse> {
     this.touch(agentId);
+    const attempt = this.#next();
     for (const mode of ["resume", "fresh"] as const) {
       for (const { session } of this.#queue()) {
         let response: ClaimResponse;
         try {
-          response = await this.claimSession(session, agentId, mode);
+          response = await this.claimSession(session, agentId, mode, attempt);
         } catch (error) {
           log("prq.hub.session_failed", { pr: session, call: "claim", error: errorName(error) }, "error");
           continue;
@@ -138,10 +143,16 @@ export class Hub extends Agent<Env> {
     return this.#callSession<Peek>(session, "a session's peek", (stub) => stub.peek(agentId));
   }
 
-  // A session's claim. One that times out may still have claimed: the job is then the agent's own claimed job, which
-  // its next claim resumes under a new claimId.
-  protected async claimSession(session: string, agentId: string, mode: "resume" | "fresh"): Promise<ClaimResponse> {
-    return this.#callSession<ClaimResponse>(session, "a session's claim", (stub) => stub.claim(agentId, mode));
+  // A session's claim. One that times out keeps running and can still land: it claims nothing once a newer attempt of
+  // the agent has claimed in the session, and otherwise its job is the agent's own claimed job, which the agent's next
+  // claim resumes under a new claimId.
+  protected async claimSession(
+    session: string,
+    agentId: string,
+    mode: "resume" | "fresh",
+    attempt: number,
+  ): Promise<ClaimResponse> {
+    return this.#callSession<ClaimResponse>(session, "a session's claim", (stub) => stub.claim(agentId, mode, attempt));
   }
 
   // A call to a session, bounded as a whole: getting the stub waits for the session's start.

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
-import { newSession, setPool, submission } from "./test/session.ts";
+import { claimIn, newSession, setPool, submission } from "./test/session.ts";
 
 const sockets: AgentSocket[] = [];
 
@@ -39,7 +39,7 @@ describe("job view", () => {
     expect(pending).toMatchObject({ owner: "local", jobs: [{ target: { kind: "answer", messageId: "q1" } }] });
 
     from = watcher.frames.length;
-    const claim = await stub.claim("laptop", "fresh");
+    const claim = await claimIn(stub, "laptop", "fresh");
     const claimed = await nextView(watcher, from, (view) => view.jobs[0]?.state === "claimed");
     expect(claimed.jobs[0]).toMatchObject({ agentId: "laptop", failure: null, resultMessageId: null });
     expect(claimed.jobs[0]?.since).toEqual(expect.any(Number));
