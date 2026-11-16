@@ -121,7 +121,7 @@ describe("claim", () => {
     expect(targets).toContainEqual({ kind: "answer", messageId: "q2" });
   });
 
-  it("gives the question's text and no workspace before any analysis", async () => {
+  it("names the question by its message, without its text, and no workspace before any analysis", async () => {
     captureLogs();
     const { stub, ref } = await localSession(question("q1", "Why is this needed?"));
     const claim = await claimIn(stub, "agent-a", "fresh");
@@ -130,10 +130,10 @@ describe("claim", () => {
         pr: ref,
         target: { kind: "answer", messageId: "q1" },
         workspaceSha: null,
-        question: "Why is this needed?",
       },
       resumed: false,
     });
+    expect(claim).not.toHaveProperty("job.question");
   });
 });
 

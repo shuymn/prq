@@ -1,4 +1,4 @@
-import { ErrorResponse, type PrRef, sessionName } from "@prq/protocol";
+import { ErrorResponse, MAX_TITLE_CHARS, type PrRef, sessionName } from "@prq/protocol";
 import { listDurableObjectIds, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import * as v from "valibot";
@@ -177,6 +177,8 @@ describe("deliveries that reach no session", () => {
     expect(await refused(deliver({ body: JSON.stringify(noHead) }))).toEqual({ status: 400, error: "bad_request" });
     const noTime = { ...event, pull_request: { ...event.pull_request, updated_at: "yesterday" } };
     expect(await refused(deliver({ body: JSON.stringify(noTime) }))).toEqual({ status: 400, error: "bad_request" });
+    const longTitle = pullRequestEvent(newPr(), { title: "t".repeat(MAX_TITLE_CHARS + 1) });
+    expect(await refused(deliver({ body: JSON.stringify(longTitle) }))).toEqual({ status: 400, error: "bad_request" });
     const noId = deliver({ body: JSON.stringify(event), deliveryId: null });
     expect(await refused(noId)).toEqual({ status: 400, error: "bad_request" });
 

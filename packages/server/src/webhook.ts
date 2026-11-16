@@ -1,5 +1,5 @@
 import { verify } from "@octokit/webhooks-methods";
-import { canonicalPrRef, PrRef, Sha, sessionName } from "@prq/protocol";
+import { canonicalPrRef, PrDetails, PrRef, Sha, sessionName } from "@prq/protocol";
 import { Hono } from "hono";
 import * as v from "valibot";
 
@@ -21,24 +21,25 @@ export const WEBHOOK_CALL_MS = 5_000;
 const SIGNATURE = /^sha256=[0-9a-f]{64}$/;
 
 // What prq reads of a pull_request event (GitHub's payload, not prq's contract). updated_at is GitHub's time of the
-// state the event carries; before is the head a synchronize event moved from.
+// state the event carries; before is the head a synchronize event moved from. The details are held to PrDetails'
+// lengths, which GitHub's stay within.
 const PullRequestEvent = v.object({
   action: v.string(),
   before: v.optional(Sha),
   pull_request: v.object({
     updated_at: v.pipe(v.string(), v.isoTimestamp(), v.transform(Date.parse)),
     number: PrRef.entries.number,
-    title: v.string(),
+    title: PrDetails.entries.title,
     state: v.picklist(["open", "closed"]),
     merged: v.nullish(v.boolean()),
-    html_url: v.string(),
+    html_url: PrDetails.entries.url,
     user: v.object({ id: v.number() }),
     head: v.object({ sha: Sha }),
     base: v.object({ sha: Sha }),
   }),
   repository: v.object({
     name: PrRef.entries.repo,
-    full_name: v.string(),
+    full_name: PrDetails.entries.fullName,
     owner: v.object({ login: PrRef.entries.owner }),
   }),
 });

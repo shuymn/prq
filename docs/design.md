@@ -135,13 +135,18 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   (null before its first webhook), the job as its claim fixed it, and the conversation. The job's `workspaceSha` is
   fixed at the claim: an analysis's head; for an answer, the head of the latest completed analysis, else the current
   head, else none. Only the job's current claim, held by the same agent ID, gets it; any other claim gets 409
-  `stale_claim`. The conversation comes in pages of at most 8 MiB of messages (as UTF-8 JSON): a response crosses a
-  Durable Object RPC call, whose limit is 32 MiB of serialized data, and V8 serializes a string with characters beyond
-  Latin-1 at two bytes per code unit, so 8 MiB keeps a page well inside the limit. A response's `nextCursor` names
-  where the next page starts (a message and an offset in its text) and is null on the last page. The conversation is
-  append-only, so a cursor stays valid while messages are added; the next page then includes them. A message larger
-  than a page comes in parts, each carrying `part` (its offset and the message's whole length), and its parts joined
-  are the message. A cursor that names no place in the conversation gets 400 `bad_request`.
+  `stale_claim`. The conversation comes in pages, and a whole response (the pull request, the details, the job, the
+  messages and the cursor) takes at most 8 MiB as UTF-8 JSON: a response crosses a Durable Object RPC call, whose limit
+  is 32 MiB of serialized data, and V8 serializes a string with characters beyond Latin-1 at two bytes per code unit,
+  so 8 MiB keeps a page well inside the limit. A page leaves room for the details at their longest (the lengths
+  `PrDetails` allows, above GitHub's own) and for a cursor naming the conversation's longest message ID. A response's
+  `nextCursor` names where the next page starts (a message and an offset in its text) and is null on the last page.
+  The conversation is append-only, so a cursor stays valid while messages are added; the next page then includes them.
+  A message larger than a page comes in parts, each carrying `part` (its offset and the message's whole length), and
+  its parts joined are the message. A cursor that names no place in the conversation gets 400 `bad_request`.
+- A job carries no text of unbounded length, in a claim or in a context: an answer's question is the message its
+  target names, which the agent reads from the context's pages. A claim's response therefore stays small however long
+  the question is.
 - While no local agent is present, the jobs of a `local` session wait, questions included.
 - A job that was claimed but never submitted (the AI session was closed, for example) is not returned automatically.
   The UI shows which agent ID has been working on it and since when, and starts showing it as possibly stalled after 60
@@ -377,8 +382,8 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
   contributes instructions and references only. The pinned SHA means a skill's code does not change under the host.
 - **Local runner.** `prq context` returns the two prompts and materializes the registered skills into the job's
   worktree (for example `.prq/skills/<name>/`), so the local AI reads them as files. It reads the conversation page by
-  page, following `nextCursor` (see [Owner and jobs](#owner-and-jobs)). A local agent may also use skills it already
-  has on its own machine.
+  page, following `nextCursor`, and finds an answer's question there by the message ID its job names (see
+  [Owner and jobs](#owner-and-jobs)). A local agent may also use skills it already has on its own machine.
 
 What is left out on purpose:
 
@@ -517,9 +522,10 @@ Server:
 - When a webhook arrives, the system shall accept it only if `X-Hub-Signature-256` is `sha256=` and the HMAC-SHA256 of
   the raw body under the webhook secret (compared in constant time), the event is `pull_request`, and
   `pull_request.user.id` is the host's. `sender` is whoever made the update, not necessarily the PR author. A delivery
-  that is refused (401 for the signature, 400 for a payload outside GitHub's shape or without `X-GitHub-Delivery`) or
-  ignored (another event, author or action; 200) reaches no PrSession. When the webhook secret or the host's ID is
-  missing or malformed, the Worker shall refuse every delivery with 500; the Access check needs neither.
+  that is refused (401 for the signature, 400 for a payload outside GitHub's shape, with details longer than
+  `PrDetails` allows, or without `X-GitHub-Delivery`) or ignored (another event, author or action; 200) reaches no
+  PrSession. When the webhook secret or the host's ID is missing or malformed, the Worker shall refuse every delivery
+  with 500; the Access check needs neither.
 - The GitHub App's private key is stored as PKCS#8. GitHub issues PKCS#1, which the WebCrypto-based path in workerd
   cannot read; convert it once with `openssl pkcs8 -topk8` before storing it as a secret.
 

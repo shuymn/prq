@@ -35,6 +35,8 @@ type EventOptions = {
   // The head a synchronize event moved from.
   before?: string;
   title?: string;
+  url?: string;
+  fullName?: string;
   state?: "open" | "closed";
   merged?: boolean;
   author?: number;
@@ -44,7 +46,7 @@ type EventOptions = {
 // A pull_request event for the pull request, as GitHub sends it (the fields prq reads, and the sender).
 export function pullRequestEvent(pr: PrRef, options: EventOptions = {}) {
   const { action = "synchronize", head = sha("head"), title = "A change", state = "open", merged = false } = options;
-  const fullName = `${pr.owner}/${pr.repo}`;
+  const fullName = options.fullName ?? `${pr.owner}/${pr.repo}`;
   const updatedAt = new Date(options.at ?? nextAt()).toISOString().replace(/\.\d{3}Z$/, "Z");
   return {
     action,
@@ -56,7 +58,7 @@ export function pullRequestEvent(pr: PrRef, options: EventOptions = {}) {
       title,
       state,
       merged,
-      html_url: `https://github.com/${fullName}/pull/${pr.number}`,
+      html_url: options.url ?? `https://github.com/${fullName}/pull/${pr.number}`,
       user: { id: options.author ?? HOST_ID, login: "host" },
       head: { sha: head, ref: "topic" },
       base: { sha: BASE, ref: "main" },

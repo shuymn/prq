@@ -24,14 +24,14 @@ const Run = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
 
 // A job as a local agent receives it. workspaceSha is the commit to work at, fixed when the job was claimed: an
 // analysis's head; for an answer the head of the latest completed analysis, else the current head, else null (no push
-// seen yet). question is the question's text, for an answer.
+// seen yet). An answer's question is the message its target names, which the agent reads from the context's pages: a
+// job carries no text of unbounded length, so a claim and each context page stay within an RPC call.
 export const Job = v.object({
   jobId: Uuid,
   pr: PrRef,
   run: Run,
   target: JobTarget,
   workspaceSha: v.nullable(Sha),
-  question: v.optional(v.string()),
 });
 export type Job = v.InferOutput<typeof Job>;
 
@@ -106,7 +106,7 @@ const ContextMessage = v.object({
 // The answer to a context request: the canonical pull request, its details (null before its first webhook), the job as
 // its claim fixed it (workspaceSha included), and one page of the conversation, oldest first. nextCursor asks for the
 // next page; null when this page reached the end. The conversation is append-only, so a cursor stays valid while
-// messages are added.
+// messages are added. The whole response, not only its messages, stays within the server's page budget.
 export const ContextResponse = v.object({
   pr: PrRef,
   details: v.nullable(PrDetails),

@@ -1,4 +1,12 @@
-import { type ClaimResponse, ContextResponse, ErrorResponse, PRQ_VERSION_HEADER } from "@prq/protocol";
+import {
+  type ClaimResponse,
+  ContextResponse,
+  ErrorResponse,
+  MAX_FULL_NAME_CHARS,
+  MAX_TITLE_CHARS,
+  MAX_URL_CHARS,
+  PRQ_VERSION_HEADER,
+} from "@prq/protocol";
 import { runInDurableObject } from "cloudflare:test";
 import * as v from "valibot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,7 +29,7 @@ import {
   submitOver,
 } from "./test/cli.ts";
 import { clearQueue, gate, holdInsert, hub, jobRows, tracked, within } from "./test/session.ts";
-import { BASE, push, sha } from "./test/webhook.ts";
+import { BASE, push, send, sha } from "./test/webhook.ts";
 import { SERVER_VERSION } from "./version.ts";
 
 const sockets: AgentSocket[] = [];
@@ -204,8 +212,8 @@ async function store(stub: DurableObjectStub<PrSession>, messages: { id: string;
   });
 }
 
-// Every page of the conversation from the first, with `between` run after the first page; each response's size is
-// checked against the page budget (and room for the rest of the response).
+// Every page of the conversation from the first, with `between` run after the first page; each whole response is
+// checked against the page budget.
 async function allPages(
   body: Record<string, unknown>,
   token: string,
@@ -217,7 +225,7 @@ async function allPages(
     const res = await post("/cli/context", token, cursor === undefined ? body : { ...body, cursor });
     expect(res.status).toBe(200);
     const text = await res.text();
-    expect(new TextEncoder().encode(text).length).toBeLessThan(CONTEXT_PAGE_BYTES + 64 * 1024);
+    expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(CONTEXT_PAGE_BYTES);
     const page = v.parse(ContextResponse, JSON.parse(text));
     pages.push(page);
     // A cursor that does not move on would page forever.
@@ -277,6 +285,58 @@ describe("context pages", () => {
     }
     expect(joined === text).toBe(true);
     expect(pages.flatMap((page) => page.messages).at(-1)).toMatchObject({ id: "after", text: "the next one" });
+  });
+
+  it("pages a question larger than a page, which the claim and the job name by its message", async () => {
+    captureLogs();
+    // A character beyond Latin-1 and 12 MiB of ASCII: with the question next to a page, more than a call carries.
+    const text = `\u0100${"x".repeat(12 * 1024 * 1024)}`;
+    const { ref, token } = await localSession("pages", sockets, question("huge-q", text));
+    const claim = holding(await claimOver(token, "laptop"));
+    expect(claim.job.target).toEqual({ kind: "answer", messageId: "huge-q" });
+    expect(JSON.stringify(claim).length).toBeLessThan(1024);
+
+    const pages = await allPages(contextBody(ref, claim, "laptop"), token);
+
+    expect(pages.length).toBeGreaterThan(1);
+    const parts = pages.flatMap((page) => page.messages).filter((message) => message.id === "huge-q");
+    expect(parts.map((part) => part.text).join("") === text).toBe(true);
+    for (const page of pages) {
+      expect(page.job).toEqual(claim.job);
+    }
+  });
+
+  it("keeps the whole response within the budget with the largest details a webhook gives", async () => {
+    captureLogs();
+    const { ref, token, stub } = await localSession("pages", sockets, question("q1"));
+    const claim = holding(await claimOver(token, "laptop"));
+    // Each field at its cap, each character a six-byte escape in JSON.
+    const title = "\u0001".repeat(MAX_TITLE_CHARS);
+    await send(ref, {
+      head: sha("A"),
+      title,
+      url: "\u0001".repeat(MAX_URL_CHARS),
+      fullName: "\u0001".repeat(MAX_FULL_NAME_CHARS),
+    });
+    // A message larger than a page, under the longest ID the protocol allows: alone on a page, its part fills the page
+    // to the room the rest of the response leaves, the cursor naming it included.
+    const longId = "m".repeat(256);
+    await store(stub, [
+      { id: "small", text: "a small one" },
+      { id: longId, text: "x".repeat(12 * 1024 * 1024) },
+    ]);
+
+    const pages = await allPages(contextBody(ref, claim, "laptop"), token);
+
+    expect(pages.map((page) => page.messages.map((message) => message.id))).toEqual([
+      ["q1", "small"],
+      [longId],
+      [longId],
+    ]);
+    const full = pages[1];
+    expect(full?.details?.title).toBe(title);
+    expect(full?.nextCursor).toContain(longId);
+    expect(new TextEncoder().encode(JSON.stringify(full)).length).toBeGreaterThan(CONTEXT_PAGE_BYTES - 64);
   });
 
   it("never ends a part inside a surrogate pair, whatever room the page has", () => {

@@ -37,13 +37,20 @@ export const HUB_NAME = "hub";
 // A commit SHA as GitHub sends it: 40 lowercase hex digits.
 export const Sha = v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/));
 
+// The longest details prq keeps, in UTF-16 code units, at or above what GitHub sends: a title has at most 256
+// characters, a full name is an owner of up to 39 and a repository of up to 100, and a pull request's URL on
+// github.com is under 200. They bound what a context response carries around its messages.
+export const MAX_FULL_NAME_CHARS = 140;
+export const MAX_TITLE_CHARS = 1024;
+export const MAX_URL_CHARS = 2048;
+
 // A pull request as its webhooks describe it, in GitHub's display case. The head is the current head, which only a push
 // moves; the other fields follow the latest webhook.
 export const PrDetails = v.object({
-  fullName: v.string(),
-  title: v.string(),
+  fullName: v.pipe(v.string(), v.maxLength(MAX_FULL_NAME_CHARS)),
+  title: v.pipe(v.string(), v.maxLength(MAX_TITLE_CHARS)),
   state: v.picklist(["open", "closed", "merged"]),
-  url: v.string(),
+  url: v.pipe(v.string(), v.maxLength(MAX_URL_CHARS)),
   headSha: Sha,
   baseSha: Sha,
 });

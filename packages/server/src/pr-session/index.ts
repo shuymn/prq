@@ -25,15 +25,7 @@ import { hubStub } from "../names.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
 import { SerialQueue, WaitTimeout, withTimeout } from "../wait.ts";
 import { CLOUD_NOT_CONFIGURED, type CloudAgent } from "./cloud.ts";
-import {
-  CONTEXT_PAGE_BYTES,
-  type ContextMessage,
-  type Cursor,
-  cursorText,
-  jsonBytes,
-  parseCursor,
-  take,
-} from "./context.ts";
+import { type ContextMessage, type Cursor, cursorText, jsonBytes, messageRoom, parseCursor, take } from "./context.ts";
 import { addedMessages, isChatList, questionsOnly, refusedChatResponse, refusedFrame } from "./history.ts";
 import {
   addInbox,
@@ -96,6 +88,8 @@ export type Submission = {
 // What one step that can make jobs waiting did beyond its own change: cloud jobs failed or handed over.
 type CloudOutcome = { failed: JobRow[]; started: { row: JobRow; agent: CloudAgent } | null };
 const NO_CLOUD_OUTCOME: CloudOutcome = { failed: [], started: null };
+
+const BAD_CURSOR: ErrorResponse = { error: "bad_request", detail: "the cursor names no place in this conversation" };
 
 // A question from the UI: a user message the server did not add (server messages carry metadata).
 function isQuestion(message: UIMessage): boolean {
@@ -387,12 +381,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (cloud.started !== null) {
       const { row, agent } = cloud.started;
       log("prq.job.started", { ...this.#jobFields(row), from: "pending", to: "running" });
-      agent.start(
-        this.#job(
-          row,
-          this.messages.find((message) => message.id === row.target),
-        ),
-      );
+      agent.start(this.#job(row));
     }
     this.#publishView();
   }
@@ -534,14 +523,14 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       agentId,
     });
     this.#publishView();
-    const question = row.kind === "answer" ? await this.#message(row.target) : undefined;
-    return { job: this.#job(row, question), claimId, resumed: mode === "resume" };
+    return { job: this.#job(row), claimId, resumed: mode === "resume" };
   }
 
   // What a local agent works on its claimed job from (/cli/context): the pull request, its details, the job as its claim
-  // fixed it, and a page of the conversation from the cursor (the start when there is none). Only the job's current
-  // claim, held by the agent, gets it. The claim is checked after the conversation is read, in the step that answers,
-  // so the answer never carries a claim that had already ended.
+  // fixed it, and a page of the conversation from the cursor (the start when there is none), the whole response within
+  // CONTEXT_PAGE_BYTES. Only the job's current claim, held by the agent, gets it. The claim is checked before the
+  // conversation is read, to size the page around the job, and again after it, in the step that answers, so the answer
+  // never carries a claim that had already ended.
   async context(
     agentId: string,
     jobId: string,
@@ -549,13 +538,33 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     cursor?: string,
   ): Promise<ContextResponse | ErrorResponse> {
     const start = cursor === undefined ? { id: null, offset: 0 } : parseCursor(cursor);
-    const page = start === null ? null : await this.#contextPage(start.id, start.offset);
-    if (page === null) {
-      return { error: "bad_request", detail: "the cursor names no place in this conversation" };
+    if (start === null) {
+      return BAD_CURSOR;
     }
-    // A job's target never changes, so its question can be read before the job is checked.
-    const known = jobById(this.#sql, jobId);
-    const question = known?.kind === "answer" ? await this.#message(known.target) : undefined;
+    const before = this.#heldJob(agentId, jobId, claimId);
+    if ("error" in before) {
+      return before;
+    }
+    const page = await this.#contextPage(start.id, start.offset, { pr: this.#pr(), job: this.#job(before) });
+    if (page === null) {
+      return BAD_CURSOR;
+    }
+    const row = this.#heldJob(agentId, jobId, claimId);
+    if ("error" in row) {
+      return row;
+    }
+    return {
+      pr: this.#pr(),
+      details: readDetails(this.#sql),
+      job: this.#job(row),
+      messages: page.messages,
+      nextCursor: page.next === null ? null : cursorText(page.next),
+    };
+  }
+
+  // The job, while the claim is its current one and held by the agent. A claim that holds has not changed the job since
+  // it was taken: a retry or a resume ends it.
+  #heldJob(agentId: string, jobId: string, claimId: string): JobRow | ErrorResponse {
     const row = jobById(this.#sql, jobId);
     if (row === undefined) {
       return { error: "unknown_job" };
@@ -564,21 +573,17 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (!held || row.claim_id !== claimId || row.agent_id !== agentId) {
       return { error: "stale_claim", detail: "the claim is not the job's current one" };
     }
-    return {
-      pr: this.#pr(),
-      details: readDetails(this.#sql),
-      job: this.#job(row, question),
-      messages: page.messages,
-      nextCursor: page.next === null ? null : cursorText(page.next),
-    };
+    return row;
   }
 
-  // The messages from a place in the conversation (null for the start) that fit in CONTEXT_PAGE_BYTES, and where the
-  // next page starts; null when the place is not in the conversation. The messages' IDs are read without their content,
-  // and only the page's messages are read whole, one at a time. A page holds at least part of a message.
+  // The messages from a place in the conversation (null for the start) that fit in the room the rest of the response
+  // leaves (messageRoom), and where the next page starts; null when the place is not in the conversation. The messages'
+  // IDs are read without their content, and only the page's messages are read whole, one at a time. A page holds at
+  // least part of a message.
   async #contextPage(
     id: string | null,
     offset: number,
+    around: Pick<ContextResponse, "pr" | "job">,
   ): Promise<{ messages: ContextMessage[]; next: Cursor | null } | null> {
     const session = this.sessions.session();
     const ids = (await session.getHistoryRowStats()).map((stat) => stat.id);
@@ -587,7 +592,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       return null;
     }
     const messages: ContextMessage[] = [];
-    let left = CONTEXT_PAGE_BYTES;
+    let left = messageRoom(around, ids);
     for (let from = offset; index < ids.length; index += 1, from = 0) {
       const stored = await session.getMessage(ids[index] ?? "");
       const message = stored === null ? null : contextMessage(stored);
@@ -597,6 +602,8 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       if (from > 0 && from >= message.text.length) {
         return null;
       }
+      // A comma before each message but the first, counted for all.
+      left -= 1;
       const taken = take(message, from, left, messages.length === 0);
       if (taken === null) {
         return { messages, next: { id: message.id, offset: from } };
@@ -611,15 +618,8 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return { messages, next: null };
   }
 
-  #job(row: JobRow, question: StoredMessage | undefined): Job {
-    const job: Job = {
-      jobId: row.job_id,
-      pr: this.#pr(),
-      run: row.run,
-      target: jobTarget(row),
-      workspaceSha: row.workspace_sha,
-    };
-    return question === undefined ? job : { ...job, question: textOf(question) };
+  #job(row: JobRow): Job {
+    return { jobId: row.job_id, pr: this.#pr(), run: row.run, target: jobTarget(row), workspaceSha: row.workspace_sha };
   }
 
   async #message(id: string): Promise<StoredMessage | undefined> {
