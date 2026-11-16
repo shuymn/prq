@@ -6,8 +6,9 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
 
 ## Commands
 
-- `mise install` installs the pinned Node.js, pnpm and check tools (`mise.toml`, `mise.lock`); `pnpm install` installs
-  the workspace and the Git hooks.
+- `mise trust` once, then `mise install` installs the pinned Node.js, pnpm and check tools (`mise.toml`, `mise.lock`);
+  `pnpm install` installs the workspace and the Git hooks. The hooks go into the repository's shared `.git/hooks`, so
+  they also run in other worktrees, and a branch from before this toolchain cannot commit through them.
 - `pnpm run lint` (oxlint, type-aware), `pnpm run fmt` (oxfmt check; `pnpm run fmt:fix` formats), `pnpm run knip`
   (unused files, dependencies and exports), `pnpm run typecheck` and `pnpm run test` are the checks CI's `Check` job
   runs.
@@ -39,5 +40,5 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
 
 ## Commits and pull requests
 
-- Commit subjects use Conventional Commits (commitlint checks them). Commits are signed. Pull requests merge with a
-  merge commit.
+- Commit subjects use Conventional Commits (commitlint checks them; the mise-update bot's "Update mise tools" is the
+  exception). Commits are signed. Pull requests merge with a merge commit.
