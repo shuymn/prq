@@ -116,12 +116,17 @@ export async function hydrateRecent(stub: DurableObjectStub<PrSession>, budget: 
 }
 
 // A hold inside a Durable Object. Its latch is made and opened in the object's context (a promise continues in the
-// context that settles it). The spy that holds a call awaits `wait()`; the test sees that the call got there through
-// `reached()` and lets it go on with `open()`.
-export type Gate = { wait(): Promise<void>; reached(): Promise<void>; isReached(): boolean; open(): Promise<void> };
+// context that settles it). A spy that holds a call awaits `wait()`; the test sees that `count` calls got there through
+// `reached(count)` and lets them all go on at once with `open()`.
+export type Gate = {
+  wait(): Promise<void>;
+  reached(count?: number): Promise<void>;
+  isReached(): boolean;
+  open(): Promise<void>;
+};
 
 export async function gate(stub: DurableObjectStub): Promise<Gate> {
-  let reached = false;
+  let waiting = 0;
   let open: (() => void) | null = null;
   let promise: Promise<void> | null = null;
   await runInDurableObject(stub, () => {
@@ -131,11 +136,11 @@ export async function gate(stub: DurableObjectStub): Promise<Gate> {
   });
   return {
     wait: async () => {
-      reached = true;
+      waiting += 1;
       await promise;
     },
-    reached: () => vi.waitFor(() => expect(reached).toBe(true), { timeout: 3000 }),
-    isReached: () => reached,
+    reached: (count = 1) => vi.waitFor(() => expect(waiting).toBeGreaterThanOrEqual(count), { timeout: 3000 }),
+    isReached: () => waiting > 0,
     open: () => runInDurableObject(stub, () => open?.()),
   };
 }

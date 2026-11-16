@@ -81,30 +81,30 @@ describe("claim", () => {
     expect(await stub.claim("agent-c", "fresh")).toEqual({ job: null });
   });
 
-  it("gives two interleaved claims different jobs", async () => {
+  it("gives two claims let go at the same moment different jobs", async () => {
     captureLogs();
     const { stub } = await localSession(Q1, Q2);
+    // Both claims are held before choosing a job, on one latch, so they go on together: a claim that awaited anything
+    // between choosing its job and taking it would let the other choose the same one.
     const held = await gate(stub);
     await runInDurableObject(stub, (instance) => {
       const seams = prSessionSeams(instance);
       const owner = seams.ownerOf.bind(instance);
-      vi.spyOn(seams, "ownerOf").mockImplementationOnce(async () => {
+      vi.spyOn(seams, "ownerOf").mockImplementation(async () => {
         await held.wait();
         return owner();
       });
     });
     const claimA = tracked(stub.claim("agent-a", "fresh"));
-    await held.reached();
-    const b = claimed(await stub.claim("agent-b", "fresh"));
-    expect((await stub.peek("agent-a")).open).toBe(true);
-    expect(claimA.settled()).toBe(false);
+    const claimB = tracked(stub.claim("agent-b", "fresh"));
+    await held.reached(2);
+    expect((await stub.peek("agent-a")).fresh).toBe(true);
+    expect([claimA.settled(), claimB.settled()]).toEqual([false, false]);
 
     await held.open();
-    const a = claimed(await claimA.promise);
-    expect([b.target, a.target]).toEqual([
-      { kind: "answer", messageId: "q1" },
-      { kind: "answer", messageId: "q2" },
-    ]);
+    const targets = [claimed(await claimA.promise), claimed(await claimB.promise)].map((claim) => claim.target);
+    expect(targets).toContainEqual({ kind: "answer", messageId: "q1" });
+    expect(targets).toContainEqual({ kind: "answer", messageId: "q2" });
   });
 
   it("gives the question's text and no workspace before any analysis", async () => {
