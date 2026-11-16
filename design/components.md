@@ -114,7 +114,7 @@ It is shown only while N is above zero.
 | Component        | Name ↔ props                                                                                                    | Tokens                                                                                                                                                                                                                                                                                    | Guides                                                                                | Panel |
 | ---------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----- |
 | Notice           | `Notice/<tone>` — `tone`: info, attention, danger; `title`, `text` and optional `actions` (Button sm) are props | `<tone>.bg` fill (info: `accent.bg`), icon in `<tone>.fg` (info, alert, x-circle), `text.body-strong` (title), `text.body` (text), `fg.default`, `inset.card`, `gap.tight` (icon and the text column), `gap.related` (title, text and actions), `radius.md`; `size.panel` (default width) | persistent-toast-notifications (critical states are inline), color, icons             | yes   |
-| ConnectionBanner | `ConnectionBanner/<state>` — `state`: reconnecting, offline; offline has a "Retry now" Button sm                | `attention.bg` / `danger.bg`, icon `plug` in `attention.fg` / `danger.fg`, `text.body`, `fg.default`, `inset.card`, `gap.tight` (icon and text, in `message`), `gap.related` (message and button); `size.panel` (default width)                                                           | persistent-toast-notifications, accessibility (assertive announcement on drop), color | yes   |
+| ConnectionBanner | `ConnectionBanner/<state>` — `state`: reconnecting, failed; failed has a "Reload" Button sm                     | `attention.bg` / `danger.bg`, icon `plug` in `attention.fg` / `danger.fg`, `text.body`, `fg.default`, `inset.card`, `gap.tight` (icon and text, in `message`), `gap.related` (message and button); `size.panel` (default width)                                                           | persistent-toast-notifications, accessibility (assertive announcement on drop), color | yes   |
 | EmptyState       | `EmptyState` — no props (`icon`, `title`, `text` and optional `actions` are props)                              | `border.muted` + `border-width.thin`, `fg.muted` (icon, text), `fg.default` + `text.heading` (title), `text.body`, `inset.card`, `gap.related`, `radius.md`, Button secondary md in `actions`; `size.panel` (default width)                                                               | card, typography                                                                      | yes   |
 | Skeleton         | `Skeleton/<shape>` — `shape`: line, block                                                                       | `color.skeleton`, `radius.sm` (line) / `radius.md` (block)                                                                                                                                                                                                                                | motion (static or short shimmer)                                                      | yes   |
 
@@ -122,6 +122,18 @@ Notice is a row of the icon (in its `lead` slot) and a column with `title`, `tex
 under the title by layout rather than by an indent. Skeleton has no size tokens of its own: the component borrows `size.icon` (line height),
 `size.header` (block height) and `size.popover` (width) as defaults, and screens size each instance to the content it
 stands in for.
+
+ConnectionBanner and the new version notice sit first in the page content (the main column on desktop, above the
+PrHeader in the panel) and fill its width. While the WebSocket reconnects the banner is `reconnecting`: "Reconnecting…
+Showing the last known content." When reconnecting keeps failing (an expired Access session fails every attempt, and a
+WebSocket cannot follow the sign-in redirect; see [Caching](../docs/design.md#caching)) it becomes `failed`: "Can't
+reconnect. Reload to sign in again." with Button secondary sm "Reload", which reloads the page; the last known content
+stays, and reconnecting goes on in the background. A reload reconnects too, so there is no separate retry. The
+Composer's disabled reason follows the banner ("Reconnecting. You can send once the connection is back." / "Can't
+reconnect. You can send after a reload."). After a deploy, a tab whose build version differs from the server's, or
+that failed to load a lazily loaded asset, shows Notice info: "A new version is available", "This tab still runs the
+previous version. Reload to update it." and Button secondary sm "Reload". It is inline rather than a toast, has no
+dismiss, blocks nothing, and looks the same on every page.
 
 ## Layout and navigation
 

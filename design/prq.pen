@@ -5317,7 +5317,7 @@
                 {
                   "type": "frame",
                   "id": "ejKGw",
-                  "name": "ConnectionBanner/offline",
+                  "name": "ConnectionBanner/failed",
                   "context": "tokens width=size.panel",
                   "reusable": true,
                   "metadata": {
@@ -5374,7 +5374,7 @@
                           "fill": "$color-fg-default",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Offline. Showing the last known content.",
+                          "content": "Can't reconnect. Reload to sign in again.",
                           "lineHeight": "$text-body-line-height",
                           "fontFamily": "$text-body-font-family",
                           "fontSize": "$text-body-font-size",
@@ -5389,7 +5389,7 @@
                       "name": "button",
                       "descendants": {
                         "TrPON": {
-                          "content": "Retry now"
+                          "content": "Reload"
                         }
                       }
                     }
@@ -20990,7 +20990,7 @@
       "type": "frame",
       "id": "gr6Ou",
       "x": 1968,
-      "y": 16862,
+      "y": 17977,
       "name": "PR detail / Earlier version",
       "clip": true,
       "width": 1440,
@@ -21397,7 +21397,7 @@
       "ref": "p75xR",
       "name": "Note / PR detail / Earlier version",
       "x": 3456,
-      "y": 16862,
+      "y": 17977,
       "descendants": {
         "AhCkq": {
           "content": "States: detail.earlier-version. Guides: menu, scroll-target-on-load, sanitize-untrusted-html, single-line-overflow, forms, color."
@@ -27437,7 +27437,7 @@
       "type": "frame",
       "id": "IRtRP",
       "x": 7872,
-      "y": 12736,
+      "y": 13960,
       "name": "Panel / Status unavailable",
       "context": "tokens width=size.panel",
       "clip": true,
@@ -27723,7 +27723,7 @@
       "ref": "p75xR",
       "name": "Note / Panel / Status unavailable",
       "x": 8280,
-      "y": 12736,
+      "y": 13960,
       "descendants": {
         "AhCkq": {
           "content": "States: panel.unavailable. Guides: design-token-reactivity, color, icons, responsive-design, size-aware-styling."
@@ -27932,6 +27932,1382 @@
           ]
         }
       ]
+    },
+    {
+      "type": "frame",
+      "id": "KNKt4",
+      "x": 1968,
+      "y": 16862,
+      "name": "PR detail / Reconnect failed",
+      "clip": true,
+      "width": 1440,
+      "fill": "$color-bg-canvas",
+      "layout": "vertical",
+      "alignItems": "center",
+      "children": [
+        {
+          "id": "t4nnDC",
+          "type": "ref",
+          "ref": "dFd1K",
+          "name": "AppHeader",
+          "width": "fill_container",
+          "descendants": {
+            "U3fIg2/E4OPx": {
+              "content": "No jobs"
+            }
+          }
+        },
+        {
+          "type": "frame",
+          "id": "Q7tPZv",
+          "name": "body",
+          "context": "tokens width=size.detail",
+          "width": 1232,
+          "gap": "$gap-page",
+          "padding": [
+            "$inset-page",
+            0
+          ],
+          "justifyContent": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "fb1EC",
+              "name": "main",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": "$gap-section",
+              "children": [
+                {
+                  "id": "CnTMt",
+                  "type": "ref",
+                  "ref": "ejKGw",
+                  "name": "ConnectionBanner",
+                  "width": "fill_container"
+                },
+                {
+                  "id": "gXSFF",
+                  "type": "ref",
+                  "ref": "zuqAZ",
+                  "name": "PrHeader",
+                  "width": "fill_container",
+                  "descendants": {
+                    "AZMDZ": {
+                      "content": "shuymn/prq #42"
+                    },
+                    "z9c52": {
+                      "content": "Add retry to stalled jobs"
+                    }
+                  }
+                },
+                {
+                  "id": "sWNST",
+                  "type": "ref",
+                  "ref": "jTRJl",
+                  "name": "Summary",
+                  "width": "fill_container",
+                  "descendants": {
+                    "KAiOk/RkFfP/nVVeD": {
+                      "content": "e4f5a6b"
+                    },
+                    "KAiOk/v4sqeX/qnZ4a": {
+                      "content": "40 min ago"
+                    },
+                    "UC3z1": {
+                      "enabled": false
+                    },
+                    "r7OtN": {
+                      "enabled": false
+                    },
+                    "G5aTKs/y5inXt": {
+                      "content": "What changed"
+                    },
+                    "G5aTKs/J91by": {
+                      "content": "Jobs that an agent claimed but never finished can now be retried from the UI. A retry puts the job back to pending and issues a new claim ID, so a late result from the old claim is dropped."
+                    },
+                    "G5aTKs/raSAP": {
+                      "content": "Retries go through"
+                    },
+                    "G5aTKs/RNlph": {
+                      "content": "resetClaim()"
+                    },
+                    "G5aTKs/U5zfrF": {
+                      "content": "as described in"
+                    },
+                    "G5aTKs/JmYFs": {
+                      "content": "the design doc"
+                    },
+                    "G5aTKs/T4nLw": {
+                      "enabled": false
+                    },
+                    "G5aTKs/xYv5a": {
+                      "enabled": false
+                    },
+                    "G5aTKs/X03nbO": {
+                      "content": "A retry while the first agent is still working costs one extra run."
+                    },
+                    "G5aTKs/KzZf6": {
+                      "content": "The stalled mark starts after 60 minutes; Retry is available before that."
+                    },
+                    "G5aTKs/TkEdw": {
+                      "enabled": false
+                    },
+                    "G5aTKs/TkEdw/gVPtp": {
+                      "content": "export function retry(job: Job) {\n  job.state = \"pending\";\n  job.claimId = crypto.randomUUID();\n}"
+                    },
+                    "G5aTKs/MBzHE": {
+                      "enabled": false
+                    },
+                    "G5aTKs/F8yT4R": {
+                      "content": "session.ts"
+                    },
+                    "G5aTKs/YPm4u": {
+                      "content": "Adds the retry transition"
+                    },
+                    "G5aTKs/z284ra": {
+                      "content": "JobRow.tsx"
+                    },
+                    "G5aTKs/Q4hyh": {
+                      "content": "Shows Retry on claimed jobs"
+                    },
+                    "G5aTKs/nYsib": {
+                      "enabled": false
+                    },
+                    "G5aTKs/sePyj": {
+                      "content": "A result submitted with an old claim ID is discarded."
+                    },
+                    "IIGC4": {
+                      "content": "deepseek-chat · 12,480 tokens"
+                    }
+                  }
+                },
+                {
+                  "type": "frame",
+                  "id": "K9Z6C",
+                  "name": "conversation",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": "$gap-group",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "m3wo9V",
+                      "name": "heading",
+                      "fill": "$color-fg-default",
+                      "content": "Conversation",
+                      "lineHeight": "$text-heading-line-height",
+                      "fontFamily": "$text-heading-font-family",
+                      "fontSize": "$text-heading-font-size",
+                      "fontWeight": "$text-heading-font-weight"
+                    },
+                    {
+                      "id": "Jc2Ve",
+                      "type": "ref",
+                      "ref": "MqAcS",
+                      "name": "Question 1",
+                      "width": "fill_container",
+                      "descendants": {
+                        "TIsFd/qnZ4a": {
+                          "content": "35 min ago"
+                        },
+                        "KHrM8": {
+                          "content": "Why does a retry issue a new claim ID instead of reusing the old one?"
+                        }
+                      }
+                    },
+                    {
+                      "id": "C0zrwX",
+                      "type": "ref",
+                      "ref": "Ron4L",
+                      "name": "Answer 1",
+                      "width": "fill_container",
+                      "descendants": {
+                        "cinzx/J91by": {
+                          "content": "A new claim ID lets the session drop a late result from the old claim. If the first agent submits after the retry, its claim ID no longer matches and the result is discarded."
+                        },
+                        "cinzx/TkEdw/gVPtp": {
+                          "content": "if (submit.claimId !== job.claimId) {\n  return { status: \"discarded\" };\n}"
+                        },
+                        "IJ0eN/nVVeD": {
+                          "content": "e4f5a6b"
+                        },
+                        "j8jXQ3": {
+                          "content": "deepseek-chat · 2,310 tokens"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "G18ZXa",
+                  "type": "ref",
+                  "ref": "dt3hB",
+                  "name": "Composer",
+                  "width": "fill_container",
+                  "descendants": {
+                    "HOPj6": {
+                      "enabled": false
+                    },
+                    "AL3Ja": {
+                      "content": "Can't reconnect. You can send after a reload."
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "mndMM",
+              "name": "rail",
+              "context": "tokens width=size.rail",
+              "width": 320,
+              "layout": "vertical",
+              "gap": "$gap-section",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "iigXQ",
+                  "name": "rail-head",
+                  "width": "fill_container",
+                  "justifyContent": "end",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "PELUs",
+                      "type": "ref",
+                      "ref": "Zg2Mq",
+                      "name": "collapse-rail",
+                      "descendants": {
+                        "kDnaD": {
+                          "id": "foQ4I",
+                          "type": "ref",
+                          "ref": "ZIY9K",
+                          "name": "icon",
+                          "descendants": {
+                            "Dx917": {
+                              "fill": "$color-fg-muted"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "gGICt",
+                  "name": "versions",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": "$gap-group",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ylKrw",
+                      "name": "heading",
+                      "fill": "$color-fg-default",
+                      "content": "Versions",
+                      "lineHeight": "$text-heading-line-height",
+                      "fontFamily": "$text-heading-font-family",
+                      "fontSize": "$text-heading-font-size",
+                      "fontWeight": "$text-heading-font-weight"
+                    },
+                    {
+                      "id": "slq8j",
+                      "type": "ref",
+                      "ref": "fassU",
+                      "name": "Version e4f5a6b",
+                      "width": "fill_container",
+                      "descendants": {
+                        "pWVR1/nVVeD": {
+                          "content": "e4f5a6b"
+                        },
+                        "O7EFV/qnZ4a": {
+                          "content": "40 min ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "M2Uv5d",
+                      "type": "ref",
+                      "ref": "i9ZwJ",
+                      "name": "Version 9f8e7d6",
+                      "width": "fill_container",
+                      "descendants": {
+                        "v5U62O/nVVeD": {
+                          "content": "9f8e7d6"
+                        },
+                        "ZoMkb/qnZ4a": {
+                          "content": "1 hr ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "Jf0JH",
+                      "type": "ref",
+                      "ref": "x3TYGx",
+                      "name": "Version a1b2c3d",
+                      "width": "fill_container",
+                      "descendants": {
+                        "ydSAf/nVVeD": {
+                          "content": "a1b2c3d"
+                        },
+                        "z2Kld/qnZ4a": {
+                          "content": "yesterday"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "W5jbz8",
+                  "name": "jobs",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": "$gap-group",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "gYr9c",
+                      "name": "heading",
+                      "fill": "$color-fg-default",
+                      "content": "Jobs",
+                      "lineHeight": "$text-heading-line-height",
+                      "fontFamily": "$text-heading-font-family",
+                      "fontSize": "$text-heading-font-size",
+                      "fontWeight": "$text-heading-font-weight"
+                    },
+                    {
+                      "id": "MLou5",
+                      "type": "ref",
+                      "ref": "pfSwa",
+                      "name": "done-jobs",
+                      "width": "fill_container",
+                      "descendants": {
+                        "I96MZ": {
+                          "content": "2 done"
+                        },
+                        "Sz2HD": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "JOCqC",
+      "type": "ref",
+      "ref": "p75xR",
+      "name": "Note / PR detail / Reconnect failed",
+      "x": 3456,
+      "y": 16862,
+      "descendants": {
+        "AhCkq": {
+          "content": "States: detail.reconnect-failed. Guides: persistent-toast-notifications, accessibility (assertive announcement when reconnecting stops; aria-disabled composer), forms, color, icons."
+        }
+      }
+    },
+    {
+      "type": "frame",
+      "id": "RXP35",
+      "x": 7872,
+      "y": 12736,
+      "name": "Panel / Reconnect failed",
+      "context": "tokens width=size.panel",
+      "clip": true,
+      "width": 360,
+      "fill": "$color-bg-canvas",
+      "layout": "vertical",
+      "gap": "$gap-section",
+      "padding": "$inset-panel",
+      "children": [
+        {
+          "id": "oTQ7B",
+          "type": "ref",
+          "ref": "ejKGw",
+          "name": "ConnectionBanner",
+          "width": "fill_container"
+        },
+        {
+          "id": "Ei6RA",
+          "type": "ref",
+          "ref": "jYlX0",
+          "name": "PrHeader",
+          "width": "fill_container",
+          "descendants": {
+            "RGBFf": {
+              "content": "shuymn/zenith #87"
+            },
+            "q0oezR": {
+              "content": "Stream tokens to the summary view and keep the previous version listed"
+            }
+          }
+        },
+        {
+          "id": "W0LqJ",
+          "type": "ref",
+          "ref": "ToHWS",
+          "name": "Disclosure summary",
+          "width": "fill_container",
+          "descendants": {
+            "D7Tj5": {
+              "fontFamily": "$text-heading-font-family",
+              "fontSize": "$text-heading-font-size",
+              "fontWeight": "$text-heading-font-weight",
+              "lineHeight": "$text-heading-line-height",
+              "content": "Summary"
+            },
+            "P1jLHT": {
+              "id": "brZmz",
+              "type": "ref",
+              "ref": "bcvNX",
+              "name": "version",
+              "descendants": {
+                "RkFfP/nVVeD": {
+                  "content": "9f8e7d6"
+                },
+                "v4sqeX/qnZ4a": {
+                  "content": "12 min ago"
+                }
+              }
+            },
+            "AXugr": {
+              "id": "Cdu6p",
+              "type": "ref",
+              "ref": "jTRJl",
+              "name": "content",
+              "width": "fill_container",
+              "descendants": {
+                "RoaaS": {
+                  "enabled": false
+                },
+                "r7OtN": {
+                  "enabled": false
+                },
+                "G5aTKs/y5inXt": {
+                  "content": "What changed"
+                },
+                "G5aTKs/J91by": {
+                  "content": "The summary view renders tokens as they arrive over the WebSocket instead of waiting for the finished analysis. The previous version stays listed until the new one is done."
+                },
+                "G5aTKs/zBERA": {
+                  "type": "frame",
+                  "id": "sqaTe",
+                  "name": "inline",
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "kl0SH",
+                      "name": "line-1",
+                      "gap": "$gap-tight",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "F1gMhA",
+                          "name": "inline-text",
+                          "fill": "$color-fg-default",
+                          "content": "Streaming uses",
+                          "lineHeight": "$text-body-line-height",
+                          "fontFamily": "$text-body-font-family",
+                          "fontSize": "$text-body-font-size",
+                          "fontWeight": "$text-body-font-weight"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "ZAIlv",
+                          "name": "inline-code",
+                          "fill": "$color-bg-muted",
+                          "cornerRadius": "$radius-sm",
+                          "padding": [
+                            0,
+                            "$inset-inline"
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "NdpJi",
+                              "name": "inline-code-text",
+                              "fill": "$color-fg-default",
+                              "content": "onToken()",
+                              "lineHeight": "$text-code-small-line-height",
+                              "fontFamily": "$text-code-small-font-family",
+                              "fontSize": "$text-code-small-font-size",
+                              "fontWeight": "$text-code-small-font-weight"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "P8EnD",
+                          "name": "inline-text-2",
+                          "fill": "$color-fg-default",
+                          "content": "from",
+                          "lineHeight": "$text-body-line-height",
+                          "fontFamily": "$text-body-font-family",
+                          "fontSize": "$text-body-font-size",
+                          "fontWeight": "$text-body-font-weight"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "sUJPn",
+                      "name": "link",
+                      "fill": "$color-accent-fg",
+                      "content": "the UI brief",
+                      "lineHeight": "$text-body-line-height",
+                      "fontFamily": "$text-body-font-family",
+                      "fontSize": "$text-body-font-size",
+                      "fontWeight": "$text-body-font-weight"
+                    }
+                  ]
+                },
+                "G5aTKs/T4nLw": {
+                  "enabled": false
+                },
+                "G5aTKs/xYv5a": {
+                  "enabled": false
+                },
+                "G5aTKs/TkEdw": {
+                  "enabled": false
+                },
+                "G5aTKs/MBzHE": {
+                  "enabled": false
+                },
+                "G5aTKs/nYsib": {
+                  "enabled": false
+                },
+                "IIGC4": {
+                  "content": "deepseek-chat · 9,876 tokens"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "frame",
+          "id": "ZGE60",
+          "name": "conversation",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": "$gap-group",
+          "children": [
+            {
+              "id": "cHz7Z",
+              "type": "ref",
+              "ref": "MqAcS",
+              "name": "Question 1",
+              "width": "fill_container",
+              "descendants": {
+                "TIsFd/qnZ4a": {
+                  "content": "8 min ago"
+                },
+                "KHrM8": {
+                  "content": "What happens to the tokens if the connection drops mid-stream?"
+                }
+              }
+            },
+            {
+              "id": "hybPQ",
+              "type": "ref",
+              "ref": "Ron4L",
+              "name": "Answer 1",
+              "width": "fill_container",
+              "descendants": {
+                "cinzx/J91by": {
+                  "content": "The panel keeps the tokens it already has. After reconnecting it asks for the rest from the last offset:"
+                },
+                "cinzx/TkEdw/gVPtp": {
+                  "content": "socket.send({\n  type: \"resume\",\n  from: offset,\n});"
+                },
+                "io0Ud": {
+                  "layout": "vertical",
+                  "gap": "$gap-related",
+                  "alignItems": "start"
+                },
+                "IJ0eN/nVVeD": {
+                  "content": "9f8e7d6"
+                },
+                "j8jXQ3": {
+                  "content": "deepseek-chat · 1,920 tokens"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "XSmTo",
+          "type": "ref",
+          "ref": "dt3hB",
+          "name": "Composer",
+          "width": "fill_container",
+          "descendants": {
+            "HOPj6": {
+              "enabled": false
+            },
+            "AL3Ja": {
+              "content": "Can't reconnect. You can send after a reload."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "qyiYI",
+      "type": "ref",
+      "ref": "p75xR",
+      "name": "Note / Panel / Reconnect failed",
+      "x": 8280,
+      "y": 12736,
+      "descendants": {
+        "AhCkq": {
+          "content": "States: panel.reconnect-failed. Guides: persistent-toast-notifications, accessibility (assertive announcement when reconnecting stops; aria-disabled composer), forms, responsive-design, size-aware-styling."
+        }
+      }
+    },
+    {
+      "type": "frame",
+      "id": "UtXYn",
+      "x": 0,
+      "y": 8600,
+      "name": "PR list / New version",
+      "clip": true,
+      "width": 1440,
+      "height": 900,
+      "fill": "$color-bg-canvas",
+      "layout": "vertical",
+      "children": [
+        {
+          "id": "YtljM",
+          "type": "ref",
+          "ref": "dFd1K",
+          "name": "AppHeader",
+          "width": "fill_container",
+          "descendants": {
+            "U3fIg2": {
+              "id": "J9nKIt",
+              "type": "ref",
+              "ref": "fGBWy",
+              "name": "pool-status",
+              "descendants": {
+                "qTt53": {
+                  "content": "2 running · 3 waiting"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "frame",
+          "id": "D8bU5i",
+          "name": "body",
+          "width": "fill_container",
+          "layout": "vertical",
+          "padding": [
+            "$inset-page",
+            0
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "aL5Zz",
+              "name": "list",
+              "context": "tokens width=size.page",
+              "width": 1200,
+              "layout": "vertical",
+              "gap": "$gap-page",
+              "children": [
+                {
+                  "id": "as2hW",
+                  "type": "ref",
+                  "ref": "Lw9rR",
+                  "name": "Notice",
+                  "width": "fill_container",
+                  "descendants": {
+                    "l5hkTY": {
+                      "content": "A new version is available"
+                    },
+                    "hpv6m": {
+                      "content": "This tab still runs the previous version. Reload to update it."
+                    },
+                    "zXIna/TrPON": {
+                      "content": "Reload"
+                    }
+                  }
+                },
+                {
+                  "type": "frame",
+                  "id": "OzN3Y",
+                  "name": "toolbar",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "PEPoR",
+                      "name": "page-title",
+                      "fill": "$color-fg-default",
+                      "content": "Pull requests",
+                      "lineHeight": "$text-title-line-height",
+                      "fontFamily": "$text-title-font-family",
+                      "fontSize": "$text-title-font-size",
+                      "fontWeight": "$text-title-font-weight"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "E2rfq",
+                      "name": "filters",
+                      "gap": "$gap-related",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "id": "HNDhC",
+                          "type": "ref",
+                          "ref": "mp7j0",
+                          "name": "needs-attention",
+                          "descendants": {
+                            "ZKTfE": {
+                              "content": "Needs attention · 3"
+                            }
+                          }
+                        },
+                        {
+                          "id": "ryEv1",
+                          "type": "ref",
+                          "ref": "gOOFA",
+                          "name": "repo-filter"
+                        },
+                        {
+                          "id": "Z7ON9",
+                          "type": "ref",
+                          "ref": "F6iWKQ",
+                          "name": "filter"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "R88I47",
+                  "name": "table",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "id": "B604N",
+                      "type": "ref",
+                      "ref": "ev7QH",
+                      "name": "PrTableHeader",
+                      "width": "fill_container"
+                    },
+                    {
+                      "id": "VsC5Z",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow prq #41",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "prq"
+                        },
+                        "ThKc5": {
+                          "content": "Split the webhook handler by event type"
+                        },
+                        "ffMUm": {
+                          "content": "#41"
+                        },
+                        "x8uVv": {
+                          "children": [
+                            {
+                              "id": "OyedV",
+                              "type": "ref",
+                              "ref": "Ka8ZR",
+                              "name": "problem",
+                              "descendants": {
+                                "eddOR": {
+                                  "content": "New push not summarized"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "X3ogjL": {
+                          "content": "Push received"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "2 min ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "jBI8a",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow prq #42",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "prq"
+                        },
+                        "ThKc5": {
+                          "content": "Add retry to stalled jobs"
+                        },
+                        "ffMUm": {
+                          "content": "#42"
+                        },
+                        "s1msjN": {
+                          "enabled": false
+                        },
+                        "X3ogjL": {
+                          "content": "Answer"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "3 min ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "PCVkr",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow kopje #16",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "kopje"
+                        },
+                        "ThKc5": {
+                          "content": "Render Markdown tables in answers"
+                        },
+                        "ffMUm": {
+                          "content": "#16"
+                        },
+                        "X3ogjL": {
+                          "content": "Question sent"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "8 min ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "L3O43",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow zenith #87",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "zenith"
+                        },
+                        "lfqO6": {
+                          "width": "fit_content"
+                        },
+                        "ThKc5": {
+                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the…"
+                        },
+                        "ffMUm": {
+                          "content": "#87"
+                        },
+                        "s1msjN": {
+                          "enabled": false
+                        },
+                        "X3ogjL": {
+                          "content": "Summary"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "12 min ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "g8KxP",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow kopje #15",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "kopje"
+                        },
+                        "ThKc5": {
+                          "content": "Pin skill commits on register"
+                        },
+                        "ffMUm": {
+                          "content": "#15"
+                        },
+                        "x8uVv": {
+                          "children": [
+                            {
+                              "id": "qApVr",
+                              "type": "ref",
+                              "ref": "rTc86",
+                              "name": "problem",
+                              "descendants": {
+                                "aAUMF": {
+                                  "content": "Possibly stalled"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "X3ogjL": {
+                          "content": "Question sent"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "1 hr ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "Kxtn7",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow zenith #85",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "zenith"
+                        },
+                        "ThKc5": {
+                          "content": "Cache installation tokens per repository"
+                        },
+                        "ffMUm": {
+                          "content": "#85"
+                        },
+                        "x8uVv": {
+                          "children": [
+                            {
+                              "id": "z8llC",
+                              "type": "ref",
+                              "ref": "Ka8ZR",
+                              "name": "problem",
+                              "descendants": {
+                                "eddOR": {
+                                  "content": "Waiting for a local agent"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "X3ogjL": {
+                          "content": "Push received"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "2 hr ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "IPX0k",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow zenith #84",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "zenith"
+                        },
+                        "ThKc5": {
+                          "content": "Retry GitHub API calls on secondary rate limits"
+                        },
+                        "ffMUm": {
+                          "content": "#84"
+                        },
+                        "s1msjN": {
+                          "enabled": false
+                        },
+                        "X3ogjL": {
+                          "content": "Summary"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "3 hr ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "q7dsA",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow prq #39",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "prq"
+                        },
+                        "ThKc5": {
+                          "content": "Document the job claim protocol"
+                        },
+                        "ffMUm": {
+                          "content": "#39"
+                        },
+                        "s1msjN": {
+                          "enabled": false
+                        },
+                        "X3ogjL": {
+                          "content": "Answer"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "yesterday"
+                        }
+                      }
+                    },
+                    {
+                      "id": "HxoxU",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow prq #38",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "prq"
+                        },
+                        "ThKc5": {
+                          "content": "Move settings to their own page"
+                        },
+                        "ffMUm": {
+                          "content": "#38"
+                        },
+                        "s1msjN": {
+                          "enabled": false
+                        },
+                        "X3ogjL": {
+                          "content": "Summary"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "2 days ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "Ou945",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow kopje #14",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "kopje"
+                        },
+                        "ThKc5": {
+                          "content": "Show allowed tools in the skill review"
+                        },
+                        "ffMUm": {
+                          "content": "#14"
+                        },
+                        "s1msjN": {
+                          "enabled": false
+                        },
+                        "X3ogjL": {
+                          "content": "Answer"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "3 days ago"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dpChm",
+      "type": "ref",
+      "ref": "p75xR",
+      "name": "Note / PR list / New version",
+      "x": 1488,
+      "y": 8600,
+      "descendants": {
+        "AhCkq": {
+          "content": "States: list.new-version (the same Notice at the top of every page's content). Guides: persistent-toast-notifications (inline rather than a toast; stays until the reload), accessibility (polite announcement), color, icons."
+        }
+      }
+    },
+    {
+      "type": "frame",
+      "id": "ojeCM",
+      "x": 7872,
+      "y": 15102,
+      "name": "Panel / New version",
+      "context": "tokens width=size.panel",
+      "clip": true,
+      "width": 360,
+      "fill": "$color-bg-canvas",
+      "layout": "vertical",
+      "gap": "$gap-section",
+      "padding": "$inset-panel",
+      "children": [
+        {
+          "id": "FOzU2",
+          "type": "ref",
+          "ref": "Lw9rR",
+          "name": "Notice",
+          "width": "fill_container",
+          "descendants": {
+            "l5hkTY": {
+              "content": "A new version is available"
+            },
+            "hpv6m": {
+              "content": "This tab still runs the previous version. Reload to update it."
+            },
+            "zXIna/TrPON": {
+              "content": "Reload"
+            }
+          }
+        },
+        {
+          "id": "hVSVa",
+          "type": "ref",
+          "ref": "jYlX0",
+          "name": "PrHeader",
+          "width": "fill_container",
+          "descendants": {
+            "RGBFf": {
+              "content": "shuymn/zenith #87"
+            },
+            "q0oezR": {
+              "content": "Stream tokens to the summary view and keep the previous version listed"
+            }
+          }
+        },
+        {
+          "id": "pJFYg",
+          "type": "ref",
+          "ref": "ToHWS",
+          "name": "Disclosure summary",
+          "width": "fill_container",
+          "descendants": {
+            "D7Tj5": {
+              "fontFamily": "$text-heading-font-family",
+              "fontSize": "$text-heading-font-size",
+              "fontWeight": "$text-heading-font-weight",
+              "lineHeight": "$text-heading-line-height",
+              "content": "Summary"
+            },
+            "P1jLHT": {
+              "id": "Q5Ofj",
+              "type": "ref",
+              "ref": "bcvNX",
+              "name": "version",
+              "descendants": {
+                "RkFfP/nVVeD": {
+                  "content": "9f8e7d6"
+                },
+                "v4sqeX/qnZ4a": {
+                  "content": "12 min ago"
+                }
+              }
+            },
+            "AXugr": {
+              "id": "YpSrD",
+              "type": "ref",
+              "ref": "jTRJl",
+              "name": "content",
+              "width": "fill_container",
+              "descendants": {
+                "RoaaS": {
+                  "enabled": false
+                },
+                "r7OtN": {
+                  "enabled": false
+                },
+                "G5aTKs/y5inXt": {
+                  "content": "What changed"
+                },
+                "G5aTKs/J91by": {
+                  "content": "The summary view renders tokens as they arrive over the WebSocket instead of waiting for the finished analysis. The previous version stays listed until the new one is done."
+                },
+                "G5aTKs/zBERA": {
+                  "type": "frame",
+                  "id": "wE53k",
+                  "name": "inline",
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "acDow",
+                      "name": "line-1",
+                      "gap": "$gap-tight",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "D3atEv",
+                          "name": "inline-text",
+                          "fill": "$color-fg-default",
+                          "content": "Streaming uses",
+                          "lineHeight": "$text-body-line-height",
+                          "fontFamily": "$text-body-font-family",
+                          "fontSize": "$text-body-font-size",
+                          "fontWeight": "$text-body-font-weight"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "Vrip1",
+                          "name": "inline-code",
+                          "fill": "$color-bg-muted",
+                          "cornerRadius": "$radius-sm",
+                          "padding": [
+                            0,
+                            "$inset-inline"
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "cd738",
+                              "name": "inline-code-text",
+                              "fill": "$color-fg-default",
+                              "content": "onToken()",
+                              "lineHeight": "$text-code-small-line-height",
+                              "fontFamily": "$text-code-small-font-family",
+                              "fontSize": "$text-code-small-font-size",
+                              "fontWeight": "$text-code-small-font-weight"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "NJOkX",
+                          "name": "inline-text-2",
+                          "fill": "$color-fg-default",
+                          "content": "from",
+                          "lineHeight": "$text-body-line-height",
+                          "fontFamily": "$text-body-font-family",
+                          "fontSize": "$text-body-font-size",
+                          "fontWeight": "$text-body-font-weight"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "akdSk",
+                      "name": "link",
+                      "fill": "$color-accent-fg",
+                      "content": "the UI brief",
+                      "lineHeight": "$text-body-line-height",
+                      "fontFamily": "$text-body-font-family",
+                      "fontSize": "$text-body-font-size",
+                      "fontWeight": "$text-body-font-weight"
+                    }
+                  ]
+                },
+                "G5aTKs/T4nLw": {
+                  "enabled": false
+                },
+                "G5aTKs/xYv5a": {
+                  "enabled": false
+                },
+                "G5aTKs/TkEdw": {
+                  "enabled": false
+                },
+                "G5aTKs/MBzHE": {
+                  "enabled": false
+                },
+                "G5aTKs/nYsib": {
+                  "enabled": false
+                },
+                "IIGC4": {
+                  "content": "deepseek-chat · 9,876 tokens"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "frame",
+          "id": "o893p",
+          "name": "conversation",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": "$gap-group",
+          "children": [
+            {
+              "id": "eVKPr",
+              "type": "ref",
+              "ref": "MqAcS",
+              "name": "Question 1",
+              "width": "fill_container",
+              "descendants": {
+                "TIsFd/qnZ4a": {
+                  "content": "8 min ago"
+                },
+                "KHrM8": {
+                  "content": "What happens to the tokens if the connection drops mid-stream?"
+                }
+              }
+            },
+            {
+              "id": "E34KH",
+              "type": "ref",
+              "ref": "Ron4L",
+              "name": "Answer 1",
+              "width": "fill_container",
+              "descendants": {
+                "cinzx/J91by": {
+                  "content": "The panel keeps the tokens it already has. After reconnecting it asks for the rest from the last offset:"
+                },
+                "cinzx/TkEdw/gVPtp": {
+                  "content": "socket.send({\n  type: \"resume\",\n  from: offset,\n});"
+                },
+                "io0Ud": {
+                  "layout": "vertical",
+                  "gap": "$gap-related",
+                  "alignItems": "start"
+                },
+                "IJ0eN/nVVeD": {
+                  "content": "9f8e7d6"
+                },
+                "j8jXQ3": {
+                  "content": "deepseek-chat · 1,920 tokens"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "QoQkY",
+          "type": "ref",
+          "ref": "m6ZLw",
+          "name": "Composer",
+          "width": "fill_container",
+          "descendants": {
+            "OQjbx": {
+              "enabled": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "FVHpM",
+      "type": "ref",
+      "ref": "p75xR",
+      "name": "Note / Panel / New version",
+      "x": 8280,
+      "y": 15102,
+      "descendants": {
+        "AhCkq": {
+          "content": "States: panel.new-version. Guides: persistent-toast-notifications (inline rather than a toast; stays until the reload), accessibility (polite announcement), color, icons, responsive-design."
+        }
+      }
     }
   ],
   "variables": {
