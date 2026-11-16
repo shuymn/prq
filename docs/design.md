@@ -102,8 +102,9 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   the question. Every `claim` issues a new `claimId` and records the agent ID that made it.
 - A job is `pending` (waiting), `claimed` by a local agent, `finalizing` while its submit appends the result, `running`
   in the cloud agent, `done`, `failed` or `superseded`. Each change is one SQL statement guarded by the state it
-  expects (and the claim), so a state is never read in one step and changed in another. The next job is the oldest
-  waiting answer, then the waiting analysis, for both owners.
+  expects (and the claim), so a state is never read in one step and changed in another, and the same statement
+  advances the job's revision (`rev`), which the session view shows. The next job is the oldest waiting answer, then
+  the waiting analysis, for both owners.
 - When an agent calls `wait` or `claim`, the system shall return that agent ID's own claimed, unfinished job before any
   new job, with a new `claimId`. A process that was killed and restarted can therefore continue at once, and an answer
   that arrives late from the old process is rejected. A resume is a claim: it also sets the claim time again.
@@ -133,6 +134,11 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
 - A failed job is kept as `failed` with its reason and can be retried from the UI. The UI retries a job through
   `POST /api/pr/:owner/:repo/:number/jobs/:jobId/retry`; owner and repository are accepted in any case and address the
   one session of the pull request.
+- A retry carries the job's `rev` from the view the UI shows (`expectedRev`). The session applies it only while the job
+  is still at that revision, checked in the statement that changes it, and otherwise answers 409 `stale_job`, after
+  which the UI reads the view again. A retry sent again, or one that lands late, therefore never undoes a change made
+  after the view it came from (a claim, another retry, a new failure), even when the job is back in the state the view
+  showed. A refused retry changes no job state; any wake it armed only runs `settle`.
 - A cloud session hands its next waiting job to the cloud agent in the same step that made the job waiting, one job
   at a time (the job is `running` until the agent ends it). While no cloud agent is configured, that step instead marks
   the job `failed` with "cloud agent not configured"; no model is called and nothing is streamed.
@@ -226,9 +232,9 @@ UI, webhook and CLI input all enter through PrSession.
   what the client does after the 503. A late submit stores its answer once, and the agent's resend gets `duplicate`. A
   claim that reaches the Hub after the 503 is a newer attempt than the agent's resend, so it can resume the job the
   resend claimed under another `claimId`; the agent's submit then gets 409 `stale_claim`, and its next claim resumes
-  the job (see [Owner and jobs](#owner-and-jobs)). A late retry applies if the job is still claimed or failed when it
-  runs, and a second retry then gets 409 `not_retryable`, so the UI reads the job's state from the session view before
-  retrying. A `wait` is aborted, which ends it in the Hub.
+  the job (see [Owner and jobs](#owner-and-jobs)). A late retry applies only if nothing changed the job after the view
+  it came from, and otherwise gets 409 `stale_job` (see [Owner and jobs](#owner-and-jobs)). A `wait` is aborted, which
+  ends it in the Hub.
 - An authentication failure (401 or 403) during `wait` is told apart from an ordinary timeout and ends with an error, so
   the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.

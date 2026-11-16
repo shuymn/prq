@@ -41,6 +41,7 @@ import {
   hubSeams,
   jobRows,
   prSessionSeams,
+  revOf,
   type Session,
   setPool,
   submission,
@@ -204,7 +205,10 @@ describe("stale claim after retry", () => {
     const session = await localSession("cli", sockets, Q1);
     const old = holding(await claimOver(session.token, "laptop"));
 
-    expect(await (await retryOver(session.token, session.ref, old.job.jobId)).json()).toEqual({ status: "retried" });
+    const rev = await revOf(session.stub, old.job.jobId);
+    expect(await (await retryOver(session.token, session.ref, old.job.jobId, rev)).json()).toEqual({
+      status: "retried",
+    });
     expect(await failure(submitOver(session.token, session.ref, old, "laptop"))).toEqual(failed(409, "stale_claim"));
 
     // The same agent claims the job again: the earlier claimId stays refused while the job is claimed, and after it is
@@ -539,7 +543,8 @@ describe("a claim that lands after the route's 503", () => {
     const session = await localSession("cli", sockets, Q1);
     const { resend } = await lateClaimAfterResend(session);
     const { jobId } = resend.job;
-    expect(await (await retryOver(session.token, session.ref, jobId)).json()).toEqual({ status: "retried" });
+    const rev = await revOf(session.stub, jobId);
+    expect(await (await retryOver(session.token, session.ref, jobId, rev)).json()).toEqual({ status: "retried" });
     expect(await failure(submitOver(session.token, session.ref, resend, "laptop"))).toEqual(failed(409, "stale_claim"));
 
     // The reclaim does not resume: the agent drops its answer and works on the job again.

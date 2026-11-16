@@ -15,6 +15,7 @@ import {
   newSession,
   prSessionSeams,
   queued,
+  retryIn,
   sessionSql,
   setPool,
   submission,
@@ -245,7 +246,7 @@ describe("late claims after a retry", () => {
     await held.reached();
     // Attempt 11 claims the job, and the host retries it.
     expect(await stub.claim("laptop", "fresh", 11)).toMatchObject({ job: { jobId } });
-    expect(await stub.retryJob(jobId)).toEqual({ status: "retried" });
+    expect(await retryIn(stub, jobId)).toEqual({ status: "retried" });
     expect(late.settled()).toBe(false);
 
     await held.open();
@@ -300,7 +301,7 @@ describe("notify during peek", () => {
     const check = tracked((await hub()).hasWork("laptop"));
     await held.reached();
     // The job is retried: the session notifies the Hub during the check.
-    expect(await stub.retryJob(jobId)).toEqual({ status: "retried" });
+    expect(await retryIn(stub, jobId)).toEqual({ status: "retried" });
     expect(await notificationGen(name)).toBeGreaterThan(before ?? 0);
     expect(check.settled()).toBe(false);
     await held.open();
@@ -320,7 +321,7 @@ describe("notify during peek", () => {
     // A newer check finds nothing open and deletes the row; a retry writes it again.
     expect(await (await hub()).hasWork("laptop")).toBe(false);
     expect(await queued()).not.toContain(name);
-    expect(await stub.retryJob(jobId)).toEqual({ status: "retried" });
+    expect(await retryIn(stub, jobId)).toEqual({ status: "retried" });
     expect(await queued()).toContain(name);
     expect(older.settled()).toBe(false);
     await held.open();

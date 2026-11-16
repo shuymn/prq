@@ -1,8 +1,9 @@
 import type { JobTarget, JobView, Owner } from "@prq/protocol";
 
 // A session's jobs and the rows that go with them. Every transition is one SQL statement guarded by the state it
-// expects (and the claim), so no state is read in one step and changed in another (docs/design.md, Owner and jobs).
-// All of it is synchronous: a caller that writes several rows does so in one storage transaction.
+// expects (and the claim), so no state is read in one step and changed in another (docs/design.md, Owner and jobs). The
+// same statement advances the job's revision (rev), which a retry is bound to. All of it is synchronous: a caller that
+// writes several rows does so in one storage transaction.
 
 export type JobState = "pending" | "claimed" | "finalizing" | "running" | "done" | "failed" | "superseded";
 
@@ -21,6 +22,7 @@ export type JobRow = {
   failure: string | null;
   created_at: number;
   updated_at: number;
+  rev: number;
 };
 
 export function jobTarget(row: JobRow): JobTarget {
@@ -124,7 +126,8 @@ export function resumeClaim(
 ): JobRow | undefined {
   return sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET claim_id = ?, claimed_at = ?, updated_at = ?, workspace_sha = ${WORKSPACE_SHA}
+      `UPDATE prq_jobs SET rev = rev + 1, claim_id = ?, claimed_at = ?, updated_at = ?,
+         workspace_sha = ${WORKSPACE_SHA}
        WHERE state = 'claimed' AND job_id = (
          SELECT job_id FROM prq_jobs WHERE state = 'claimed' AND agent_id = ? ORDER BY seq LIMIT 1)
          AND NOT ${NEWER_ATTEMPT_CLAIMED}
@@ -149,7 +152,7 @@ export function freshClaim(
 ): JobRow | undefined {
   return sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET state = 'claimed', agent_id = ?, claim_id = ?, claimed_at = ?, updated_at = ?,
+      `UPDATE prq_jobs SET rev = rev + 1, state = 'claimed', agent_id = ?, claim_id = ?, claimed_at = ?, updated_at = ?,
          workspace_sha = ${WORKSPACE_SHA}
        WHERE state = 'pending' AND job_id = (${NEXT_PENDING}) AND NOT ${NEWER_ATTEMPT_CLAIMED}
        RETURNING *`,
@@ -190,7 +193,7 @@ export function reserve(
 ): JobRow | undefined {
   return sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET state = 'finalizing', updated_at = ?
+      `UPDATE prq_jobs SET rev = rev + 1, state = 'finalizing', updated_at = ?
        WHERE job_id = ? AND state = 'claimed' AND claim_id = ? AND agent_id = ? RETURNING *`,
       now,
       jobId,
@@ -202,9 +205,9 @@ export function reserve(
 
 // finalizing → done, once the result message exists, or back to claimed (same claim) when it does not.
 export function endFinalizing(sql: SqlStorage, row: JobRow, stored: boolean, now: number): JobRow | undefined {
-  const done = `UPDATE prq_jobs SET state = 'done', done_claim_id = claim_id, result_message_id = ?, updated_at = ?
-    WHERE job_id = ? AND state = 'finalizing' AND claim_id = ? RETURNING *`;
-  const claimed = `UPDATE prq_jobs SET state = 'claimed', updated_at = ?
+  const done = `UPDATE prq_jobs SET rev = rev + 1, state = 'done', done_claim_id = claim_id, result_message_id = ?,
+    updated_at = ? WHERE job_id = ? AND state = 'finalizing' AND claim_id = ? RETURNING *`;
+  const claimed = `UPDATE prq_jobs SET rev = rev + 1, state = 'claimed', updated_at = ?
     WHERE job_id = ? AND state = 'finalizing' AND claim_id = ? RETURNING *`;
   return (
     stored
@@ -217,15 +220,17 @@ export function finalizingJobs(sql: SqlStorage): JobRow[] {
   return sql.exec<JobRow>("SELECT * FROM prq_jobs WHERE state = 'finalizing' ORDER BY seq").toArray();
 }
 
-// claimed or failed → pending, with the claim cleared, so the earlier claimId no longer matches.
-export function retry(sql: SqlStorage, jobId: string, now: number): JobRow | undefined {
+// claimed or failed → pending, with the claim cleared, so the earlier claimId no longer matches. Only while the job is
+// still at expectedRev, the revision the retry was made from.
+export function retry(sql: SqlStorage, jobId: string, expectedRev: number, now: number): JobRow | undefined {
   return sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET state = 'pending', agent_id = NULL, claim_id = NULL, claimed_at = NULL,
+      `UPDATE prq_jobs SET rev = rev + 1, state = 'pending', agent_id = NULL, claim_id = NULL, claimed_at = NULL,
          workspace_sha = NULL, failure = NULL, updated_at = ?
-       WHERE job_id = ? AND state IN ('claimed', 'failed') RETURNING *`,
+       WHERE job_id = ? AND rev = ? AND state IN ('claimed', 'failed') RETURNING *`,
       now,
       jobId,
+      expectedRev,
     )
     .toArray()[0];
 }
@@ -234,7 +239,7 @@ export function retry(sql: SqlStorage, jobId: string, now: number): JobRow | und
 export function failPending(sql: SqlStorage, failure: string, now: number): JobRow[] {
   return sql
     .exec<JobRow>(
-      "UPDATE prq_jobs SET state = 'failed', failure = ?, updated_at = ? WHERE state = 'pending' RETURNING *",
+      "UPDATE prq_jobs SET rev = rev + 1, state = 'failed', failure = ?, updated_at = ? WHERE state = 'pending' RETURNING *",
       failure,
       now,
     )
@@ -246,7 +251,7 @@ export function failPending(sql: SqlStorage, failure: string, now: number): JobR
 export function startNext(sql: SqlStorage, now: number): JobRow | undefined {
   return sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET state = 'running', updated_at = ?
+      `UPDATE prq_jobs SET rev = rev + 1, state = 'running', updated_at = ?
        WHERE state = 'pending' AND job_id = (${NEXT_PENDING})
          AND NOT EXISTS (SELECT 1 FROM prq_jobs WHERE state = 'running')
        RETURNING *`,
@@ -291,5 +296,6 @@ export function jobView(row: JobRow): JobView {
     resultMessageId: row.result_message_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    rev: row.rev,
   };
 }

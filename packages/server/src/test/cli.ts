@@ -72,8 +72,9 @@ export function retryPath(pr: PrRef, jobId: string): string {
   return `/api/pr/${pr.owner}/${pr.repo}/${pr.number}/jobs/${jobId}/retry`;
 }
 
-export function retryOver(token: string, pr: PrRef, jobId: string): Promise<Response> {
-  return post(retryPath(pr, jobId), token, {});
+// A retry through the route, from the job's revision in the view the UI shows.
+export function retryOver(token: string, pr: PrRef, jobId: string, expectedRev: number): Promise<Response> {
+  return post(retryPath(pr, jobId), token, { expectedRev });
 }
 
 // Watches the checks the Hub's waits make (hasWork, which a wait calls on the instance): counts the ones that have

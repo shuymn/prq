@@ -15,4 +15,12 @@ export { ErrorCode, ErrorResponse } from "./errors.ts";
 export { MessageMetadata } from "./messages.ts";
 export { AgentId, canonicalPrRef, HUB_NAME, MessageId, parseSessionName, PrRef, Sha, sessionName } from "./pr.ts";
 export { PRQ_VERSION_HEADER } from "./version.ts";
-export { HistoryChangedMessage, JobView, Owner, PrSessionView, RetryResponse, ServerVersionMessage } from "./views.ts";
+export {
+  HistoryChangedMessage,
+  JobView,
+  Owner,
+  PrSessionView,
+  RetryRequest,
+  RetryResponse,
+  ServerVersionMessage,
+} from "./views.ts";

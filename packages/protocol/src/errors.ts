@@ -1,7 +1,7 @@
 import * as v from "valibot";
 
 // What went wrong. Statuses: 400 bad_request, 401 unauthorized, 404 not_found and unknown_job, 409 stale_claim,
-// target_mismatch and not_retryable, 500 internal, 503 unavailable. 503 means the server could not complete the request
+// target_mismatch, not_retryable and stale_job, 500 internal, 503 unavailable. 503 means the server could not complete the request
 // now: Access's keys could not be fetched, or a Durable Object did not answer in time. The caller tries again; it is
 // never an authentication failure.
 export const ErrorCode = v.picklist([
@@ -18,6 +18,8 @@ export const ErrorCode = v.picklist([
   "target_mismatch",
   // Only a claimed or failed job can be retried.
   "not_retryable",
+  // The job changed since the view a retry was made from (its rev is not the expected one); the UI reads it again.
+  "stale_job",
 ]);
 export type ErrorCode = v.InferOutput<typeof ErrorCode>;
 

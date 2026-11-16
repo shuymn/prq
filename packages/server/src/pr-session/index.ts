@@ -500,8 +500,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // The host's retry of a claimed or failed job: back to waiting with the claim cleared, so the earlier claimId is
-  // rejected from now on.
-  async retryJob(jobId: string): Promise<RetryResponse | ErrorResponse> {
+  // rejected from now on. expectedRev: the job's revision in the view the retry was made from. The retry's statement
+  // applies it only while the job is still at it, so a retry never undoes a change made after that view (a claim, another
+  // retry, a new failure) however late it lands. A refused one changes no job state; any wake it armed only settles.
+  async retryJob(jobId: string, expectedRev: number): Promise<RetryResponse | ErrorResponse> {
     const before = jobById(this.#sql, jobId);
     if (before === undefined) {
       return { error: "unknown_job" };
@@ -514,11 +516,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const now = Date.now();
     const change = this.ctx.storage.transactionSync(() => {
       const from = jobById(this.#sql, jobId)?.state;
-      const row = retry(this.#sql, jobId, now);
+      const row = retry(this.#sql, jobId, expectedRev, now);
       return row === undefined ? null : { from, row, cloud: this.#newWork(owner, now) };
     });
     if (change === null) {
-      return { error: "not_retryable", detail: "the job changed state" };
+      return { error: "stale_job", detail: "the job changed since the view the retry was made from" };
     }
     log("prq.job.retried", {
       ...this.#jobFields(change.row),

@@ -87,6 +87,22 @@ export async function claimIn(
   return stub.claim(agentId, mode, attempt);
 }
 
+// A job's revision in the session's view, which the UI retries from.
+export async function revOf(stub: DurableObjectStub<PrSession>, jobId: string): Promise<number> {
+  const job = (await stub.view()).jobs.find((view) => view.jobId === jobId);
+  if (job === undefined) {
+    throw new Error(`no job ${jobId}`);
+  }
+  return job.rev;
+}
+
+// A retry made on a session directly, as the UI makes it: from the job's revision in the view (0 for a job the view
+// does not show).
+export async function retryIn(stub: DurableObjectStub<PrSession>, jobId: string) {
+  const job = (await stub.view()).jobs.find((view) => view.jobId === jobId);
+  return stub.retryJob(jobId, job?.rev ?? 0);
+}
+
 export async function jobRows(stub: DurableObjectStub<PrSession>): Promise<JobRow[]> {
   return runInDurableObject(stub, (_, state) =>
     state.storage.sql.exec<JobRow>("SELECT * FROM prq_jobs ORDER BY seq").toArray(),
