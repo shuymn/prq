@@ -62,7 +62,8 @@ const DeliveryId = v.pipe(v.string(), v.minLength(1), v.maxLength(128));
 // route answers once the session has stored the delivery in its inbox, and settle takes it in later. The session
 // call is bounded under GitHub's limit; when the bound passes the route answers 503, GitHub records the delivery as
 // failed, and the call keeps running. One that lands stores the delivery once, and a redelivery from GitHub's UI is
-// then a duplicate; GitHub's order of the heads (moveHead) does not depend on when either is taken in.
+// then a duplicate; the current head follows GitHub's order (moveHead), not when either is taken in, within that
+// order's same-second limits.
 export function webhookRoutes(bound: CallBound) {
   return new Hono<{ Bindings: Env }>().post("/", async (c) => {
     const config = readWebhookConfig(c.env);

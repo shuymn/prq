@@ -422,9 +422,9 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return stored === "new" ? "received" : "duplicate";
   }
 
-  // Takes in each stored delivery, in the order stored; the order of heads comes from GitHub (moveHead), so it does
-  // not depend on this one. A delivery whose step fails stays stored for the next settle, which settle's retry wake
-  // runs.
+  // Takes in each stored delivery, in the order stored; the order of heads comes from GitHub (moveHead), not from
+  // this one, except within a second. A delivery whose step fails stays stored for the next settle, which settle's
+  // retry wake runs.
   async #drainInbox(): Promise<void> {
     for (const delivery of pendingInbox(this.#sql)) {
       await (delivery.push ? this.#takePush(delivery) : this.#takeUpdate(delivery));

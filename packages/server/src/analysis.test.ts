@@ -444,6 +444,40 @@ describe("GitHub's order", () => {
     await send(ref, { action: "edited", head: sha("A"), at: earlier, title: "older" });
     expect((await stub.view()).details).toMatchObject({ headSha: sha("A"), title: "two" });
   });
+
+  // Known limits (docs/design.md, Intake): whole seconds and `before` cannot order every same-second sequence. These
+  // pin what happens now, and that the next push heals it.
+  it("known limit: a same-second A, B, A, B whose middle A is taken in last leaves A current until the next push", async () => {
+    captureLogs();
+    const { stub, ref } = await localSession("github-order", sockets);
+    const at = nextAt();
+    await push(ref, "A", { at });
+    // GitHub's order is A, B, A, B; the delivery of the second A is taken in last.
+    await push(ref, "B", { at, before: sha("A") });
+    await push(ref, "B", { at, before: sha("A") });
+    await push(ref, "A", { at, before: sha("B") });
+    expect((await stub.view()).details?.headSha).toBe(sha("A"));
+    expect(await analysisOf(stub, "A")).toMatchObject({ state: "pending" });
+
+    await push(ref, "C", { before: sha("B") });
+    expect((await stub.view()).details?.headSha).toBe(sha("C"));
+    expect(await analysisOf(stub, "C")).toMatchObject({ state: "pending" });
+  });
+
+  it("known limit: a delivery lost inside a same-second chain leaves the head until the next push", async () => {
+    captureLogs();
+    const { stub, ref } = await localSession("github-order", sockets);
+    const at = nextAt();
+    await push(ref, "A", { at });
+    // B's push, in the same second, is never delivered; C moved from B.
+    await push(ref, "C", { at, before: sha("B") });
+    expect((await stub.view()).details?.headSha).toBe(sha("A"));
+    expect((await analyses(stub)).map((row) => row.target)).toEqual([sha("A")]);
+
+    await push(ref, "D", { before: sha("C") });
+    expect((await stub.view()).details?.headSha).toBe(sha("D"));
+    expect(await analysisOf(stub, "D")).toMatchObject({ state: "pending" });
+  });
 });
 
 describe("old-head retry", () => {

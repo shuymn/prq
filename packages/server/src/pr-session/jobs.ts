@@ -157,8 +157,10 @@ export function takeInbox(sql: SqlStorage, deliveryId: string): boolean {
 
 // A push's head becomes the current head when GitHub says it is newer: its time is later than the current head's, or
 // it is the same second and the push moved from the current head (the next one in the chain). A push of the current
-// head itself applies and changes nothing. A push that ties without that link is kept out: GitHub's time cannot order
-// it, and a later webhook corrects the head. Returns whether the head moved to (or stayed at) the push's head.
+// head itself applies and changes nothing. A push that ties without that link is kept out. Whole seconds and `before`
+// cannot order every same-second sequence: one that returns to an earlier head, or loses a delivery, can leave an
+// older head current until the next push (docs/design.md, Intake). Returns whether the head moved to (or stayed at)
+// the push's head.
 export function moveHead(sql: SqlStorage, delivery: Delivery): boolean {
   const { at, before, details } = delivery;
   return (

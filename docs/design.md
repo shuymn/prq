@@ -192,12 +192,18 @@ UI, webhook and CLI input all enter through PrSession.
 - Webhooks are ordered by what GitHub says, not by when the session gets to them, and without prq's clocks. A push
   (`opened`, `reopened`, `synchronize`) makes its SHA the current head when its `pull_request.updated_at` is later than
   the current head's, or is the same second and the push moved from the current head (`synchronize`'s `before`) or is
-  the current head. So deliveries of pushes A then B leave B current in whatever order they are taken in, and a
-  force-push back to A (`before` B, `after` A) makes A current again. Every push carries its own time, so a lost
-  delivery stalls nothing: the next push is later whether or not the one between was seen. `opened` and `reopened`
-  carry no `before` and are ordered by time alone. A push in the same second as the current head and not linked to it
-  leaves the head as it is: GitHub's time, in whole seconds, cannot order the two, keeping the head never moves it back,
-  and the next push corrects it. A push that does not become current creates no job.
+  the current head. `opened` and `reopened` carry no `before` and are ordered by time alone. A push that does not
+  become current creates no job.
+  - Guaranteed: pushes at least a second apart end with the latest one current, in whatever order they are taken in,
+    and a force-push back to A (`before` B, `after` A) makes A current again. A lost delivery is healed by the next
+    push a second or more later, whatever that push moved from.
+  - Not guaranteed: `updated_at` has whole seconds, and `before` cannot order a same-second sequence that returns to an
+    earlier head. A force-push sequence A, B, A, B within one second whose middle A is taken in last leaves A current,
+    and a delivery lost inside a same-second chain (A, B, C with B lost) leaves A current, because C names a head the
+    session never saw. A same-second push not linked to the current head leaves the head as it is.
+  - What heals them: the next push, a second or more later; and, once the Worker can call GitHub (#5), reconciling a
+    same-second tie against GitHub's current head. The limit is accepted because it takes several pushes within one
+    second, the head it leaves is the one shown with the pull request, and the next push corrects it.
 - If an analysis job for the current head SHA already exists (waiting, claimed, running, done or failed), the system
   shall create no job and leave that job as it is; a push back to an already analyzed head (after a force-push, for
   example) shows that head's stored summary, and a failed one stays failed until the host retries it. A new delivery
@@ -283,7 +289,7 @@ UI, webhook and CLI input all enter through PrSession.
   from, and otherwise gets 409 `stale_job`. A `wait` is aborted, which ends it in the Hub. A late `context` only reads.
   The webhook route is bounded at 5 s instead, under GitHub's own limit (see [Intake](#intake)). A delivery its session
   stores after the 503 is taken in like any other, GitHub's redelivery of it is then a duplicate, and which head is
-  current does not depend on when either lands.
+  current follows GitHub's order, not when either lands, within that order's same-second limits.
 - An authentication failure (401 or 403) during `wait` is told apart from an ordinary timeout and ends with an error, so
   the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.
