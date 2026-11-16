@@ -47,7 +47,7 @@ export class Hub extends Agent<Env> {
 
   // --- The pool ---
 
-  // A contact from a local agent: a wait (at its start and end), a claim or a submit (context too, from PR 5 on).
+  // A contact from a local agent: a wait (at its start and end), a claim, a submit or a context.
   touch(agentId: string): void {
     this.#sql.exec(
       `INSERT INTO prq_agents (agent_id, last_seen_at) VALUES (?, ?)

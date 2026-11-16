@@ -1,4 +1,4 @@
-import type { JobTarget, JobView, Owner } from "@prq/protocol";
+import type { JobTarget, JobView, Owner, PrDetails } from "@prq/protocol";
 
 // A session's jobs and the rows that go with them. Every transition is one SQL statement guarded by the state it
 // expects (and the claim), so no state is read in one step and changed in another (docs/design.md, Owner and jobs). The
@@ -47,6 +47,159 @@ export function decideOwner(sql: SqlStorage, owner: Owner): boolean {
   );
 }
 
+type DetailsRow = {
+  head_sha: string | null;
+  base_sha: string | null;
+  full_name: string | null;
+  title: string | null;
+  pr_state: PrDetails["state"] | null;
+  url: string | null;
+};
+
+// The pull request's details, once a webhook has given them.
+export function readDetails(sql: SqlStorage): PrDetails | null {
+  const row = sql
+    .exec<DetailsRow>("SELECT head_sha, base_sha, full_name, title, pr_state, url FROM prq_session WHERE id = 1")
+    .one();
+  const { head_sha: headSha, base_sha: baseSha, full_name: fullName, title, pr_state: state, url } = row;
+  if (headSha === null || baseSha === null || fullName === null || title === null || state === null || url === null) {
+    return null;
+  }
+  return { fullName, title, state, url, headSha, baseSha };
+}
+
+// A verified webhook delivery, as the route hands it to the session and the inbox keeps it. at is GitHub's time of the
+// pull request's state the event carries (pull_request.updated_at, epoch ms); before is the head a synchronize event
+// moved from (none for other actions).
+export type Delivery = {
+  deliveryId: string;
+  action: string;
+  push: boolean;
+  at: number;
+  before: string | null;
+  details: PrDetails;
+};
+
+type InboxRow = {
+  delivery_id: string;
+  action: string;
+  push: 0 | 1;
+  at: number;
+  before_sha: string | null;
+  head_sha: string;
+  base_sha: string;
+  full_name: string;
+  title: string;
+  pr_state: PrDetails["state"];
+  url: string;
+};
+
+// Stores a delivery in the inbox unless its ID is there. Returns whether it was new, or how far the stored one got.
+export function addInbox(sql: SqlStorage, delivery: Delivery): "new" | "pending" | "processed" {
+  const { details } = delivery;
+  const added = sql
+    .exec(
+      `INSERT INTO prq_inbox (delivery_id, action, push, at, before_sha, head_sha, base_sha, full_name, title, pr_state,
+         url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (delivery_id) DO NOTHING RETURNING seq`,
+      delivery.deliveryId,
+      delivery.action,
+      delivery.push ? 1 : 0,
+      delivery.at,
+      delivery.before,
+      details.headSha,
+      details.baseSha,
+      details.fullName,
+      details.title,
+      details.state,
+      details.url,
+    )
+    .toArray();
+  if (added.length === 1) {
+    return "new";
+  }
+  const { processed } = sql
+    .exec<{ processed: number }>("SELECT processed FROM prq_inbox WHERE delivery_id = ?", delivery.deliveryId)
+    .one();
+  return processed === 1 ? "processed" : "pending";
+}
+
+// The deliveries not processed yet, in the order they were stored.
+export function pendingInbox(sql: SqlStorage): Delivery[] {
+  return sql
+    .exec<InboxRow>("SELECT * FROM prq_inbox WHERE processed = 0 ORDER BY seq")
+    .toArray()
+    .map((row) => ({
+      deliveryId: row.delivery_id,
+      action: row.action,
+      push: row.push === 1,
+      at: row.at,
+      before: row.before_sha,
+      details: {
+        fullName: row.full_name,
+        title: row.title,
+        state: row.pr_state,
+        url: row.url,
+        headSha: row.head_sha,
+        baseSha: row.base_sha,
+      },
+    }));
+}
+
+// Marks a delivery processed, unless it already is. Returns whether this call did: the step that does is the one
+// that takes it in.
+export function takeInbox(sql: SqlStorage, deliveryId: string): boolean {
+  return (
+    sql
+      .exec("UPDATE prq_inbox SET processed = 1 WHERE delivery_id = ? AND processed = 0 RETURNING seq", deliveryId)
+      .toArray().length === 1
+  );
+}
+
+// A push's head becomes the current head when GitHub says it is newer: its time is later than the current head's, or
+// it is the same second and the push moved from the current head (the next one in the chain). A push of the current
+// head itself applies and changes nothing. A push that ties without that link is kept out. Whole seconds and `before`
+// cannot order every same-second sequence: one that returns to an earlier head, or loses a delivery, can leave an
+// older head current until the next push (docs/design.md, Intake). Returns whether the head moved to (or stayed at)
+// the push's head.
+export function moveHead(sql: SqlStorage, delivery: Delivery): boolean {
+  const { at, before, details } = delivery;
+  return (
+    sql
+      .exec(
+        `UPDATE prq_session SET head_sha = ?, head_at = ?
+         WHERE id = 1 AND (head_at IS NULL OR ? > head_at OR (? = head_at AND (? = head_sha OR ? = head_sha)))
+         RETURNING id`,
+        details.headSha,
+        at,
+        at,
+        at,
+        details.headSha,
+        before,
+      )
+      .toArray().length === 1
+  );
+}
+
+// Stores a webhook's details (all but the head) unless a webhook with a later GitHub time has stored them; among
+// webhooks of the same second the last one taken in wins. The head is a push's to move, except that a session with no
+// head takes the event's.
+export function writeDetails(sql: SqlStorage, delivery: Delivery): void {
+  const { at, details } = delivery;
+  sql.exec(
+    `UPDATE prq_session SET head_sha = coalesce(head_sha, ?), base_sha = ?, full_name = ?, title = ?, pr_state = ?,
+       url = ?, details_at = ?
+     WHERE id = 1 AND (details_at IS NULL OR ? >= details_at)`,
+    details.headSha,
+    details.baseSha,
+    details.fullName,
+    details.title,
+    details.state,
+    details.url,
+    at,
+    at,
+  );
+}
+
 export function jobById(sql: SqlStorage, jobId: string): JobRow | undefined {
   return sql.exec<JobRow>("SELECT * FROM prq_jobs WHERE job_id = ?", jobId).toArray()[0];
 }
@@ -76,30 +229,65 @@ export function removeIntake(sql: SqlStorage, questionIds: readonly string[]): v
   }
 }
 
+// A pending job for the target, unless it has one: one job per target.
+function createJob(sql: SqlStorage, kind: JobRow["kind"], target: string, now: number): JobRow | undefined {
+  return sql
+    .exec<JobRow>(
+      `INSERT INTO prq_jobs (job_id, kind, target, state, created_at, updated_at)
+       VALUES (?, ?, ?, 'pending', ?, ?) ON CONFLICT (kind, target) DO NOTHING RETURNING *`,
+      crypto.randomUUID(),
+      kind,
+      target,
+      now,
+      now,
+    )
+    .toArray()[0];
+}
+
 // A pending answer job per question that has none, in the given order.
 export function createAnswerJobs(sql: SqlStorage, questionIds: readonly string[], now: number): JobRow[] {
-  return questionIds.flatMap((id) =>
-    sql
-      .exec<JobRow>(
-        `INSERT INTO prq_jobs (job_id, kind, target, state, created_at, updated_at)
-         VALUES (?, 'answer', ?, 'pending', ?, ?) ON CONFLICT (kind, target) DO NOTHING RETURNING *`,
-        crypto.randomUUID(),
-        id,
-        now,
-        now,
-      )
-      .toArray(),
-  );
+  return questionIds.flatMap((id) => createJob(sql, "answer", id, now) ?? []);
+}
+
+// The analysis of a pushed head: created when the head has no job, revived when its job was superseded, otherwise
+// left as it is (a known head gets no second job). Every other head's pending analysis is superseded first, so at most
+// one analysis waits: the current head's. Returns the folded jobs and the job made pending, if any.
+export function ingestHeadJobs(
+  sql: SqlStorage,
+  headSha: string,
+  now: number,
+): { folded: JobRow[]; created: JobRow | undefined; revived: JobRow | undefined } {
+  const folded = sql
+    .exec<JobRow>(
+      `UPDATE prq_jobs SET rev = rev + 1, state = 'superseded', updated_at = ?
+       WHERE kind = 'analysis' AND state = 'pending' AND target != ? RETURNING *`,
+      now,
+      headSha,
+    )
+    .toArray()
+    .toSorted((a, b) => a.seq - b.seq);
+  const created = createJob(sql, "analysis", headSha, now);
+  // A revival starts a new run: whatever the job was folded from, no answer produced before it is accepted.
+  const revived = sql
+    .exec<JobRow>(
+      `UPDATE prq_jobs SET rev = rev + 1, run = run + 1, state = 'pending', updated_at = ?
+       WHERE kind = 'analysis' AND target = ? AND state = 'superseded' RETURNING *`,
+      now,
+      headSha,
+    )
+    .toArray()[0];
+  return { folded, created, revived };
 }
 
 // The next job, one rule for both owners: the oldest pending answer, then the pending analysis.
 const NEXT_PENDING = `SELECT job_id FROM prq_jobs WHERE state = 'pending'
   ORDER BY CASE kind WHEN 'answer' THEN 0 ELSE 1 END, seq LIMIT 1`;
 
-// The commit a claimed job is worked at: an analysis's head; for an answer, the head of the latest completed analysis.
-const WORKSPACE_SHA = `CASE kind WHEN 'analysis' THEN target ELSE (
+// The commit a claimed job is worked at: an analysis's head; for an answer, the head of the latest completed analysis,
+// else the current head (NULL before any push).
+const WORKSPACE_SHA = `CASE kind WHEN 'analysis' THEN target ELSE coalesce((
   SELECT done.target FROM prq_jobs AS done WHERE done.kind = 'analysis' AND done.state = 'done'
-  ORDER BY done.updated_at DESC, done.seq DESC LIMIT 1) END`;
+  ORDER BY done.updated_at DESC, done.seq DESC LIMIT 1), (SELECT head_sha FROM prq_session WHERE id = 1)) END`;
 
 // A claim is one attempt of the Hub's, numbered from its counter. A session takes a claim only from an attempt newer
 // than every attempt the agent has claimed under there (prq_claim_attempts), so a claim that lands late (its caller
@@ -224,14 +412,20 @@ export function finalizingJobs(sql: SqlStorage): JobRow[] {
   return sql.exec<JobRow>("SELECT * FROM prq_jobs WHERE state = 'finalizing' ORDER BY seq").toArray();
 }
 
+// Whether a job is the analysis of a head that is not the current one, read in the statement that uses it.
+const OLD_HEAD = "kind = 'analysis' AND target IS NOT (SELECT head_sha FROM prq_session WHERE id = 1)";
+
 // claimed or failed → pending, with the claim cleared, so the earlier claimId no longer matches, and the next run, so no
-// answer produced before the retry is accepted. Only while the job is still at expectedRev, the revision the retry was
-// made from.
+// answer produced before the retry is accepted. The analysis of a head that is no longer current is superseded instead,
+// its claim cleared the same way: only the current head's analysis waits, and a revival starts the next run. Only
+// while the job is still at expectedRev, the revision the retry was made from.
 export function retry(sql: SqlStorage, jobId: string, expectedRev: number, now: number): JobRow | undefined {
   return sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET rev = rev + 1, run = run + 1, state = 'pending', agent_id = NULL, claim_id = NULL,
-         claimed_at = NULL, workspace_sha = NULL, failure = NULL, updated_at = ?
+      `UPDATE prq_jobs SET rev = rev + 1,
+         state = CASE WHEN ${OLD_HEAD} THEN 'superseded' ELSE 'pending' END,
+         run = CASE WHEN ${OLD_HEAD} THEN run ELSE run + 1 END,
+         agent_id = NULL, claim_id = NULL, claimed_at = NULL, workspace_sha = NULL, failure = NULL, updated_at = ?
        WHERE job_id = ? AND rev = ? AND state IN ('claimed', 'failed') RETURNING *`,
       now,
       jobId,

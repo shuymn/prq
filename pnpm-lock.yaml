@@ -24,6 +24,9 @@ catalogs:
     '@hono/valibot-validator':
       specifier: 0.6.2
       version: 0.6.2
+    '@octokit/webhooks-methods':
+      specifier: 6.0.0
+      version: 6.0.0
     agents:
       specifier: 0.33.0
       version: 0.33.0
@@ -105,6 +108,9 @@ importers:
       '@hono/valibot-validator':
         specifier: 'catalog:'
         version: 0.6.2(hono@4.13.18)(valibot@1.5.0(typescript@7.0.2))
+      '@octokit/webhooks-methods':
+        specifier: 'catalog:'
+        version: 6.0.0
       '@prq/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -812,6 +818,10 @@ packages:
     peerDependencies:
       '@emnapi/core': ^1.7.1 || 2.0.0-beta.2 || 2.0.0-beta.3
       '@emnapi/runtime': ^1.7.1 || 2.0.0-beta.2 || 2.0.0-beta.3
+
+  '@octokit/webhooks-methods@6.0.0':
+    resolution: {integrity: sha512-MFlzzoDJVw/GcbfzVC1RLR36QqkTLUf79vLVO3D+xn7r0QgxnFoLZgtrzxiQErAjFUOdH6fas2KeQJ1yr/qaXQ==}
+    engines: {node: '>= 20'}
 
   '@opentelemetry/api@1.10.0':
     resolution: {integrity: sha512-lMkyes8iHrG+mk6WH7X70MdCLI2RS0FwNBY1PyQ8UemaijE2m5mv5A0Niy3HtbYTFrgkUEQjFMXmSAk2hQDuPQ==}
@@ -3124,6 +3134,8 @@ snapshots:
       '@emnapi/runtime': 1.11.2
       '@tybys/wasm-util': 0.10.4
     optional: true
+
+  '@octokit/webhooks-methods@6.0.0': {}
 
   '@opentelemetry/api@1.10.0': {}
 

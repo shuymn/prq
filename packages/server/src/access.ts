@@ -10,7 +10,7 @@ import {
 } from "jose";
 import * as v from "valibot";
 
-import { readConfig } from "./config.ts";
+import { readAccessConfig } from "./config.ts";
 import { errorResponse } from "./http.ts";
 import { log } from "./log.ts";
 
@@ -99,7 +99,7 @@ export function access(
   keySetFor: (teamDomain: string) => JWTVerifyGetKey = isolateKeySet,
 ): MiddlewareHandler<{ Bindings: Env }> {
   return async (c, next) => {
-    const config = readConfig(c.env);
+    const config = readAccessConfig(c.env);
     if (!config.ok) {
       log("prq.config.invalid", { issues: config.issues }, "error");
       return errorResponse(c, "internal", "the server is not configured");

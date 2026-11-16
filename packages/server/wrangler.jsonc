@@ -1,4 +1,5 @@
-// The Worker's configuration. Secrets (ACCESS_TEAM_DOMAIN, ACCESS_AUD; src/env.d.ts) are set outside this file.
+// The Worker's configuration. Secrets (ACCESS_TEAM_DOMAIN, ACCESS_AUD, WEBHOOK_SECRET, HOST_GITHUB_ID; src/env.d.ts)
+// are set outside this file.
 {
   "name": "prq",
   "main": "src/index.ts",

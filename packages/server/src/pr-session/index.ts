@@ -2,11 +2,12 @@ import { AIChatAgent } from "@cloudflare/ai-chat";
 import { MessageType } from "@cloudflare/ai-chat/types";
 import {
   type ClaimResponse,
+  type ContextResponse,
   type ErrorResponse,
   type HistoryChangedMessage,
   type Job,
   type JobTarget,
-  type MessageMetadata,
+  MessageMetadata,
   type Owner,
   parseSessionName,
   type PrRef,
@@ -24,26 +25,33 @@ import { hubStub } from "../names.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
 import { SerialQueue, WaitTimeout, withTimeout } from "../wait.ts";
 import { CLOUD_NOT_CONFIGURED, type CloudAgent } from "./cloud.ts";
+import { type ContextMessage, type Cursor, cursorText, jsonBytes, messageRoom, parseCursor, take } from "./context.ts";
 import { addedMessages, isChatList, questionsOnly, refusedChatResponse, refusedFrame } from "./history.ts";
 import {
+  addInbox,
   addIntake,
   allJobs,
   createAnswerJobs,
   decideOwner,
+  type Delivery,
   deleteOutbox,
   endFinalizing,
   failPending,
   finalizingJobs,
   freshClaim,
+  ingestHeadJobs,
   intakeIds,
   jobById,
   jobTarget,
   type JobRow,
   type JobState,
   jobView,
+  moveHead,
   outboxRow,
   type Peek,
   peekJobs,
+  pendingInbox,
+  readDetails,
   readOwner,
   recordAttempt,
   removeIntake,
@@ -52,6 +60,8 @@ import {
   resumeClaim,
   retry,
   startNext,
+  takeInbox,
+  writeDetails,
   writeNotify,
 } from "./jobs.ts";
 
@@ -79,6 +89,8 @@ export type Submission = {
 type CloudOutcome = { failed: JobRow[]; started: { row: JobRow; agent: CloudAgent } | null };
 const NO_CLOUD_OUTCOME: CloudOutcome = { failed: [], started: null };
 
+const BAD_CURSOR: ErrorResponse = { error: "bad_request", detail: "the cursor names no place in this conversation" };
+
 // A question from the UI: a user message the server did not add (server messages carry metadata).
 function isQuestion(message: UIMessage): boolean {
   return message.role === "user" && message.metadata === undefined;
@@ -91,6 +103,18 @@ const TextPart = v.object({ type: v.literal("text"), text: v.string() });
 
 function textOf(message: StoredMessage): string {
   return message.parts.map((part) => (v.is(TextPart, part) ? part.text : "")).join("");
+}
+
+// A stored message as a local agent reads it (null for a role the conversation does not hold).
+function contextMessage(
+  message: StoredMessage & { id: string; role: string; metadata?: unknown },
+): ContextMessage | null {
+  const { id, role, metadata } = message;
+  if (role !== "user" && role !== "assistant") {
+    return null;
+  }
+  const read = { id, role, text: textOf(message) } as const;
+  return v.is(MessageMetadata, metadata) ? { ...read, metadata } : read;
 }
 
 // One pull request's conversation (named by sessionName), its owner and its jobs. It is the only place job state
@@ -222,7 +246,12 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   // The session as the UI shows it (also its Agent state).
   view(): PrSessionView {
-    return { pr: this.#pr(), owner: readOwner(this.#sql), jobs: allJobs(this.#sql).map(jobView) };
+    return {
+      pr: this.#pr(),
+      details: readDetails(this.#sql),
+      owner: readOwner(this.#sql),
+      jobs: allJobs(this.#sql).map(jobView),
+    };
   }
 
   #publishView(): void {
@@ -352,12 +381,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (cloud.started !== null) {
       const { row, agent } = cloud.started;
       log("prq.job.started", { ...this.#jobFields(row), from: "pending", to: "running" });
-      agent.start(
-        this.#job(
-          row,
-          this.messages.find((message) => message.id === row.target),
-        ),
-      );
+      agent.start(this.#job(row));
     }
     this.#publishView();
   }
@@ -370,7 +394,93 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   #jobFields(row: JobRow): Record<string, unknown> {
-    return { pr: this.name, jobId: row.job_id, kind: row.kind };
+    const fields = { pr: this.name, jobId: row.job_id, kind: row.kind };
+    return row.kind === "analysis" ? { ...fields, headSha: row.target } : fields;
+  }
+
+  // --- Webhooks ---
+
+  // A verified delivery (/webhook). It is stored in the inbox as this call's first step, before anything awaits, so a
+  // delivery the route acknowledges is never lost; the wake that takes it in is armed before the call returns. A
+  // delivery whose ID is stored already is a duplicate and is not stored again. Taking it in is settle's.
+  async receive(delivery: Delivery): Promise<"received" | "duplicate"> {
+    const stored = addInbox(this.#sql, delivery);
+    if (stored !== "processed") {
+      await this.#armWake();
+    }
+    return stored === "new" ? "received" : "duplicate";
+  }
+
+  // Takes in each stored delivery, in the order stored; the order of heads comes from GitHub (moveHead), not from
+  // this one, except within a second. A delivery whose step fails stays stored for the next settle, which settle's
+  // retry wake runs.
+  async #drainInbox(): Promise<void> {
+    for (const delivery of pendingInbox(this.#sql)) {
+      await (delivery.push ? this.#takePush(delivery) : this.#takeUpdate(delivery));
+    }
+  }
+
+  // A push (opened, reopened, synchronize), taken in once: its details, and its head when GitHub's order makes it the
+  // current head (docs/design.md, Intake). Every other head's waiting analysis is then superseded; the head's own job
+  // is created if it has none, revived if it was superseded, and otherwise left as it is, so a push of the current head
+  // changes no job. A new or revived analysis reaches an agent in the same step, as a question's job does.
+  async #takePush(delivery: Delivery): Promise<void> {
+    await this.#armWake();
+    const owner = await this.#decideOwner();
+    const now = Date.now();
+    const change = this.ctx.storage.transactionSync(() => {
+      if (!takeInbox(this.#sql, delivery.deliveryId)) {
+        return null;
+      }
+      const moved = moveHead(this.#sql, delivery);
+      writeDetails(this.#sql, delivery);
+      const jobs = moved
+        ? ingestHeadJobs(this.#sql, delivery.details.headSha, now)
+        : { folded: [], created: undefined, revived: undefined };
+      const waiting = jobs.created ?? jobs.revived;
+      return { moved, ...jobs, waiting, cloud: waiting === undefined ? NO_CLOUD_OUTCOME : this.#newWork(owner, now) };
+    });
+    if (change === null) {
+      return;
+    }
+    this.#logTaken(delivery, change.moved);
+    for (const row of change.folded) {
+      log("prq.job.superseded", { ...this.#jobFields(row), from: "pending", to: "superseded" });
+    }
+    if (change.created !== undefined) {
+      log("prq.job.created", {
+        ...this.#jobFields(change.created),
+        to: this.#stateAfter(change.created, change.cloud),
+      });
+    }
+    if (change.revived !== undefined) {
+      const to = this.#stateAfter(change.revived, change.cloud);
+      log("prq.job.revived", { ...this.#jobFields(change.revived), from: "superseded", to });
+    }
+    this.#afterNewWork(change.cloud);
+    if (owner === "local" && change.waiting !== undefined) {
+      await this.#deliverOutbox();
+    }
+  }
+
+  // An edit or a close, taken in once: the pull request's details, when no later webhook has given them. No job.
+  #takeUpdate(delivery: Delivery): void {
+    const taken = this.ctx.storage.transactionSync(() => {
+      const fresh = takeInbox(this.#sql, delivery.deliveryId);
+      if (fresh) {
+        writeDetails(this.#sql, delivery);
+      }
+      return fresh;
+    });
+    if (taken) {
+      this.#logTaken(delivery, false);
+      this.#publishView();
+    }
+  }
+
+  #logTaken(delivery: Delivery, headMoved: boolean): void {
+    const { deliveryId, action, details } = delivery;
+    log("prq.inbox.taken", { pr: this.name, deliveryId, action, headSha: details.headSha, headMoved });
   }
 
   // --- Local jobs ---
@@ -413,19 +523,115 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       agentId,
     });
     this.#publishView();
-    const question = row.kind === "answer" ? await this.#message(row.target) : undefined;
-    return { job: this.#job(row, question), claimId, resumed: mode === "resume" };
+    return { job: this.#job(row), claimId, resumed: mode === "resume" };
   }
 
-  #job(row: JobRow, question: StoredMessage | undefined): Job {
-    const job: Job = {
-      jobId: row.job_id,
+  // What a local agent works on its claimed job from (/cli/context): the pull request, its details, the job as its claim
+  // fixed it, and a page of the conversation from the cursor (the start when there is none), the whole response within
+  // CONTEXT_PAGE_BYTES. Only the job's current claim, held by the agent, gets it. The claim is checked before the
+  // conversation is read, to size the page around the job, and again after it, in the step that answers, so the answer
+  // never carries a claim that had already ended.
+  async context(
+    agentId: string,
+    jobId: string,
+    claimId: string,
+    cursor?: string,
+  ): Promise<ContextResponse | ErrorResponse> {
+    const start = cursor === undefined ? { id: null, offset: 0 } : parseCursor(cursor);
+    if (start === null) {
+      return BAD_CURSOR;
+    }
+    const before = this.#heldJob(agentId, jobId, claimId);
+    if ("error" in before) {
+      return before;
+    }
+    const page = await this.#contextPage(start.id, start.offset, { pr: this.#pr(), job: this.#job(before) });
+    if ("error" in page) {
+      return page;
+    }
+    const row = this.#heldJob(agentId, jobId, claimId);
+    if ("error" in row) {
+      return row;
+    }
+    return {
       pr: this.#pr(),
-      run: row.run,
-      target: jobTarget(row),
-      workspaceSha: row.workspace_sha,
+      details: readDetails(this.#sql),
+      job: this.#job(row),
+      messages: page.messages,
+      nextCursor: page.next === null ? null : cursorText(page.next),
     };
-    return question === undefined ? job : { ...job, question: textOf(question) };
+  }
+
+  // The job, while the claim is its current one and held by the agent. A claim that holds has not changed the job since
+  // it was taken: a retry or a resume ends it.
+  #heldJob(agentId: string, jobId: string, claimId: string): JobRow | ErrorResponse {
+    const row = jobById(this.#sql, jobId);
+    if (row === undefined) {
+      return { error: "unknown_job" };
+    }
+    const held = row.state === "claimed" || row.state === "finalizing";
+    if (!held || row.claim_id !== claimId || row.agent_id !== agentId) {
+      return { error: "stale_claim", detail: "the claim is not the job's current one" };
+    }
+    return row;
+  }
+
+  // The messages from a place in the conversation (null for the start) that fit in the room the rest of the response
+  // leaves (messageRoom), and where the next page starts; BAD_CURSOR when the place is not in the conversation. The
+  // messages' IDs are read without their content, and only the page's messages are read whole, one at a time. A page
+  // holds at least part of a message. One that cannot, because the rest of the response or the first character of its
+  // first message does not fit, is refused rather than sent over the budget; bounded IDs and details keep that from
+  // happening but to rows stored before the bounds.
+  async #contextPage(
+    id: string | null,
+    offset: number,
+    around: Pick<ContextResponse, "pr" | "job">,
+  ): Promise<{ messages: ContextMessage[]; next: Cursor | null } | ErrorResponse> {
+    const session = this.sessions.session();
+    const ids = (await session.getHistoryRowStats()).map((stat) => stat.id);
+    let index = id === null ? 0 : ids.indexOf(id);
+    if (index < 0) {
+      return BAD_CURSOR;
+    }
+    const messages: ContextMessage[] = [];
+    let left = messageRoom(around, ids);
+    if (left < 0) {
+      return this.#pageOverflow(around.job);
+    }
+    for (let from = offset; index < ids.length; index += 1, from = 0) {
+      const stored = await session.getMessage(ids[index] ?? "");
+      const message = stored === null ? null : contextMessage(stored);
+      if (message === null) {
+        continue;
+      }
+      if (from > 0 && from >= message.text.length) {
+        return BAD_CURSOR;
+      }
+      // A comma before each message but the first, counted for all.
+      left -= 1;
+      const taken = take(message, from, left, messages.length === 0);
+      if (taken === null) {
+        return messages.length === 0
+          ? this.#pageOverflow(around.job)
+          : { messages, next: { id: message.id, offset: from } };
+      }
+      messages.push(taken);
+      const end = (taken.part?.offset ?? 0) + taken.text.length;
+      if (end < message.text.length) {
+        return { messages, next: { id: message.id, offset: end } };
+      }
+      left -= jsonBytes(taken);
+    }
+    return { messages, next: null };
+  }
+
+  #pageOverflow(job: Job): ErrorResponse {
+    log("prq.context.overflow", { pr: this.name, jobId: job.jobId }, "error");
+    return { error: "internal", detail: "the conversation from this place does not fit in a context page" };
+  }
+
+  #job(row: JobRow): Job {
+    return { jobId: row.job_id, pr: this.#pr(), run: row.run, target: jobTarget(row), workspaceSha: row.workspace_sha };
   }
 
   async #message(id: string): Promise<StoredMessage | undefined> {
@@ -481,13 +687,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       });
     }
     this.#publishView();
-    const metadata: MessageMetadata = {
-      kind: "answer",
-      jobId,
-      questionId: reserved.target,
-      sha: reserved.workspace_sha,
-      by: { kind: "local", agentId },
-    };
+    const by = { kind: "local", agentId } as const;
+    const metadata: MessageMetadata =
+      reserved.kind === "answer"
+        ? { kind: "answer", jobId, questionId: reserved.target, sha: reserved.workspace_sha, by }
+        : { kind: "analysis", jobId, headSha: reserved.target, by };
     const messageId = resultMessageId(reserved);
     try {
       await this.insertMessages([{ id: messageId, role: "assistant", metadata, parts: [{ type: "text", text }] }]);
@@ -515,9 +719,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // The host's retry of a claimed or failed job: back to waiting with the claim cleared, so the earlier claimId is
-  // rejected from now on. expectedRev: the job's revision in the view the retry was made from. The retry's statement
-  // applies it only while the job is still at it, so a retry never undoes a change made after that view (a claim, another
-  // retry, a new failure) however late it lands. A refused one changes no job state; any wake it armed only settles.
+  // rejected from now on. The analysis of a head that is no longer current is superseded instead (its claim cleared as
+  // well), decided in the retry's statement against the head as it is then. expectedRev: the job's revision in the
+  // view the retry was made from. The retry's statement applies it only while the job is still at it, so a retry never
+  // undoes a change made after that view (a claim, another retry, a new failure) however late it lands. A refused one
+  // changes no job state; any wake it armed only settles.
   async retryJob(jobId: string, expectedRev: number): Promise<RetryResponse | ErrorResponse> {
     const before = jobById(this.#sql, jobId);
     if (before === undefined) {
@@ -532,21 +738,25 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const change = this.ctx.storage.transactionSync(() => {
       const from = jobById(this.#sql, jobId)?.state;
       const row = retry(this.#sql, jobId, expectedRev, now);
-      return row === undefined ? null : { from, row, cloud: this.#newWork(owner, now) };
+      if (row === undefined) {
+        return null;
+      }
+      return { from, row, cloud: row.state === "pending" ? this.#newWork(owner, now) : NO_CLOUD_OUTCOME };
     });
     if (change === null) {
       return { error: "stale_job", detail: "the job changed since the view the retry was made from" };
     }
+    const waiting = change.row.state === "pending";
     log("prq.job.retried", {
       ...this.#jobFields(change.row),
       from: change.from,
       to: this.#stateAfter(change.row, change.cloud),
     });
     this.#afterNewWork(change.cloud);
-    if (owner === "local") {
+    if (waiting && owner === "local") {
       await this.#deliverOutbox();
     }
-    return { status: "retried" };
+    return { status: waiting ? "retried" : "superseded" };
   }
 
   // --- The wake, settle and the outbox ---
@@ -557,9 +767,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     await this.schedule(delayS, "settle", undefined, { idempotent: false });
   }
 
-  // Run by the wake and at every start: finishes what a stop or a failure left. Each step is idempotent, and a failing
-  // step does not stop the others.
+  // Run by the wake and at every start: takes in the stored webhook deliveries, and finishes what a stop or a failure
+  // left. Each step is idempotent, and a failing step does not stop the others.
   async settle(): Promise<void> {
+    await this.#attempt("inbox", () => this.#drainInbox());
     await this.#attempt("create_jobs", () => this.createJobs());
     await this.#attempt("sweep", () => this.#writes.run(() => this.#sweepFinalizing()));
     await this.#attempt("cloud", () => this.#settleCloud());

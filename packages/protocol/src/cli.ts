@@ -1,6 +1,7 @@
 import * as v from "valibot";
 
-import { AgentId, MessageId, PrRef, Sha } from "./pr.ts";
+import { MessageMetadata } from "./messages.ts";
+import { AgentId, MessageId, PrDetails, PrRef, Sha } from "./pr.ts";
 
 // The longest answer a submit carries, in UTF-16 code units. Stored as JSON, each unit takes at most 6 bytes (a
 // `\u00XX` escape), so an answer stays under the Durable Object SQLite value limit (8 MB); it also bounds the history
@@ -16,20 +17,21 @@ export const JobTarget = v.variant("kind", [
 ]);
 export type JobTarget = v.InferOutput<typeof JobTarget>;
 
-// The job's run: 1 at first, advanced only when the host retries the job. A submit names the run its answer was
-// produced under, and is accepted only while the job is still in that run.
+// The job's run: 1 at first, advanced each time the job goes back to waiting (the host retries it, or a push returns to
+// its superseded head). A submit names the run its answer was produced under, and is accepted only while the job is
+// still in that run.
 const Run = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
 
 // A job as a local agent receives it. workspaceSha is the commit to work at, fixed when the job was claimed: an
-// analysis's head; for an answer the head of the latest completed analysis, or null when there is none. question is
-// the question's text, for an answer.
+// analysis's head; for an answer the head of the latest completed analysis, else the current head, else null (no push
+// seen yet). An answer's question is the message its target names, which the agent reads from the context's pages: a
+// job carries no text of unbounded length, so a claim and each context page stay within an RPC call.
 export const Job = v.object({
   jobId: Uuid,
   pr: PrRef,
   run: Run,
   target: JobTarget,
   workspaceSha: v.nullable(Sha),
-  question: v.optional(v.string()),
 });
 export type Job = v.InferOutput<typeof Job>;
 
@@ -73,3 +75,43 @@ export type SubmitRequest = v.InferOutput<typeof SubmitRequest>;
 // submitted it and nothing was added.
 export const SubmitResponse = v.object({ status: v.picklist(["accepted", "duplicate"]), messageId: MessageId });
 export type SubmitResponse = v.InferOutput<typeof SubmitResponse>;
+
+// /cli/context: what a local agent works on its claimed job from, asked under the claim that holds it. pr is accepted in
+// any case. cursor is the nextCursor of the page before; none for the first page.
+export const ContextRequest = v.object({
+  agentId: AgentId,
+  pr: PrRef,
+  jobId: Uuid,
+  claimId: Uuid,
+  cursor: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))),
+});
+export type ContextRequest = v.InferOutput<typeof ContextRequest>;
+
+// A conversation message as a local agent reads it: its text, and the metadata of a message the server appended. A
+// message too large for one page comes in parts, each in a page of its own: part says where its text starts in the
+// message's text and how long the whole text is, and the agent joins the parts of one ID in order.
+const ContextMessage = v.object({
+  id: MessageId,
+  role: v.picklist(["user", "assistant"]),
+  text: v.string(),
+  metadata: v.optional(MessageMetadata),
+  part: v.optional(
+    v.object({
+      offset: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+      length: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+    }),
+  ),
+});
+
+// The answer to a context request: the canonical pull request, its details (null before its first webhook), the job as
+// its claim fixed it (workspaceSha included), and one page of the conversation, oldest first. nextCursor asks for the
+// next page; null when this page reached the end. The conversation is append-only, so a cursor stays valid while
+// messages are added. The whole response, not only its messages, stays within the server's page budget.
+export const ContextResponse = v.object({
+  pr: PrRef,
+  details: v.nullable(PrDetails),
+  job: Job,
+  messages: v.array(ContextMessage),
+  nextCursor: v.nullable(v.string()),
+});
+export type ContextResponse = v.InferOutput<typeof ContextResponse>;

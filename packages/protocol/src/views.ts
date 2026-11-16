@@ -1,7 +1,7 @@
 import * as v from "valibot";
 
 import { JobTarget } from "./cli.ts";
-import { PrRef } from "./pr.ts";
+import { PrDetails, PrRef } from "./pr.ts";
 
 // Sent on every WebSocket connection to the Hub and to a PrSession: a browser cannot read the Prq-Version header of a
 // WebSocket response, so the UI learns the server's version from this message (docs/design.md, Versions).
@@ -34,15 +34,21 @@ export const JobView = v.object({
 });
 export type JobView = v.InferOutput<typeof JobView>;
 
-// A PrSession's Agent state, synced to the UI by useAgent: the pull request, its owner (null until the first job) and
-// its jobs, oldest first. Only the server sets it.
-export const PrSessionView = v.object({ pr: PrRef, owner: v.nullable(Owner), jobs: v.array(JobView) });
+// A PrSession's Agent state, synced to the UI by useAgent: the pull request, its details (null until its first
+// webhook), its owner (null until the first job) and its jobs, oldest first. Only the server sets it.
+export const PrSessionView = v.object({
+  pr: PrRef,
+  details: v.nullable(PrDetails),
+  owner: v.nullable(Owner),
+  jobs: v.array(JobView),
+});
 export type PrSessionView = v.InferOutput<typeof PrSessionView>;
 
 // A retry's body: the job's rev in the view the host retried from.
 export const RetryRequest = v.object({ expectedRev: v.pipe(v.number(), v.safeInteger(), v.minValue(0)) });
 export type RetryRequest = v.InferOutput<typeof RetryRequest>;
 
-// The answer to a retry.
-export const RetryResponse = v.object({ status: v.literal("retried") });
+// The answer to a retry: retried when the job waits again; superseded when it is the analysis of a head that is no
+// longer current, which only the current head's analysis replaces (its claim ended all the same).
+export const RetryResponse = v.object({ status: v.picklist(["retried", "superseded"]) });
 export type RetryResponse = v.InferOutput<typeof RetryResponse>;

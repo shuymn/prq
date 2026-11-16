@@ -1,4 +1,5 @@
 import { MessageType } from "@cloudflare/ai-chat/types";
+import { MessageId } from "@prq/protocol";
 import type { WSMessage } from "agents";
 import type { UIMessage } from "ai";
 import * as v from "valibot";
@@ -38,10 +39,13 @@ const ChatRequestBody = v.looseObject({
   ),
 });
 
-// A client's chat request with the messages a client may not add taken out: a client adds questions (role user) only,
-// so another message passes only when its ID is stored, as an echo of the history the client loaded. Returns the frame
-// to hand on and how many messages were taken out, or, for a chat request not in that shape, that it is refused whole
-// (with its ID, when it has one, to answer); any other frame passes unchanged.
+// A client's chat request with the messages a client may not add taken out: a client adds questions (role user, no
+// metadata: metadata marks a message the server added) only, so another message passes only when its ID is stored, as
+// an echo of the history the client loaded. Returns the frame to hand on and how many messages were taken out, or, for
+// a chat request not in that shape or adding a message whose ID is not a MessageId (1 to 256 characters), that it is
+// refused whole, before anything is stored (with its ID, when it has one, to answer); any other frame passes
+// unchanged. A stored message is echoed whatever its ID, so a row from before the bound does not refuse every later
+// request.
 export function questionsOnly(
   message: WSMessage,
   isStored: (id: string) => boolean,
@@ -52,11 +56,18 @@ export function questionsOnly(
   }
   const frame = v.safeParse(ChatRequest, parsed);
   const body = frame.success ? v.safeParse(ChatRequestBody, parseJson(frame.output.init.body)) : undefined;
-  if (!frame.success || body?.success !== true) {
+  if (
+    !frame.success ||
+    body?.success !== true ||
+    // A message it would add whose ID is past MessageId.
+    body.output.messages.some((item) => !v.is(MessageId, item.id) && !isStored(item.id))
+  ) {
     const id: unknown = typeof parsed === "object" && parsed !== null ? Reflect.get(parsed, "id") : undefined;
     return { refusedId: typeof id === "string" ? id : null };
   }
-  const messages = body.output.messages.filter((item) => item.role === "user" || isStored(item.id));
+  const messages = body.output.messages.filter(
+    (item) => (item.role === "user" && item.metadata === undefined) || isStored(item.id),
+  );
   const removed = body.output.messages.length - messages.length;
   if (removed === 0) {
     return { message, removed };
@@ -65,7 +76,8 @@ export function questionsOnly(
   return { message: JSON.stringify({ ...frame.output, init }), removed };
 }
 
-export const CHAT_REQUEST_REFUSED = "Chat request refused: every message must be a UIMessage with an ID and parts.";
+export const CHAT_REQUEST_REFUSED =
+  "Chat request refused: every message must be a UIMessage with parts, and a new one an ID of 1 to 256 characters.";
 
 // The answer to a refused chat request. The SDK client ends a request on a response for its ID that is done and marked
 // as an error, failing it with the body as the message; without one, its send would wait until the socket closes.

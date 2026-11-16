@@ -16,6 +16,10 @@ declare global {
       ACCESS_TEAM_DOMAIN: string;
       // The protected Access application's AUD tag.
       ACCESS_AUD: string;
+      // The GitHub App's webhook secret.
+      WEBHOOK_SECRET: string;
+      // The host's numeric GitHub user ID: only pull requests the host authored are taken in.
+      HOST_GITHUB_ID: string;
     }
   }
 
