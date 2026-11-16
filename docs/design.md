@@ -108,9 +108,10 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   new job, with a new `claimId`. A process that was killed and restarted can therefore continue at once, and an answer
   that arrives late from the old process is rejected. A resume is a claim: it also sets the claim time again.
 - A job claimed by one agent ID shall not be returned to another agent ID.
-- When a `submit` arrives, the system shall accept it only if `jobId`, `claimId` and the target (head SHA or question
-  message ID) match the current state. When the same `jobId` is submitted again, the system shall return the result
-  already recorded and shall not add it to the conversation a second time.
+- When a `submit` arrives, the system shall accept it only if `jobId`, `claimId`, the agent ID and the target (head SHA
+  or question message ID) match the current state. When the submit that completed a job arrives again (the same
+  `claimId`, agent ID and target), the system shall return the result already recorded and shall not add it to the
+  conversation a second time; any other submit to a completed job is rejected.
 - A submit waits for the conversation to settle (`waitUntilStable`) before it enters the history write queue: the SDK
   counts a client's save as pending until the save returns, so waiting inside the queue could wait on a save queued
   behind the submit. Inside the queue it reads the job again, checks it, moves it from `claimed` to `finalizing` (the
@@ -136,7 +137,10 @@ UI, webhook and CLI input all enter through PrSession.
 - When the UI sends a message, it arrives in `onChatMessage`. PrSession runs no turn there: it creates a job for every
   user question that has none (deciding the owner at the session's first job) and hands the jobs on, to the Hub for a
   `local` session and to the cloud agent for a `cloud` one. A question can already be stored when a later turn starts,
-  which is why every question without a job gets one, not only the last message.
+  which is why every question without a job gets one, not only the last message. The questions are read from the stored
+  history, not from `this.messages`, which holds only the most recent part: a question stored before a stop can be
+  older than that. Questions are only appended and each step gives every question it finds a job, so the read goes
+  from the newest message and ends at the first question that has a job.
 - An analysis is made per push, at the pushed head SHA: GitHub sends one `pull_request` event per push, and the commits
   inside a push are not analyzed one by one.
 - When a webhook arrives, it goes to the PrSession, not to the Hub. The PrSession always records the pushed SHA as the

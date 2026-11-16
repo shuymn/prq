@@ -81,30 +81,30 @@ describe("claim", () => {
     expect(await stub.claim("agent-c", "fresh")).toEqual({ job: null });
   });
 
-  it("gives two interleaved claims different jobs", async () => {
+  it("gives two claims let go at the same moment different jobs", async () => {
     captureLogs();
     const { stub } = await localSession(Q1, Q2);
+    // Both claims are held before choosing a job, on one latch, so they go on together: a claim that awaited anything
+    // between choosing its job and taking it would let the other choose the same one.
     const held = await gate(stub);
     await runInDurableObject(stub, (instance) => {
       const seams = prSessionSeams(instance);
       const owner = seams.ownerOf.bind(instance);
-      vi.spyOn(seams, "ownerOf").mockImplementationOnce(async () => {
+      vi.spyOn(seams, "ownerOf").mockImplementation(async () => {
         await held.wait();
         return owner();
       });
     });
     const claimA = tracked(stub.claim("agent-a", "fresh"));
-    await held.reached();
-    const b = claimed(await stub.claim("agent-b", "fresh"));
-    expect((await stub.peek("agent-a")).open).toBe(true);
-    expect(claimA.settled()).toBe(false);
+    const claimB = tracked(stub.claim("agent-b", "fresh"));
+    await held.reached(2);
+    expect((await stub.peek("agent-a")).fresh).toBe(true);
+    expect([claimA.settled(), claimB.settled()]).toEqual([false, false]);
 
     await held.open();
-    const a = claimed(await claimA.promise);
-    expect([b.target, a.target]).toEqual([
-      { kind: "answer", messageId: "q1" },
-      { kind: "answer", messageId: "q2" },
-    ]);
+    const targets = [claimed(await claimA.promise), claimed(await claimB.promise)].map((claim) => claim.target);
+    expect(targets).toContainEqual({ kind: "answer", messageId: "q1" });
+    expect(targets).toContainEqual({ kind: "answer", messageId: "q2" });
   });
 
   it("gives the question's text and no workspace before any analysis", async () => {
@@ -144,6 +144,24 @@ describe("submit", () => {
 
     expect(await jobRows(stub)).toEqual(before);
     expect(await answers(session)).toEqual([]);
+  });
+
+  it("answers a repeat of the submit that finished a job as a duplicate, and refuses another agent or target", async () => {
+    captureLogs();
+    const session = await localSession(Q1, Q2);
+    const { stub } = session;
+    const good = submission(await stub.claim("agent-a", "fresh"), "agent-a");
+    const accepted = await stub.submit(good);
+    expect(accepted).toMatchObject({ status: "accepted" });
+    const done = await jobRows(stub);
+
+    expect(await stub.submit({ ...good, agentId: "agent-b" })).toMatchObject({ error: "stale_claim" });
+    expect(await stub.submit({ ...good, target: { kind: "answer", messageId: "q2" } })).toEqual({
+      error: "target_mismatch",
+    });
+    expect(await stub.submit(good)).toEqual({ ...accepted, status: "duplicate" });
+    expect(await jobRows(stub)).toEqual(done);
+    expect(await answers(session)).toHaveLength(1);
   });
 
   it("keeps the first answer of a resubmit, sequential or queued behind the first with other text", async () => {
@@ -433,11 +451,8 @@ describe("retry", () => {
   });
 });
 
-function jobEvents(logs: LogEntry[]) {
-  return logs
-    .map((log) => log.entry)
-    .filter((entry) => String(entry["event"]).startsWith("prq.job."))
-    .map(({ event, from, to }) => ({ event, from, to }));
+function jobLogs(logs: LogEntry[]) {
+  return logs.map((log) => log.entry).filter((entry) => String(entry["event"]).startsWith("prq.job."));
 }
 
 describe("logs", () => {
@@ -452,19 +467,20 @@ describe("logs", () => {
     await stub.submit(submission(claimB, "agent-b", "secret answer"));
     await stub.submit(submission(claimA, "agent-a", "secret answer"));
 
-    expect(jobEvents(logs)).toEqual([
-      { event: "prq.job.created", from: undefined, to: "pending" },
-      { event: "prq.job.claimed", from: "pending", to: "claimed" },
-      { event: "prq.job.resumed", from: "claimed", to: "claimed" },
-      { event: "prq.job.retried", from: "claimed", to: "pending" },
-      { event: "prq.job.claimed", from: "pending", to: "claimed" },
-      { event: "prq.job.submitted", from: "finalizing", to: "done" },
-      { event: "prq.job.duplicate", from: undefined, to: undefined },
-      { event: "prq.job.rejected", from: undefined, to: undefined },
+    const entries = jobLogs(logs);
+    expect(entries.map(({ event, from, to, agentId, reason }) => ({ event, from, to, agentId, reason }))).toEqual([
+      { event: "prq.job.created", from: undefined, to: "pending", agentId: undefined, reason: undefined },
+      { event: "prq.job.claimed", from: "pending", to: "claimed", agentId: "agent-a", reason: undefined },
+      { event: "prq.job.resumed", from: "claimed", to: "claimed", agentId: "agent-a", reason: undefined },
+      { event: "prq.job.retried", from: "claimed", to: "pending", agentId: undefined, reason: undefined },
+      { event: "prq.job.claimed", from: "pending", to: "claimed", agentId: "agent-b", reason: undefined },
+      { event: "prq.job.submitted", from: "finalizing", to: "done", agentId: "agent-b", reason: undefined },
+      { event: "prq.job.duplicate", from: undefined, to: undefined, agentId: "agent-b", reason: undefined },
+      { event: "prq.job.rejected", from: undefined, to: undefined, agentId: "agent-a", reason: "stale_claim" },
     ]);
-    const jobId = claimA.job?.jobId;
-    for (const entry of logs.map((log) => log.entry).filter((e) => String(e["event"]).startsWith("prq.job."))) {
-      expect(entry).toMatchObject({ pr: name, jobId });
+    // Every entry names the session, the job and its kind.
+    for (const entry of entries) {
+      expect(entry).toMatchObject({ pr: name, jobId: claimA.job?.jobId, kind: "answer" });
     }
     expect(JSON.stringify(logs)).not.toMatch(/secret/);
   });

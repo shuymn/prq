@@ -13,6 +13,7 @@ import type { PrSession } from "./pr-session/index.ts";
 import { captureLogs, type LogEntry } from "./test/access.ts";
 import { type AgentSocket, answer, connect, hostToken, question, storedMessages } from "./test/chat.ts";
 import { latch } from "./test/latch.ts";
+import { hydrateRecent } from "./test/session.ts";
 
 const sockets: AgentSocket[] = [];
 
@@ -335,15 +336,6 @@ describe("clients only add", () => {
     expect(await storedMessages(path, token)).toEqual([Q1, Q2, A1]);
   });
 });
-
-// The cache (this.messages) as after a restart: the SDK's own hydration, under the given budget. Returns the cached IDs.
-async function hydrateRecent(stub: DurableObjectStub<PrSession>, budget: number): Promise<string[]> {
-  return runInDurableObject(stub, async (instance) => {
-    instance.hydrationByteBudget = budget;
-    await Reflect.get(instance, "_hydrateMessages").call(instance);
-    return instance.messages.map((message) => message.id);
-  });
-}
 
 // A question big enough that a 1-byte budget holds only the most recent one.
 function long(id: string): UIMessage {

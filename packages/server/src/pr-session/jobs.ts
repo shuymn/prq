@@ -52,15 +52,10 @@ export function allJobs(sql: SqlStorage): JobRow[] {
   return sql.exec<JobRow>("SELECT * FROM prq_jobs ORDER BY seq").toArray();
 }
 
-// The question IDs among `ids` that have no answer job.
-export function withoutJobs(sql: SqlStorage, ids: readonly string[]): string[] {
-  const known = new Set(
-    sql
-      .exec<{ target: string }>("SELECT target FROM prq_jobs WHERE kind = 'answer'")
-      .toArray()
-      .map((row) => row.target),
+export function hasAnswerJob(sql: SqlStorage, questionId: string): boolean {
+  return (
+    sql.exec("SELECT 1 FROM prq_jobs WHERE kind = 'answer' AND target = ? LIMIT 1", questionId).toArray().length > 0
   );
-  return ids.filter((id) => !known.has(id));
 }
 
 // A pending answer job per question that has none, in the given order.
