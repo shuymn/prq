@@ -25,6 +25,8 @@ describe("schema", () => {
   it("applies each step once, in order, and leaves the version where a failed step started", async () => {
     const stub = await prSessionStub(env, { owner: "octo", repo: "schema", number: 2 });
     await runInDurableObject(stub, (_, { storage }) => {
+      // From a database no step has been applied to.
+      storage.sql.exec("DROP TABLE prq_schema");
       const rows = () => storage.sql.exec("SELECT x FROM steps ORDER BY rowid").toArray();
       const steps = ["CREATE TABLE steps (x INTEGER)", "INSERT INTO steps VALUES (1)"];
 

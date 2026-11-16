@@ -1,4 +1,5 @@
 import { ErrorResponse } from "@prq/protocol";
+import type { Agent } from "agents";
 import { listDurableObjectIds, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import * as v from "valibot";
@@ -145,7 +146,10 @@ describe("no sub-agents", () => {
     captureLogs();
     const instance = await stub();
     const children = () =>
-      runInDurableObject(instance, (agent) => ({ all: agent.listSubAgents(), evil: agent.hasSubAgent(child, "evil") }));
+      runInDurableObject(instance, (agent: Agent<Env>) => ({
+        all: agent.listSubAgents(),
+        evil: agent.hasSubAgent(child, "evil"),
+      }));
 
     const res = await instance.fetch(`https://prq.example${path}`);
     expect(await children()).toEqual({ all: [], evil: false });
