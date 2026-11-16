@@ -395,6 +395,12 @@ describe("context pages", () => {
     expect(take(message, 0, jsonBytes(pair) - 1, true)).toBeNull();
   });
 
+  it("takes a leading surrogate pair whole when the cut lands inside it, in mixed text", () => {
+    // The shrinking cut jumps straight to one code unit here; the pair fits though half of it, escaped, does not.
+    const message = { id: "x", role: "user", text: "\u{1F600}abc\u{1F600}def".repeat(4) } as const;
+    expect(take(message, 0, 70, true)).toEqual({ ...message, text: "\u{1F600}", part: { offset: 0, length: 40 } });
+  });
+
   it("never ends a part inside a surrogate pair, whatever room the page has", () => {
     const message = { id: "emoji", role: "assistant", text: "\u{1F600}".repeat(64) } as const;
     // From room for one character up: the cut falls on either half of a pair across these.
