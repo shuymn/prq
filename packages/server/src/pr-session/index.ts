@@ -589,12 +589,8 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   // (a new row: an idempotent one would match this running one). For a claim that has ended, or whose stall settle has
   // published already, nothing changes.
   async claimAged(payload: ClaimRef): Promise<void> {
-    const held = (): JobRow | undefined => {
-      const row = jobById(this.#sql, payload.jobId);
-      return row?.claim_id === payload.claimId && isHeld(row) ? row : undefined;
-    };
-    const row = held();
-    if (row === undefined) {
+    const row = jobById(this.#sql, payload.jobId);
+    if (row === undefined || row.claim_id !== payload.claimId || !isHeld(row)) {
       return;
     }
     const deadline = stallDeadline(row);

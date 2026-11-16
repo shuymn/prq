@@ -76,15 +76,13 @@ export const LedgerClaim = v.object({
 });
 export type LedgerClaim = v.InferOutput<typeof LedgerClaim>;
 
+const JobCount = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
+
 // A count of jobs by what the host sees of them: waiting (pending), running (claimed, being finalized or run by the
 // cloud agent) and failed (an unresolved failure, as the labels count one: a failed answer until a retry of it
 // completes, and the current head's failed analysis until one of the head completes; a retried job also counts as
 // waiting or running meanwhile).
-export const JobCounts = v.object({
-  waiting: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-  running: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-  failed: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-});
+export const JobCounts = v.object({ waiting: JobCount, running: JobCount, failed: JobCount });
 export type JobCounts = v.InferOutput<typeof JobCounts>;
 
 // A pull request as the list shows it: its details (null until its first webhook), its owner (null until its first
