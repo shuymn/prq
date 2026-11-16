@@ -15,7 +15,7 @@ export const PRESENCE_MS = 10 * 60_000;
 // How long a call to a PrSession may take, the session's start included.
 const SESSION_CALL_MS = 10_000;
 // The longest a wait lasts; the agent then waits again.
-const WAIT_MAX_MS = 25_000;
+export const WAIT_MAX_MS = 25_000;
 
 type Notification = { session: string; gen: number };
 
@@ -138,12 +138,13 @@ export class Hub extends Agent<Env> {
   // check changes the Hub's counter, which the wait reads before the check and compares after it, so it checks again
   // rather than sleep past the notify.
   async #wait(agentId: string, timeoutMs: number | undefined, signal: AbortSignal): Promise<WaitResponse> {
-    const waitMs = Math.min(timeoutMs ?? Number.POSITIVE_INFINITY, this.waitMaxMs());
-    const end = waitEnd(waitMs, signal);
+    const waitMs = Math.min(timeoutMs ?? WAIT_MAX_MS, WAIT_MAX_MS);
+    const end = waitEnd(signal, (ended) => this.waitTimer(waitMs, ended));
     const waiter = { wake: () => {} };
     this.#waiters.add(waiter);
-    this.touch(agentId);
     try {
+      // The start is a contact. Written inside the try, so a failed write still drops the waiter and the timer.
+      this.touch(agentId);
       while (!end.ended()) {
         const seen = this.#gen();
         if ((await end.race(this.hasWork(agentId))) === true) {
@@ -165,9 +166,10 @@ export class Hub extends Agent<Env> {
     }
   }
 
-  // The longest a wait lasts (spied on in tests).
-  protected waitMaxMs(): number {
-    return WAIT_MAX_MS;
+  // Ends a wait after ms, and returns the timer's cancel (spied on in tests, which end waits by hand).
+  protected waitTimer(ms: number, end: () => void): () => void {
+    const timer = setTimeout(end, ms);
+    return () => clearTimeout(timer);
   }
 
   // --- Claim ---
@@ -232,8 +234,8 @@ export class Hub extends Agent<Env> {
   }
 }
 
-// A wait's end: its bound passing or its request's abort, whichever comes first.
-function waitEnd(ms: number, signal: AbortSignal) {
+// A wait's end: its bound passing (the timer `start` sets) or its request's abort, whichever comes first.
+function waitEnd(signal: AbortSignal, start: (end: () => void) => () => void) {
   let ended = false;
   let end!: () => void;
   const reached = new Promise<undefined>((resolve) => {
@@ -242,7 +244,7 @@ function waitEnd(ms: number, signal: AbortSignal) {
       resolve(undefined);
     };
   });
-  const timer = setTimeout(end, ms);
+  const cancel = start(end);
   signal.addEventListener("abort", end);
   if (signal.aborted) {
     end();
@@ -252,7 +254,7 @@ function waitEnd(ms: number, signal: AbortSignal) {
     // The promise's outcome, or undefined once the wait has ended.
     race: <T>(promise: Promise<T>): Promise<T | undefined> => Promise.race([promise, reached]),
     dispose: () => {
-      clearTimeout(timer);
+      cancel();
       signal.removeEventListener("abort", end);
     },
   };

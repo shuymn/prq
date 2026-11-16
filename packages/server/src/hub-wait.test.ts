@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PRESENCE_MS } from "./hub.ts";
 import { captureLogs, request } from "./test/access.ts";
 import { type AgentSocket, hostToken, question } from "./test/chat.ts";
-import { lastSeenAgo, localSession, waitOver, waitStatus, watchChecks } from "./test/cli.ts";
+import { controlWaitTimers, lastSeenAgo, localSession, waitOver, waitStatus, watchChecks } from "./test/cli.ts";
 import { clearQueue, gate, hub, hubSeams, queued, setPool, tracked, within } from "./test/session.ts";
 
 const sockets: AgentSocket[] = [];
@@ -52,7 +52,7 @@ describe("notify during check", () => {
     const { client, name } = await localSession("wait", sockets);
     // The first check is held after it found nothing.
     const checks = await watchChecks(1);
-    const wait = tracked(waitStatus(waitOver(token, "laptop", 3000)));
+    const wait = tracked(waitStatus(waitOver(token, "laptop", LONG_MS)));
     await checks.held.reached();
 
     // The question's job is created and the Hub notified while the check is held.
@@ -61,7 +61,7 @@ describe("notify during check", () => {
     expect(wait.settled()).toBe(false);
 
     await checks.held.open();
-    expect(await wait.promise).toBe("ready");
+    expect(await within(wait.promise, 3000)).toBe("ready");
   });
 });
 
@@ -142,7 +142,7 @@ describe("an aborted wait", () => {
 describe("the wait's bound", () => {
   it("answers timeout once its bound passes, even while a session does not answer its check", async () => {
     captureLogs();
-    const { name } = await localSession("wait", sockets, Q1);
+    const { name, token } = await localSession("wait", sockets, Q1);
     // The check's peek of the session is held.
     const held = await gate(await hub());
     await runInDurableObject(await hub(), (instance) => {
@@ -152,12 +152,38 @@ describe("the wait's bound", () => {
         throw new Error("never answered");
       });
     });
-    const token = await hostToken();
-
-    expect(await within(waitStatus(waitOver(token, "laptop", 100)), 3000)).toBe("timeout");
-    expect(held.isReached()).toBe(true);
+    const timers = await controlWaitTimers();
+    const wait = tracked(waitStatus(waitOver(token, "laptop", LONG_MS)));
+    await held.reached();
+    await timers.started();
+    // A sentinel read of the Hub goes through while the check is held.
     expect(await queued()).toContain(name);
+    expect(wait.settled()).toBe(false);
+
+    await timers.expire();
+    expect(await within(wait.promise, 3000)).toBe("timeout");
+    expect(timers.timers()).toEqual([{ ms: LONG_MS, cancelled: true }]);
     await held.open();
+  });
+});
+
+describe("a wait whose first contact fails", () => {
+  it("answers 500 and drops its waiter and its timer", async () => {
+    captureLogs();
+    await setPool([]);
+    const token = await hostToken();
+    const timers = await controlWaitTimers();
+    await runInDurableObject(await hub(), (instance) => {
+      vi.spyOn(instance, "touch").mockImplementationOnce(() => {
+        throw new Error("storage failed");
+      });
+    });
+
+    expect((await waitOver(token, "laptop", LONG_MS)).status).toBe(500);
+    expect(timers.timers()).toEqual([{ ms: LONG_MS, cancelled: true }]);
+    // The wait's end is still a contact; once that is old, nothing keeps the agent present.
+    await lastSeenAgo(PRESENCE_MS);
+    expect(await isPresent()).toBe(false);
   });
 });
 

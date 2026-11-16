@@ -10,7 +10,7 @@ import { expect, vi } from "vitest";
 
 import { request } from "./access.ts";
 import type { AgentSocket } from "./chat.ts";
-import { gate, hub, newSession, setPool, submission } from "./session.ts";
+import { gate, hub, hubSeams, newSession, setPool, submission } from "./session.ts";
 
 // A local session (the agent "laptop" present) with the given questions asked over a chat connection.
 export async function localSession(repo: string, sockets: AgentSocket[], ...questions: UIMessage[]) {
@@ -96,4 +96,26 @@ export async function lastSeenAgo(ms: number): Promise<void> {
   await runInDurableObject(await hub(), (_, state) => {
     state.storage.sql.exec("UPDATE prq_agents SET last_seen_at = ?", Date.now() - ms);
   });
+}
+
+// Takes over the timers that end the Hub's waits: each wait's bound is recorded with whether it was cancelled, and a
+// wait reaches its bound only when the test expires it.
+export async function controlWaitTimers() {
+  const stub = await hub();
+  const timers: { ms: number; end: () => void; cancelled: boolean }[] = [];
+  await runInDurableObject(stub, (instance) => {
+    vi.spyOn(hubSeams(instance), "waitTimer").mockImplementation((ms, end) => {
+      const timer = { ms, end, cancelled: false };
+      timers.push(timer);
+      return () => {
+        timer.cancelled = true;
+      };
+    });
+  });
+  return {
+    timers: () => timers.map(({ ms, cancelled }) => ({ ms, cancelled })),
+    started: (count = 1) => vi.waitFor(() => expect(timers.length).toBeGreaterThanOrEqual(count), { timeout: 3000 }),
+    // Ends the latest wait as its bound passing would.
+    expire: () => runInDurableObject(stub, () => timers.at(-1)?.end()),
+  };
 }

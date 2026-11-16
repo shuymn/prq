@@ -4,6 +4,7 @@ import { runInDurableObject } from "cloudflare:test";
 import * as v from "valibot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { WAIT_MAX_MS } from "./hub.ts";
 import app from "./index.ts";
 import {
   accessToken,
@@ -19,6 +20,7 @@ import { type AgentSocket, hostToken, question, storedMessages } from "./test/ch
 import {
   accepted,
   claimOver,
+  controlWaitTimers,
   localSession,
   post,
   retryOver,
@@ -27,17 +29,7 @@ import {
   waitStatus,
   watchChecks,
 } from "./test/cli.ts";
-import {
-  clearQueue,
-  holdInsert,
-  hub,
-  hubSeams,
-  prSessionSeams,
-  type Session,
-  setPool,
-  tracked,
-  within,
-} from "./test/session.ts";
+import { clearQueue, holdInsert, hub, prSessionSeams, type Session, setPool, tracked, within } from "./test/session.ts";
 import { SERVER_VERSION } from "./version.ts";
 
 const sockets: AgentSocket[] = [];
@@ -83,7 +75,16 @@ describe("wait returns at once", () => {
     expect((await claimOver(token, "laptop")).job).not.toBeNull();
 
     expect(await within(waitStatus(waitOver(token, "laptop", LONG_MS)), 3000)).toBe("ready");
-    expect(await waitStatus(waitOver(token, "desktop", 50))).toBe("timeout");
+
+    // Another agent's wait checks, finds nothing for it, and sleeps until its bound passes.
+    const timers = await controlWaitTimers();
+    const checks = await watchChecks();
+    const other = tracked(waitStatus(waitOver(token, "desktop", LONG_MS)));
+    await checks.answered();
+    await timers.started();
+    expect(other.settled()).toBe(false);
+    await timers.expire();
+    expect(await within(other.promise, 3000)).toBe("timeout");
   });
 });
 
@@ -131,14 +132,17 @@ describe("timeout", () => {
     expect(res.headers.get(PRQ_VERSION_HEADER)).toBe(SERVER_VERSION);
   });
 
-  it("caps the wait at the Hub's maximum, with or without timeoutMs", async () => {
+  it("bounds the wait at min(timeoutMs, WAIT_MAX_MS), with or without timeoutMs", async () => {
     captureLogs();
     const token = await hostToken();
-    await runInDurableObject(await hub(), (instance) => {
-      vi.spyOn(hubSeams(instance), "waitMaxMs").mockReturnValue(50);
-    });
-    expect(await within(waitStatus(waitOver(token, "laptop", 600_000)), 3000)).toBe("timeout");
-    expect(await within(waitStatus(waitOver(token, "laptop")), 3000)).toBe("timeout");
+    const timers = await controlWaitTimers();
+    for (const [count, timeoutMs] of [50, 600_000, undefined].entries()) {
+      const wait = waitStatus(waitOver(token, "laptop", timeoutMs));
+      await timers.started(count + 1);
+      await timers.expire();
+      expect(await within(wait, 3000)).toBe("timeout");
+    }
+    expect(timers.timers().map((timer) => timer.ms)).toEqual([50, WAIT_MAX_MS, WAIT_MAX_MS]);
   });
 });
 
