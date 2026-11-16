@@ -31,7 +31,7 @@ describe("job view", () => {
     const { stub, ref, open } = await newSession("view", sockets);
     const client = await open();
     const watcher = await open();
-    expect(await nextView(watcher, 0, () => true)).toEqual({ pr: ref, owner: null, jobs: [] });
+    expect(await nextView(watcher, 0, () => true)).toEqual({ pr: ref, details: null, owner: null, jobs: [] });
 
     await client.chat([question("q1")]);
     let from = 0;

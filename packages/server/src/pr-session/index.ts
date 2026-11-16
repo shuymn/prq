@@ -9,6 +9,7 @@ import {
   type MessageMetadata,
   type Owner,
   parseSessionName,
+  type PrDetails,
   type PrRef,
   type PrSessionView,
   type RetryResponse,
@@ -35,6 +36,7 @@ import {
   failPending,
   finalizingJobs,
   freshClaim,
+  ingestHeadJobs,
   intakeIds,
   jobById,
   jobTarget,
@@ -44,6 +46,7 @@ import {
   outboxRow,
   type Peek,
   peekJobs,
+  readDetails,
   readOwner,
   recordAttempt,
   removeIntake,
@@ -52,6 +55,7 @@ import {
   resumeClaim,
   retry,
   startNext,
+  writeDetails,
   writeNotify,
 } from "./jobs.ts";
 
@@ -222,7 +226,12 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   // The session as the UI shows it (also its Agent state).
   view(): PrSessionView {
-    return { pr: this.#pr(), owner: readOwner(this.#sql), jobs: allJobs(this.#sql).map(jobView) };
+    return {
+      pr: this.#pr(),
+      details: readDetails(this.#sql),
+      owner: readOwner(this.#sql),
+      jobs: allJobs(this.#sql).map(jobView),
+    };
   }
 
   #publishView(): void {
@@ -370,7 +379,52 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   #jobFields(row: JobRow): Record<string, unknown> {
-    return { pr: this.name, jobId: row.job_id, kind: row.kind };
+    const fields = { pr: this.name, jobId: row.job_id, kind: row.kind };
+    return row.kind === "analysis" ? { ...fields, headSha: row.target } : fields;
+  }
+
+  // --- Webhooks ---
+
+  // A push (opened, reopened, synchronize): the pull request's details, with the pushed head as the current head, and
+  // its analysis (docs/design.md, Intake). Arrival order decides: the push that reaches this step last is the current
+  // head. Every other head's waiting analysis is superseded; the head's own job is created if it has none, revived if
+  // it was superseded, and otherwise left as it is, so a redelivery of the current head changes no job. A new or
+  // revived analysis reaches an agent in the same step, as a question's job does. Returns once the change is stored;
+  // the analysis itself runs later.
+  async ingestHead(details: PrDetails): Promise<void> {
+    await this.#armWake();
+    const owner = await this.#decideOwner();
+    const now = Date.now();
+    const change = this.ctx.storage.transactionSync(() => {
+      writeDetails(this.#sql, details, true);
+      const jobs = ingestHeadJobs(this.#sql, details.headSha, now);
+      const waiting = jobs.created ?? jobs.revived;
+      return { ...jobs, waiting, cloud: waiting === undefined ? NO_CLOUD_OUTCOME : this.#newWork(owner, now) };
+    });
+    for (const row of change.folded) {
+      log("prq.job.superseded", { ...this.#jobFields(row), from: "pending", to: "superseded" });
+    }
+    if (change.created !== undefined) {
+      log("prq.job.created", {
+        ...this.#jobFields(change.created),
+        to: this.#stateAfter(change.created, change.cloud),
+      });
+    }
+    if (change.revived !== undefined) {
+      const to = this.#stateAfter(change.revived, change.cloud);
+      log("prq.job.revived", { ...this.#jobFields(change.revived), from: "superseded", to });
+    }
+    this.#afterNewWork(change.cloud);
+    if (owner === "local" && change.waiting !== undefined) {
+      await this.#deliverOutbox();
+    }
+  }
+
+  // An edit or a close: the pull request's details. The head stays where the pushes put it (a session that has seen no
+  // push takes the event's), and no job is made.
+  updatePr(details: PrDetails): void {
+    writeDetails(this.#sql, details, false);
+    this.#publishView();
   }
 
   // --- Local jobs ---
@@ -481,13 +535,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       });
     }
     this.#publishView();
-    const metadata: MessageMetadata = {
-      kind: "answer",
-      jobId,
-      questionId: reserved.target,
-      sha: reserved.workspace_sha,
-      by: { kind: "local", agentId },
-    };
+    const by = { kind: "local", agentId } as const;
+    const metadata: MessageMetadata =
+      reserved.kind === "answer"
+        ? { kind: "answer", jobId, questionId: reserved.target, sha: reserved.workspace_sha, by }
+        : { kind: "analysis", jobId, headSha: reserved.target, by };
     const messageId = resultMessageId(reserved);
     try {
       await this.insertMessages([{ id: messageId, role: "assistant", metadata, parts: [{ type: "text", text }] }]);
@@ -515,9 +567,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // The host's retry of a claimed or failed job: back to waiting with the claim cleared, so the earlier claimId is
-  // rejected from now on. expectedRev: the job's revision in the view the retry was made from. The retry's statement
-  // applies it only while the job is still at it, so a retry never undoes a change made after that view (a claim, another
-  // retry, a new failure) however late it lands. A refused one changes no job state; any wake it armed only settles.
+  // rejected from now on. The analysis of a head that is no longer current is superseded instead (its claim cleared as
+  // well), decided in the retry's statement against the head as it is then. expectedRev: the job's revision in the
+  // view the retry was made from. The retry's statement applies it only while the job is still at it, so a retry never
+  // undoes a change made after that view (a claim, another retry, a new failure) however late it lands. A refused one
+  // changes no job state; any wake it armed only settles.
   async retryJob(jobId: string, expectedRev: number): Promise<RetryResponse | ErrorResponse> {
     const before = jobById(this.#sql, jobId);
     if (before === undefined) {
@@ -532,21 +586,25 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const change = this.ctx.storage.transactionSync(() => {
       const from = jobById(this.#sql, jobId)?.state;
       const row = retry(this.#sql, jobId, expectedRev, now);
-      return row === undefined ? null : { from, row, cloud: this.#newWork(owner, now) };
+      if (row === undefined) {
+        return null;
+      }
+      return { from, row, cloud: row.state === "pending" ? this.#newWork(owner, now) : NO_CLOUD_OUTCOME };
     });
     if (change === null) {
       return { error: "stale_job", detail: "the job changed since the view the retry was made from" };
     }
+    const waiting = change.row.state === "pending";
     log("prq.job.retried", {
       ...this.#jobFields(change.row),
       from: change.from,
       to: this.#stateAfter(change.row, change.cloud),
     });
     this.#afterNewWork(change.cloud);
-    if (owner === "local") {
+    if (waiting && owner === "local") {
       await this.#deliverOutbox();
     }
-    return { status: "retried" };
+    return { status: waiting ? "retried" : "superseded" };
   }
 
   // --- The wake, settle and the outbox ---

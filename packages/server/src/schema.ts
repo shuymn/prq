@@ -53,6 +53,14 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
   // run: the job's run, 1 at first, advanced only by a retry in its statement. A submit names the run its answer was
   // produced under.
   "ALTER TABLE prq_jobs ADD COLUMN run INTEGER NOT NULL DEFAULT 1",
+  // The pull request as its webhooks describe it, NULL until the first. head_sha is the current head, which only a
+  // push moves (the first webhook sets it); the others follow the latest webhook.
+  "ALTER TABLE prq_session ADD COLUMN head_sha TEXT",
+  "ALTER TABLE prq_session ADD COLUMN base_sha TEXT",
+  "ALTER TABLE prq_session ADD COLUMN full_name TEXT",
+  "ALTER TABLE prq_session ADD COLUMN title TEXT",
+  "ALTER TABLE prq_session ADD COLUMN pr_state TEXT CHECK (pr_state IN ('open', 'closed', 'merged'))",
+  "ALTER TABLE prq_session ADD COLUMN url TEXT",
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {

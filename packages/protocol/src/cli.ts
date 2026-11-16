@@ -16,8 +16,9 @@ export const JobTarget = v.variant("kind", [
 ]);
 export type JobTarget = v.InferOutput<typeof JobTarget>;
 
-// The job's run: 1 at first, advanced only when the host retries the job. A submit names the run its answer was
-// produced under, and is accepted only while the job is still in that run.
+// The job's run: 1 at first, advanced each time the job goes back to waiting (the host retries it, or a push returns to
+// its superseded head). A submit names the run its answer was produced under, and is accepted only while the job is
+// still in that run.
 const Run = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
 
 // A job as a local agent receives it. workspaceSha is the commit to work at, fixed when the job was claimed: an

@@ -15,6 +15,9 @@ export default defineConfig(async () => {
             ACCESS_TEAM_DOMAIN: "https://team.prq.example",
             ACCESS_AUD: "prq-test-audience",
             TEST_ACCESS_JWK: JSON.stringify(await exportJWK(privateKey)),
+            // The secret of GitHub's documented signature example, which src/webhook.test.ts checks against.
+            WEBHOOK_SECRET: "It's a Secret to Everybody",
+            HOST_GITHUB_ID: "1001",
           },
         },
       }),

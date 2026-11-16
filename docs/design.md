@@ -100,8 +100,8 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   conversation and the notes are in PrSession and the worktree can be rebuilt.
 - A job has a `jobId` and a target. An analysis is identified by the PR and its head SHA; an answer by the message ID of
   the question. Every `claim` issues a new `claimId` and records the agent ID that made it. A job also has a run
-  (`run`), 1 at first, which only a retry advances, in its own statement; a claim returns it, and a submit names the
-  run its answer was produced under.
+  (`run`), 1 at first, which advances each time the job goes back to waiting (a retry, or a push back to its superseded
+  head), in the statement that does it; a claim returns it, and a submit names the run its answer was produced under.
 - A job is `pending` (waiting), `claimed` by a local agent, `finalizing` while its submit appends the result, `running`
   in the cloud agent, `done`, `failed` or `superseded`. Each change is one SQL statement guarded by the state it
   expects (and the claim), so a state is never read in one step and changed in another, and the same statement
@@ -112,7 +112,8 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   that arrives late from the old process is rejected. A resume is a claim: it also sets the claim time again.
 - A job claimed by one agent ID shall not be returned to another agent ID.
 - When a `submit` arrives, the system shall accept it only if `jobId`, `claimId`, the agent ID, the target (head SHA
-  or question message ID) and the run match the current state, so an answer produced before a retry is never accepted.
+  or question message ID) and the run match the current state, so an answer produced before the job last went back to
+  waiting is never accepted.
   When the submit that completed a job arrives again (the same `claimId`, run, agent ID and target), the system shall
   return the result already recorded and shall not add it to the
   conversation a second time; any other submit to a completed job is rejected.
@@ -134,7 +135,9 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   The UI shows which agent ID has been working on it and since when, and starts showing it as possibly stalled after 60
   minutes. "Retry" is available on any claimed or failed job at any time, because the host may know the session is gone
   before that mark appears. A retry puts the job back to pending and changes the `claimId`, so an answer that arrives
-  late from the earlier claim is rejected.
+  late from the earlier claim is rejected. A retry of an analysis whose head is no longer the current one supersedes
+  it instead, its claim ended the same way, and answers `superseded`: only the current head's analysis waits. Which of
+  the two applies is decided in the retry's statement, against the head at that moment.
 - A failed job is kept as `failed` with its reason and can be retried from the UI. The UI retries a job through
   `POST /api/pr/:owner/:repo/:number/jobs/:jobId/retry`; owner and repository are accepted in any case and address the
   one session of the pull request.
@@ -162,11 +165,17 @@ UI, webhook and CLI input all enter through PrSession.
   that failed or stopped, and is dropped. Each job is created in one step with the removal of its row.
 - An analysis is made per push, at the pushed head SHA: GitHub sends one `pull_request` event per push, and the commits
   inside a push are not analyzed one by one.
-- When a webhook arrives, it goes to the PrSession, not to the Hub. The PrSession always records the pushed SHA as the
-  current head. If an analysis job for the same head SHA already exists (waiting, running or done), the system shall
-  create no job; a push back to an already analyzed head (after a force-push, for example) shows that head's stored
-  summary. A redelivery is therefore harmless and no delivery ID is stored. Analysis jobs that have not started are folded into the latest head: if A is running and B and C arrive,
-  only C runs after A.
+- When a webhook arrives, it goes to the PrSession, not to the Hub. A push (`opened`, `reopened`, `synchronize`) makes
+  its SHA the current head, in arrival order: deliveries A, B, A leave A current. If an analysis job for the same head
+  SHA already exists (waiting, claimed, running, done or failed), the system shall create no job and leave that job as
+  it is; a push back to an already analyzed head (after a force-push, for example) shows that head's stored summary,
+  and a failed one stays failed until the host retries it. A redelivery of the current head therefore changes nothing,
+  and no delivery ID is stored. `edited` and `closed` update the title and the state (`merged` when merged) and create
+  no job; only a push moves the head.
+- Analysis jobs that have not started are folded into the latest head: every push supersedes the waiting analyses of
+  the other heads, so if A is running and B and C arrive, only C runs after A. A push back to a superseded head makes
+  its job wait again, with the same `jobId` and a new run, so no answer from before the fold is accepted. A retry of an
+  old head's analysis folds it the same way (see [Owner and jobs](#owner-and-jobs)).
 - A waiting question runs before the next analysis.
 - When the server appends a message to the conversation (an analysis request, for example), it calls
   `waitUntilStable()` first and then `saveMessages` in its function form, which receives the latest history, and it
@@ -238,7 +247,9 @@ UI, webhook and CLI input all enter through PrSession.
   another `claimId`; the agent's submit then gets 409 `stale_claim`, and the agent claims again and resubmits under the
   run its answer was produced under, which the server accepts only if no retry came since (see
   [Owner and jobs](#owner-and-jobs)). A late retry applies only if nothing changed the job after the view it came
-  from, and otherwise gets 409 `stale_job`. A `wait` is aborted, which ends it in the Hub.
+  from, and otherwise gets 409 `stale_job`. A `wait` is aborted, which ends it in the Hub. A webhook's intake that
+  lands late is a delivery arriving then: it creates no second job for its head, and by arrival order its head is
+  current until the next push.
 - An authentication failure (401 or 403) during `wait` is told apart from an ordinary timeout and ends with an error, so
   the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.
@@ -462,8 +473,12 @@ Server:
 - When the key set cannot be fetched or used (a network error, a timeout, an answer that is not a key set, a key that is
   malformed or cannot be imported), the Worker shall answer 503, not 401, so that `prq` does not read it as an
   authentication failure; the next request fetches again. A token naming a key the set does not hold is a 401.
-- When a webhook arrives, the system shall accept it only if the signature is valid and `pull_request.user.id` is the
-  host's. `sender` is whoever made the update, not necessarily the PR author.
+- When a webhook arrives, the system shall accept it only if `X-Hub-Signature-256` is `sha256=` and the HMAC-SHA256 of
+  the raw body under the webhook secret (compared in constant time), the event is `pull_request`, and
+  `pull_request.user.id` is the host's. `sender` is whoever made the update, not necessarily the PR author. A delivery
+  that is refused (401 for the signature, 400 for a payload outside GitHub's shape) or ignored (another event, author
+  or action; 200) reaches no PrSession. When the webhook secret or the host's ID is missing or malformed, the Worker
+  shall refuse every delivery with 500; the Access check needs neither.
 - The GitHub App's private key is stored as PKCS#8. GitHub issues PKCS#1, which the WebCrypto-based path in workerd
   cannot read; convert it once with `openssl pkcs8 -topk8` before storing it as a secret.
 
@@ -503,7 +518,7 @@ prq/
 │  │       ├─ index.ts           re-exports
 │  │       ├─ version.ts         the Prq-Version header name
 │  │       ├─ errors.ts          error codes and the error body
-│  │       ├─ pr.ts              pull request references, the canonical session name, the Hub's name
+│  │       ├─ pr.ts              pull request references and details, the canonical session name, the Hub's name
 │  │       ├─ cli.ts             jobs and what a local agent sends and receives
 │  │       ├─ messages.ts        the metadata of messages the server appends
 │  │       └─ views.ts           what the UI reads from the server (the version message, the session view, the retry answer)

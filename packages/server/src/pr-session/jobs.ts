@@ -1,4 +1,4 @@
-import type { JobTarget, JobView, Owner } from "@prq/protocol";
+import type { JobTarget, JobView, Owner, PrDetails } from "@prq/protocol";
 
 // A session's jobs and the rows that go with them. Every transition is one SQL statement guarded by the state it
 // expects (and the claim), so no state is read in one step and changed in another (docs/design.md, Owner and jobs). The
@@ -47,6 +47,41 @@ export function decideOwner(sql: SqlStorage, owner: Owner): boolean {
   );
 }
 
+type DetailsRow = {
+  head_sha: string | null;
+  base_sha: string | null;
+  full_name: string | null;
+  title: string | null;
+  pr_state: PrDetails["state"] | null;
+  url: string | null;
+};
+
+// The pull request's details, once a webhook has given them.
+export function readDetails(sql: SqlStorage): PrDetails | null {
+  const row = sql
+    .exec<DetailsRow>("SELECT head_sha, base_sha, full_name, title, pr_state, url FROM prq_session WHERE id = 1")
+    .one();
+  const { head_sha: headSha, base_sha: baseSha, full_name: fullName, title, pr_state: state, url } = row;
+  if (headSha === null || baseSha === null || fullName === null || title === null || state === null || url === null) {
+    return null;
+  }
+  return { fullName, title, state, url, headSha, baseSha };
+}
+
+// Stores a webhook's details. A push moves the head; any other webhook sets it only when no head is known yet.
+export function writeDetails(sql: SqlStorage, details: PrDetails, push: boolean): void {
+  const head = push ? "?" : "coalesce(head_sha, ?)";
+  sql.exec(
+    `UPDATE prq_session SET head_sha = ${head}, base_sha = ?, full_name = ?, title = ?, pr_state = ?, url = ? WHERE id = 1`,
+    details.headSha,
+    details.baseSha,
+    details.fullName,
+    details.title,
+    details.state,
+    details.url,
+  );
+}
+
 export function jobById(sql: SqlStorage, jobId: string): JobRow | undefined {
   return sql.exec<JobRow>("SELECT * FROM prq_jobs WHERE job_id = ?", jobId).toArray()[0];
 }
@@ -76,20 +111,54 @@ export function removeIntake(sql: SqlStorage, questionIds: readonly string[]): v
   }
 }
 
+// A pending job for the target, unless it has one: one job per target.
+function createJob(sql: SqlStorage, kind: JobRow["kind"], target: string, now: number): JobRow | undefined {
+  return sql
+    .exec<JobRow>(
+      `INSERT INTO prq_jobs (job_id, kind, target, state, created_at, updated_at)
+       VALUES (?, ?, ?, 'pending', ?, ?) ON CONFLICT (kind, target) DO NOTHING RETURNING *`,
+      crypto.randomUUID(),
+      kind,
+      target,
+      now,
+      now,
+    )
+    .toArray()[0];
+}
+
 // A pending answer job per question that has none, in the given order.
 export function createAnswerJobs(sql: SqlStorage, questionIds: readonly string[], now: number): JobRow[] {
-  return questionIds.flatMap((id) =>
-    sql
-      .exec<JobRow>(
-        `INSERT INTO prq_jobs (job_id, kind, target, state, created_at, updated_at)
-         VALUES (?, 'answer', ?, 'pending', ?, ?) ON CONFLICT (kind, target) DO NOTHING RETURNING *`,
-        crypto.randomUUID(),
-        id,
-        now,
-        now,
-      )
-      .toArray(),
-  );
+  return questionIds.flatMap((id) => createJob(sql, "answer", id, now) ?? []);
+}
+
+// The analysis of a pushed head: created when the head has no job, revived when its job was superseded, otherwise
+// left as it is (a known head gets no second job). Every other head's pending analysis is superseded first, so at most
+// one analysis waits: the current head's. Returns the folded jobs and the job made pending, if any.
+export function ingestHeadJobs(
+  sql: SqlStorage,
+  headSha: string,
+  now: number,
+): { folded: JobRow[]; created: JobRow | undefined; revived: JobRow | undefined } {
+  const folded = sql
+    .exec<JobRow>(
+      `UPDATE prq_jobs SET rev = rev + 1, state = 'superseded', updated_at = ?
+       WHERE kind = 'analysis' AND state = 'pending' AND target != ? RETURNING *`,
+      now,
+      headSha,
+    )
+    .toArray()
+    .toSorted((a, b) => a.seq - b.seq);
+  const created = createJob(sql, "analysis", headSha, now);
+  // A revival starts a new run: whatever the job was folded from, no answer produced before it is accepted.
+  const revived = sql
+    .exec<JobRow>(
+      `UPDATE prq_jobs SET rev = rev + 1, run = run + 1, state = 'pending', updated_at = ?
+       WHERE kind = 'analysis' AND target = ? AND state = 'superseded' RETURNING *`,
+      now,
+      headSha,
+    )
+    .toArray()[0];
+  return { folded, created, revived };
 }
 
 // The next job, one rule for both owners: the oldest pending answer, then the pending analysis.
@@ -224,14 +293,20 @@ export function finalizingJobs(sql: SqlStorage): JobRow[] {
   return sql.exec<JobRow>("SELECT * FROM prq_jobs WHERE state = 'finalizing' ORDER BY seq").toArray();
 }
 
+// Whether a job is the analysis of a head that is not the current one, read in the statement that uses it.
+const OLD_HEAD = "kind = 'analysis' AND target IS NOT (SELECT head_sha FROM prq_session WHERE id = 1)";
+
 // claimed or failed → pending, with the claim cleared, so the earlier claimId no longer matches, and the next run, so no
-// answer produced before the retry is accepted. Only while the job is still at expectedRev, the revision the retry was
-// made from.
+// answer produced before the retry is accepted. The analysis of a head that is no longer current is superseded instead,
+// its claim cleared the same way: only the current head's analysis waits, and a revival starts the next run. Only
+// while the job is still at expectedRev, the revision the retry was made from.
 export function retry(sql: SqlStorage, jobId: string, expectedRev: number, now: number): JobRow | undefined {
   return sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET rev = rev + 1, run = run + 1, state = 'pending', agent_id = NULL, claim_id = NULL,
-         claimed_at = NULL, workspace_sha = NULL, failure = NULL, updated_at = ?
+      `UPDATE prq_jobs SET rev = rev + 1,
+         state = CASE WHEN ${OLD_HEAD} THEN 'superseded' ELSE 'pending' END,
+         run = CASE WHEN ${OLD_HEAD} THEN run ELSE run + 1 END,
+         agent_id = NULL, claim_id = NULL, claimed_at = NULL, workspace_sha = NULL, failure = NULL, updated_at = ?
        WHERE job_id = ? AND rev = ? AND state IN ('claimed', 'failed') RETURNING *`,
       now,
       jobId,

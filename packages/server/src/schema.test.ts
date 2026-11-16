@@ -22,6 +22,35 @@ describe("schema", () => {
     });
   });
 
+  it("adds a pull request's details to a session at the previous version, keeping its owner and jobs", async () => {
+    const stub = await prSessionStub(env, { owner: "octo", repo: "schema", number: 3 });
+    await runInDurableObject(stub, (_, { storage }) => {
+      const { sql } = storage;
+      // The database as the version before the details left it.
+      for (const table of ["prq_schema", "prq_session", "prq_jobs", "prq_outbox", "prq_intake", "prq_claim_attempts"]) {
+        sql.exec(`DROP TABLE ${table}`);
+      }
+      migrate(
+        storage,
+        PR_SESSION_SCHEMA.slice(0, PR_SESSION_SCHEMA.indexOf("ALTER TABLE prq_session ADD COLUMN head_sha TEXT")),
+      );
+      sql.exec("UPDATE prq_session SET owner = 'local'");
+      sql.exec(`INSERT INTO prq_jobs (job_id, kind, target, state, created_at, updated_at)
+        VALUES ('job', 'answer', 'q1', 'pending', 1, 1)`);
+
+      migrate(storage, PR_SESSION_SCHEMA);
+
+      expect(versions(storage)).toEqual([{ version: PR_SESSION_SCHEMA.length }]);
+      expect(sql.exec("SELECT owner, head_sha, title, pr_state FROM prq_session").toArray()).toEqual([
+        { owner: "local", head_sha: null, title: null, pr_state: null },
+      ]);
+      expect(sql.exec("SELECT job_id, state, rev, run FROM prq_jobs").toArray()).toEqual([
+        { job_id: "job", state: "pending", rev: 0, run: 1 },
+      ]);
+      expect(() => sql.exec("UPDATE prq_session SET pr_state = 'draft'")).toThrow(/CHECK/);
+    });
+  });
+
   it("applies each step once, in order, and leaves the version where a failed step started", async () => {
     const stub = await prSessionStub(env, { owner: "octo", repo: "schema", number: 2 });
     await runInDurableObject(stub, (_, { storage }) => {

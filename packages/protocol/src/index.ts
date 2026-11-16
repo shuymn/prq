@@ -13,7 +13,17 @@ export {
 } from "./cli.ts";
 export { ErrorCode, ErrorResponse } from "./errors.ts";
 export { MessageMetadata } from "./messages.ts";
-export { AgentId, canonicalPrRef, HUB_NAME, MessageId, parseSessionName, PrRef, Sha, sessionName } from "./pr.ts";
+export {
+  AgentId,
+  canonicalPrRef,
+  HUB_NAME,
+  MessageId,
+  parseSessionName,
+  PrDetails,
+  PrRef,
+  Sha,
+  sessionName,
+} from "./pr.ts";
 export { PRQ_VERSION_HEADER } from "./version.ts";
 export {
   HistoryChangedMessage,

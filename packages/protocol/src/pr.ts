@@ -37,6 +37,18 @@ export const HUB_NAME = "hub";
 // A commit SHA as GitHub sends it: 40 lowercase hex digits.
 export const Sha = v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/));
 
+// A pull request as its webhooks describe it, in GitHub's display case. The head is the current head, which only a push
+// moves; the other fields follow the latest webhook.
+export const PrDetails = v.object({
+  fullName: v.string(),
+  title: v.string(),
+  state: v.picklist(["open", "closed", "merged"]),
+  url: v.string(),
+  headSha: Sha,
+  baseSha: Sha,
+});
+export type PrDetails = v.InferOutput<typeof PrDetails>;
+
 // A conversation message's ID.
 export const MessageId = v.pipe(v.string(), v.minLength(1), v.maxLength(256));
 
