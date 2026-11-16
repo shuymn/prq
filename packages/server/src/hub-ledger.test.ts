@@ -791,6 +791,9 @@ const QUIET = { repo: "bulk", entry: quiet() };
 const WAITING = { repo: "bulk", entry: quiet({ waitingWork: true }) };
 const SKIPPED_BLOCK = 1500;
 
+// Agents seen long ago, each with a claim made as long ago, that a contact and a pool page read none of.
+const STALE_AGENTS = 10_000;
+
 // Each query a page takes, with the presence it is read with and the rows its filter leaves out (none for the whole
 // list).
 const BOUNDED_SCANS: { query: LedgerQuery; present: boolean; skipped: { repo: string; entry: LedgerEntry }[] }[] = [
@@ -816,19 +819,32 @@ function keptEverywhere(at: number): LedgerEntry {
   return quiet({ answerFailed: true, latestEvent: { kind: "question", at } });
 }
 
-// What a page of the ledger lists, and the rows all its queries read.
-function pageReads(instance: Hub, sql: SqlStorage, query: LedgerQuery): { listed: string[]; read: number } {
+// What a call gives, the rows all the queries it makes read, and those queries with their bindings.
+async function reading<T>(
+  sql: SqlStorage,
+  call: () => T,
+): Promise<{ value: Awaited<T>; read: number; queries: Parameters<SqlStorage["exec"]>[] }> {
   const exec = vi.spyOn(sql, "exec");
   try {
-    const page = v.parse(LedgerPage, instance.ledgerPage(query));
-    const read = exec.mock.results.reduce(
-      (sum, result) => sum + (result.type === "return" ? result.value.rowsRead : 0),
-      0,
-    );
-    return { listed: sessionsOf(page.rows), read };
+    const value = await call();
+    return {
+      value,
+      read: exec.mock.results.reduce((sum, result) => sum + (result.type === "return" ? result.value.rowsRead : 0), 0),
+      queries: [...exec.mock.calls],
+    };
   } finally {
     exec.mockRestore();
   }
+}
+
+// What a page of the ledger lists, and the rows all its queries read.
+async function pageReads(
+  instance: Hub,
+  sql: SqlStorage,
+  query: LedgerQuery,
+): Promise<{ listed: string[]; read: number }> {
+  const { value, read } = await reading(sql, () => instance.ledgerPage(query));
+  return { listed: sessionsOf(v.parse(LedgerPage, value).rows), read };
 }
 
 describe("ledger filters", () => {
@@ -939,7 +955,7 @@ describe("ledger filters", () => {
       const pages = await runInDurableObject(stub, async (instance, state) => {
         const { sql } = state.storage;
         // What the page's other queries (presence) read, with no row to list.
-        const others = pageReads(instance, sql, query).read;
+        const others = (await pageReads(instance, sql, query)).read;
         // Two rows every filter keeps, then blocks of rows it leaves out: between them and after the second.
         await instance.upsertLedger(top, 1, keptEverywhere(3_000_000));
         await instance.upsertLedger(middle, 1, keptEverywhere(2_000_000));
@@ -958,10 +974,12 @@ describe("ledger filters", () => {
             `octo~${skipped[template]?.repo}~${template + 1}`,
           );
         }
-        return [undefined, `3000000.${top}`, `2000000.${middle}`].map((cursor) => {
-          const { listed, read } = pageReads(instance, sql, { ...query, cursor });
-          return { listed, read: read - others };
-        });
+        const read: { listed: string[]; read: number }[] = [];
+        for (const cursor of [undefined, `3000000.${top}`, `2000000.${middle}`]) {
+          const page = await pageReads(instance, sql, { ...query, cursor });
+          read.push({ listed: page.listed, read: page.read - others });
+        }
+        return read;
       });
       expect({ query, present, listed: pages.map((page) => page.listed) }).toEqual({
         query,
@@ -1190,6 +1208,69 @@ describe("bounded view and ledger pages", () => {
     await timers.expire();
     expect(await waitStatus(wait.promise)).toBe("timeout");
     expect(await agentRow("sleeper")).toMatchObject({ waiting: false });
+  });
+
+  it("reads no agent whose presence ended, nor a claim that stopped applying, on a contact or a pool page", async () => {
+    captureLogs();
+    // A Hub of its own, with one agent present by its contact and one by its claim.
+    const stub = await getAgentByName(env.Hub, "pool-scan");
+    await stub.touch("desk");
+    await stub.upsertLedger(
+      "octo~pool~1",
+      1,
+      quiet({ claims: [{ agentId: "laptop", jobId: "j1", since: 0, ageMs: 0 }] }),
+    );
+    const { before, after, plans } = await runInDurableObject(stub, async (instance, state) => {
+      const { sql } = state.storage;
+      const contactAndPage = async () => {
+        const contact = await reading(sql, () => instance.touch("desk"));
+        const page = await reading(sql, () => instance.agentPage());
+        const listed = v.parse(AgentPage, page.value).rows.map((row) => row.agentId);
+        return {
+          reads: { contact: contact.read, page: page.read },
+          listed,
+          queries: [...contact.queries, ...page.queries],
+        };
+      };
+      // Agents whose last contact, and whose claim, ended their presence long ago: one, then STALE_AGENTS. The presence
+      // alarm is armed by the contacts above, so each contact below does the same.
+      const stale = (from: number, to: number) => {
+        for (let n = from; n < to; n += 1) {
+          sql.exec("INSERT INTO prq_agents (agent_id, last_seen_at) VALUES (?, ?)", `stale-${n}`, n);
+          sql.exec(
+            "INSERT INTO prq_claims (session, job_id, agent_id, claimed_at) VALUES (?, 'j', ?, ?)",
+            `octo~stale~${n + 1}`,
+            `stale-${n}`,
+            n,
+          );
+        }
+      };
+      stale(0, 1);
+      const ready = await contactAndPage();
+      stale(1, STALE_AGENTS);
+      const loaded = await contactAndPage();
+      const details = loaded.queries
+        .filter(([query]) => /\bprq_(?:agents|claims)\b/.test(query))
+        .flatMap(([query, ...bindings]) =>
+          sql
+            .exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...bindings)
+            .toArray()
+            .map((row) => row.detail),
+        );
+      return { before: ready, after: loaded, plans: [...new Set(details)].toSorted() };
+    });
+    expect(before.listed).toEqual(["desk", "laptop"]);
+    expect(after.listed).toEqual(["desk", "laptop"]);
+    expect(before.reads.contact).toBeGreaterThan(0);
+    expect(after.reads).toEqual(before.reads);
+    // Each read of the pool's tables is a range of an index: the present agents' contacts and claims by their time, then
+    // each present agent's by its ID.
+    expect(plans).toEqual([
+      "SEARCH prq_agents USING INDEX prq_agents_seen (last_seen_at>?)",
+      "SEARCH prq_agents USING INDEX sqlite_autoindex_prq_agents_1 (agent_id=?)",
+      "SEARCH prq_claims USING INDEX prq_claims_agent (agent_id=?)",
+      "SEARCH prq_claims USING INDEX prq_claims_claimed (claimed_at>?)",
+    ]);
   });
 
   it("lists every repository once by owner/name for the menu, in its display case, and counts the owners", async () => {

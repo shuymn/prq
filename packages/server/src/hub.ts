@@ -29,7 +29,6 @@ import * as v from "valibot";
 import { refuseSubAgent, sendServerVersion } from "./agents.ts";
 import {
   claimReleasedAt,
-  isPresent,
   LedgerEntry,
   needsAttention,
   PRESENCE_MS,
@@ -143,17 +142,21 @@ export class Hub extends Agent<Env, HubView> {
   }
 
   #localPresent(now: number): boolean {
-    return [...this.#presences(now).values()].some((presence) => isPresent(presence, now));
+    return this.#presences(now).size > 0;
   }
 
-  // Each agent ID that may be present at now (a recent contact, a claim or a wait), with what its presence rests on, all
-  // on the Hub's clock.
+  // Each agent ID present at now, with what its presence rests on, all on the Hub's clock: one with a contact or a claim
+  // recent enough to make it present (isPresent), each read as a range of the index on its time (schema.ts), or one in a
+  // wait. No contact or claim older than that is read, however many agents and claims came before.
   #presences(now: number): Map<string, Presence> {
     const recent = this.#sql.exec<{ agent_id: string }>(
-      "SELECT agent_id FROM prq_agents WHERE last_seen_at > ?",
+      "SELECT agent_id FROM prq_agents INDEXED BY prq_agents_seen WHERE last_seen_at > ?",
       now - PRESENCE_MS,
     );
-    const holding = this.#sql.exec<{ agent_id: string }>("SELECT DISTINCT agent_id FROM prq_claims");
+    const holding = this.#sql.exec<{ agent_id: string }>(
+      "SELECT agent_id FROM prq_claims INDEXED BY prq_claims_claimed WHERE claimed_at > ?",
+      now - STALL_MS - PRESENCE_MS,
+    );
     const ids = new Set([
       ...[...recent, ...holding].map((row) => row.agent_id),
       ...[...this.#waiters].map((waiter) => waiter.agentId),
@@ -193,7 +196,7 @@ export class Hub extends Agent<Env, HubView> {
   // row for a later second than this one is due by then (a row due now may be the one running, which is ending).
   async #armPresenceEnded(): Promise<void> {
     const now = this.clock();
-    const ends = [...this.#presences(now).values()].map(presenceEnd).filter((end) => end > now && end < Infinity);
+    const ends = [...this.#presences(now).values()].map(presenceEnd).filter((end) => end < Infinity);
     if (ends.length === 0) {
       return;
     }
@@ -344,7 +347,7 @@ export class Hub extends Agent<Env, HubView> {
   // ledger's totals and its version. Nothing in it changes on a contact alone.
   view(): HubView {
     const now = this.clock();
-    const presentAgents = [...this.#presences(now).values()].filter((presence) => isPresent(presence, now)).length;
+    const presentAgents = this.#presences(now).size;
     const totals = this.#sql
       .exec<{
         version: number;
@@ -410,44 +413,27 @@ export class Hub extends Agent<Env, HubView> {
   }
 
   // A page of the present agents after the cursor (an agent ID), by agent ID: each one's last contact, whether it
-  // waits and whether it holds a claim. They are the union of three sources, each after the cursor under one of the
-  // conditions that make an agent present (isPresent): a recent contact and a claim, read in order from their indexes,
-  // and a wait, from the waits in memory. The union's first AGENT_PAGE_ROWS + 1 are among each source's first as many.
+  // waits and whether it holds a claim. It reads the present agents as a contact does, so no agent whose presence has
+  // ended is read.
   agentPage(cursor?: string): AgentPage | ErrorResponse {
-    const now = this.clock();
     const after = cursor ?? "";
-    const limit = AGENT_PAGE_ROWS + 1;
-    const recent = this.#sql.exec<{ agent_id: string }>(
-      "SELECT agent_id FROM prq_agents WHERE agent_id > ? AND last_seen_at > ? ORDER BY agent_id LIMIT ?",
-      after,
-      now - PRESENCE_MS,
-      limit,
-    );
-    const holding = this.#sql.exec<{ agent_id: string }>(
-      "SELECT DISTINCT agent_id FROM prq_claims WHERE agent_id > ? AND claimed_at > ? ORDER BY agent_id LIMIT ?",
-      after,
-      now - STALL_MS - PRESENCE_MS,
-      limit,
-    );
-    const waiting = [...this.#waiters].map((waiter) => waiter.agentId).filter((agentId) => agentId > after);
-    const candidates = [...new Set([...[...recent, ...holding].map((row) => row.agent_id), ...waiting])].toSorted(
-      byCodeUnit,
-    );
+    const present = [...this.#presences(this.clock())]
+      .filter(([agentId]) => agentId > after)
+      .toSorted(([a], [b]) => byCodeUnit(a, b));
     const page = fitPage(
-      candidates,
+      present,
       AGENT_PAGE_ROWS,
       AGENT_PAGE_BYTES,
       MAX_AGENT_ID_CHARS,
-      (agentId) => this.#agentRow(agentId),
-      (agentId) => agentId,
+      ([agentId, { lastSeenAt, waiting, claimedAt }]): AgentRow => ({
+        agentId,
+        lastSeenAt,
+        waiting,
+        holdsJob: claimedAt.length > 0,
+      }),
+      ([agentId]) => agentId,
     );
-    return page ?? overflow("agents", candidates[0]);
-  }
-
-  // A present agent as the pool shows it.
-  #agentRow(agentId: string): AgentRow {
-    const { lastSeenAt, waiting, claimedAt } = this.#presenceOf(agentId);
-    return { agentId, lastSeenAt, waiting, holdsJob: claimedAt.length > 0 };
+    return page ?? overflow("agents", present[0]?.[0]);
   }
 
   // A page of the repositories the ledger has rows of after the cursor (owner/name in any case), by owner/name.

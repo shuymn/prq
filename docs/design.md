@@ -347,8 +347,11 @@ CLI exit codes: 0 ready, 2 timeout, 3 authentication failure, 4 claim mismatch, 
 - When any one agent ID is present, "a local agent is present" is true.
 - The Hub's view carries whether a local agent is present and how many agent IDs are, which the header's status shows.
   The pool's details come from `GET /api/agents`, read when the pool opens: every present agent ID by ID, at most 100
-  and 64 KiB a page, with its last contact (none when only a claim makes it present), whether it is in a `wait` and
-  whether it holds a claim. They are not in the view, so a contact sends the UI nothing.
+  and 64 KiB a page, with its last contact (none when the Hub has had none from it), whether it is in a `wait` and
+  whether it holds a claim. They are not in the view, so a contact sends the UI nothing. A contact and a pool page read
+  only what can make an agent present: the contacts and the claims recent enough, each a range of an index on its time,
+  and the waits in memory. An agent's row stays after its presence ends (one row an agent ID, which is the host name by
+  default), and is read again only once the agent is present again.
 - The Hub runs `presenceEnded` at the first whole second at or after the next time a present agent's presence ends
   (re-checked when it runs, since the scheduler stores whole seconds), so the list and "Waiting for a local agent"
   follow presence without any other event. Every change to the pool or the ledger, and the Hub's start, arms it when

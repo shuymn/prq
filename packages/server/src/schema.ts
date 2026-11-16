@@ -51,6 +51,10 @@ export const HUB_SCHEMA: SchemaSteps = [
   "INSERT INTO prq_ledger_totals (id) VALUES (1)",
   // One repository's open rows in the list's order, for the list under both of its filters (state=open with repo).
   "CREATE INDEX prq_ledger_repo_open ON prq_ledger (repo, sort_at, session) WHERE open = 1",
+  // Each agent's last contact and each claim by its time, so presence reads only the contacts and claims recent enough
+  // to make an agent present, however many came before.
+  "CREATE INDEX prq_agents_seen ON prq_agents (last_seen_at)",
+  "CREATE INDEX prq_claims_claimed ON prq_claims (claimed_at)",
 ];
 
 export const PR_SESSION_SCHEMA: SchemaSteps = [

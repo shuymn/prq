@@ -152,8 +152,8 @@ export type LedgerQuery = v.InferOutput<typeof LedgerQuery>;
 export const LedgerPage = v.object({ rows: v.array(LedgerRow), nextCursor: v.nullable(v.string()) });
 export type LedgerPage = v.InferOutput<typeof LedgerPage>;
 
-// A present local agent: its last contact (null when only a claim makes it present), whether it is in a wait, and
-// whether it holds a claim.
+// A present local agent: its last contact (null when the Hub has had none from it, as for an agent it knows only from a
+// claim), whether it is in a wait, and whether it holds a claim.
 export const AgentRow = v.object({
   agentId: AgentId,
   lastSeenAt: v.nullable(v.number()),
