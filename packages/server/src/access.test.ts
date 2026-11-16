@@ -16,6 +16,7 @@ import {
   request,
   runKey,
   serveKeys,
+  type KeyServer,
   type SigningKey,
 } from "./test/access.ts";
 
@@ -33,7 +34,8 @@ const claimFailed = (claim: string) => ({ reason: "ERR_JWT_CLAIM_VALIDATION_FAIL
 
 describe("rejects each bad token", () => {
   type Case = {
-    token: (teamDomain: string, key: SigningKey) => Promise<string | undefined>;
+    // Makes the token; keys serves the run key, and a case may serve others.
+    token: (teamDomain: string, key: SigningKey, keys: KeyServer) => Promise<string | undefined>;
     // What the rejection log names: jose's error code, and the claim for a claim check.
     rejected: { reason: string; claim?: string };
   };
@@ -49,6 +51,14 @@ describe("rejects each bad token", () => {
         new SignJWT({ iss: teamDomain, aud: env.ACCESS_AUD, exp: now() + 300 })
           .setProtectedHeader({ alg: "HS256", kid: key.kid })
           .sign(new TextEncoder().encode(JSON.stringify(key.publicJwk))),
+      rejected: { reason: "ERR_JOSE_ALG_NOT_ALLOWED" },
+    },
+    "an RS384 token signed by a served RS384 key": {
+      token: async (teamDomain, key, keys) => {
+        const rs384 = await newKey("rs384-key", "RS384");
+        keys.serve(key, rs384);
+        return tokenFor(teamDomain, rs384);
+      },
       rejected: { reason: "ERR_JOSE_ALG_NOT_ALLOWED" },
     },
     "an unsigned token (alg none)": {
@@ -85,9 +95,9 @@ describe("rejects each bad token", () => {
   it.for(Object.entries(cases))("%s", async ([, { token: make, rejected }]) => {
     const teamDomain = freshTeamDomain();
     const key = await runKey();
-    serveKeys(teamDomain, key);
+    const keys = serveKeys(teamDomain, key);
     const logs = captureLogs();
-    const token = await make(teamDomain, key);
+    const token = await make(teamDomain, key, keys);
 
     const res = await app.fetch(request("/cli/claim", token, { method: "POST" }), envFor(teamDomain));
 

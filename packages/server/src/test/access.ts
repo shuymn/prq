@@ -4,7 +4,7 @@ import { env } from "cloudflare:workers";
 import { exportJWK, generateKeyPair, importJWK, type JWK, type JWTPayload, SignJWT } from "jose";
 import { vi } from "vitest";
 
-export type SigningKey = { kid: string; privateKey: CryptoKey; publicJwk: JWK };
+export type SigningKey = { kid: string; alg: "RS256" | "RS384"; privateKey: CryptoKey; publicJwk: JWK };
 
 // The run's key, made in vitest.config.ts, so every test file serves the same keys for the configured team domain.
 export async function runKey(): Promise<SigningKey> {
@@ -17,12 +17,12 @@ export async function runKey(): Promise<SigningKey> {
   if (!(privateKey instanceof CryptoKey) || jwk.n === undefined || jwk.e === undefined) {
     throw new TypeError("TEST_ACCESS_JWK is not an RSA private key");
   }
-  return { kid: "run-key", privateKey, publicJwk: { kty: "RSA", n: jwk.n, e: jwk.e } };
+  return { kid: "run-key", alg: "RS256", privateKey, publicJwk: { kty: "RSA", n: jwk.n, e: jwk.e } };
 }
 
-export async function newKey(kid: string): Promise<SigningKey> {
-  const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
-  return { kid, privateKey, publicJwk: await exportJWK(publicKey) };
+export async function newKey(kid: string, alg: SigningKey["alg"] = "RS256"): Promise<SigningKey> {
+  const { privateKey, publicKey } = await generateKeyPair(alg, { extractable: true });
+  return { kid, alg, privateKey, publicJwk: await exportJWK(publicKey) };
 }
 
 // A team domain no other test uses, so the isolate's key set for it starts empty.
@@ -45,7 +45,7 @@ export async function accessToken(
   for (const claim of without) {
     delete payload[claim];
   }
-  return new SignJWT(payload).setProtectedHeader({ alg: "RS256", kid: key.kid }).sign(key.privateKey);
+  return new SignJWT(payload).setProtectedHeader({ alg: key.alg, kid: key.kid }).sign(key.privateKey);
 }
 
 export function request(path: string, token?: string, init: RequestInit = {}): Request {
@@ -74,7 +74,7 @@ export function serveKeys(teamDomain: string, ...keys: SigningKey[]): KeyServer 
   const server: KeyServer = {
     fetches: () => fetches,
     serve(...served) {
-      const body = { keys: served.map((key) => ({ ...key.publicJwk, kid: key.kid, alg: "RS256", use: "sig" })) };
+      const body = { keys: served.map((key) => ({ ...key.publicJwk, kid: key.kid, alg: key.alg, use: "sig" })) };
       respond = async () => Response.json(body);
     },
     fail(response) {
