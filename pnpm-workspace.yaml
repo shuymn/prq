@@ -1,0 +1,31 @@
+packages:
+  - packages/*
+
+# Every pinned version of the workspace's packages, each named `catalog:` in a package.json.
+catalog:
+  # Lint, format, commit messages, and the Git hooks.
+  "@commitlint/cli": 21.2.4
+  "@commitlint/config-conventional": 21.2.4
+  # 2.2.2 was published without the provenance earlier releases carry; trustPolicy refuses it (.github/renovate.json).
+  lefthook: 2.2.1
+  oxfmt: 0.78.0
+  oxlint: 1.93.0
+  oxlint-tsgolint: 7.0.2007
+
+# Dependency build scripts, each reviewed: none runs, since every one of these packages takes its platform binary from
+# optionalDependencies.
+allowBuilds:
+  lefthook: false
+
+# Fail installs when an unreviewed dependency build script appears.
+strictDepBuilds: true
+
+# Reject package versions published within the last 3 days (in minutes), matching mise.toml and the shared Renovate
+# preset.
+minimumReleaseAge: 4320
+
+# Block git/tarball URL sources in transitive dependencies.
+blockExoticSubdeps: true
+
+# Detect package trust/provenance downgrades.
+trustPolicy: no-downgrade
