@@ -21,8 +21,24 @@ The brief the design answers is [docs/ui.md](../docs/ui.md).
   that is not a token, or an element that is not in the inventory, is added there first.
 - **Same names.** A Pencil component is named after the React component, followed by its prop values (see
   [Components](#components)).
-- **Semantic tokens only.** Components bind `color.*`, `space.*`, `size.*`, `radius.*`, `border-width.*`, `text.*` and
-  `shadow.*`. The `palette.*` colors exist only to be referenced by the semantic colors, and Pencil does not get them.
+- **Semantic tokens only.** Components bind `color.*`, `gap.*`, `inset.*`, `size.*`, `radius.*`, `border-width.*`,
+  `text.*` and `shadow.*`. The `palette.*` colors and the `space.*` scale exist only to be referenced by the semantic
+  tokens, and Pencil does not get them. Spacing is picked by role: `gap.*` by how closely two siblings belong together
+  (tight, related, group, section, page), `inset.*` by the kind of container (inline code, control, multi-line field,
+  card, dialog, page, panel).
+- **One control size per context.** Medium controls (`size.control.md`) for standalone actions: the toolbar, headers,
+  forms, dialog footers and the composer. Small controls (`size.control.sm`) only inside dense content: table and job
+  rows, skill rows, inline notices and answer status lines, code blocks. Controls in one row share a size. A list or
+  menu item that is itself the target (a version) is `size.control.md` tall.
+- **One text style per role.** `text.title`: the page's own title (a page heading, the PR title in the full PR
+  header). `text.heading`: section, card and dialog headings, and the PR title in the compact (panel) header.
+  `text.body`: content and descriptions; `text.body-strong`: names that identify a row (a PR title in the list, a skill
+  name), field and editor labels (so they sit below the section heading), and medium control labels. `text.small`: metadata,
+  captions, hints and times, in `color.fg.muted`; `text.small-strong`: table column headings and group labels (muted),
+  small control labels, badges and status labels. `text.code` / `text.code-small`: code and SHAs. `text.input`: form
+  fields. Every heading of the same level uses the same style on every screen.
+- **One radius per kind.** `radius.sm`: inline code and SHAs; `radius.md`: controls, cards, notices, menus and code
+  blocks; `radius.lg`: dialogs and popovers; `radius.full`: badges and pills.
 - **Dark only.** The host uses dark mode, so there is one color scheme. Code sets `color-scheme: dark`.
 
 ## Tokens
@@ -38,7 +54,8 @@ The brief the design answers is [docs/ui.md](../docs/ui.md).
 | --- | --- | --- |
 | `palette` | The raw colors | no (referenced by `color.*` only) |
 | `color`, `shadow` | Semantic colors and the overlay shadow | yes |
-| `space`, `size`, `radius`, `border-width`, `focus` | Dimensions (`focus.offset` is the gap between a control and its focus ring) | yes |
+| `space` | The spacing scale | no (referenced by `gap.*` and `inset.*` only) |
+| `gap`, `inset`, `size`, `radius`, `border-width`, `focus` | Dimensions (`focus.offset` is the gap between a control and its focus ring) | yes |
 | `font`, `text` | Font families and text styles | yes |
 | `duration`, `easing`, `breakpoint` | Values only code uses (motion, layout breakpoint) | no |
 
@@ -86,7 +103,8 @@ content are not part of the name: an instance overrides the named text node, and
 `enabled: false`.
 
 Pencil drops a variable bound to a width or height, so a fixed size is the token's value with the token named in the
-node's `context` (`tokens width=size.icon height=size.icon`); the audit checks the value against the variable.
+node's `context` (`tokens width=size.icon height=size.icon`). A size that fits its content up to a maximum records
+`width<=size.column.repo` and shows the fitted width. The audit checks the value against the variable.
 
 ### Checking the document
 

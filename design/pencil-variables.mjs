@@ -4,7 +4,8 @@
 //   node design/pencil-variables.mjs --check   # verify only
 // Pencil variables are flat colors, numbers and strings, so the conversion:
 // - names each variable like its CSS variable without the leading `--` (`color.bg.canvas` → `color-bg-canvas`);
-// - leaves out `palette.*` (screens use semantic colors only) and the tokens that only code uses (CODE_ONLY);
+// - leaves out `palette.*` and `space.*` (designs use the semantic colors and the `gap.*` / `inset.*` spacing only) and
+//   the tokens that only code uses (CODE_ONLY);
 // - resolves references, writes colors as hex (#rrggbb, or #rrggbbaa with alpha) and dimensions as px (1rem = 16px);
 // - splits a typography token into `<name>-font-family`, `-font-size`, `-font-weight` (string) and `-line-height`
 //   (a multiple of the font size); its letter spacing must be 0, which is Pencil's default;
@@ -13,7 +14,7 @@
 import { readFileSync } from "node:fs";
 
 const CODE_ONLY = ["duration", "easing", "breakpoint"];
-const SKIP = ["palette", ...CODE_ONLY];
+const SKIP = ["palette", "space", ...CODE_ONLY];
 const REM = 16;
 
 const tokens = JSON.parse(readFileSync(new URL("tokens.json", import.meta.url), "utf8"));

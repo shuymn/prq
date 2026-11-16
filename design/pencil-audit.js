@@ -4,9 +4,12 @@
 // It prints { violations, counts }; an empty `violations` means:
 // - every fill, stroke color, stroke width, corner radius, padding, gap, text property (family, size, weight, line
 //   height, letter spacing) and shadow on every node, and in every instance override, is a "$…" variable that exists,
-//   except a raw 0; fills are colors, not gradients or images; no variable is a palette color;
+//   except a raw 0; fills are colors, not gradients or images; no variable is a palette color or a space step, and none
+//   of those is defined (Pencil drops a binding to a variable that does not exist, so a `$space-*` binding survives
+//   only while `space-*` variables are defined, and then both are reported);
 // - every fixed width or height is the value of the size token recorded in the node's context
-//   (`context: "tokens width=size.icon height=size.icon"`), because Pencil drops variable bindings on sizes; the
+//   (`context: "tokens width=size.icon height=size.icon"`), or at most its value when the size fits the content up to a
+//   maximum (`width<=size.column.repo`), because Pencil drops variable bindings on sizes; the
 //   exceptions are the screen frames themselves, whose sizes are canvas sizes rather than tokens: a desktop frame is
 //   1440 wide and at least 900 tall, a panel frame `size.panel` wide (recorded in its context) and at least 800 tall,
 //   and every screen frame clips its content;
@@ -35,13 +38,14 @@ const where = (c) => {
   return names.join(" / ");
 };
 const isVar = (v) => typeof v === "string" && v.startsWith("$");
+const RAW_SCALE = /^(palette|space)-/;
 
 function value(at, prop, v, zeroOk = true) {
   if (v === undefined) return;
   if (isVar(v)) {
     const name = v.slice(1);
     if (!(name in VARS)) violations.push(`unknown variable ${v} (${prop}): ${at}`);
-    else if (name.startsWith("palette")) violations.push(`palette variable ${v} (${prop}): ${at}`);
+    else if (RAW_SCALE.test(name)) violations.push(`${name.split("-")[0]} variable ${v} (${prop}): ${at}`);
   } else if (!(zeroOk && v === 0)) {
     violations.push(`unbound ${prop} ${JSON.stringify(v)}: ${at}`);
   }
@@ -58,11 +62,13 @@ function size(at, n, prop) {
   const v = n[prop];
   if (typeof v !== "number" || v === 0) return;
   if (n.type === "text" && (n.textGrowth ?? "auto") === "auto") return;
-  const token = String(n.context ?? "").match(new RegExp(`^tokens\\b.*\\b${prop}=([\\w.-]+)`))?.[1];
+  const [, max, token] = String(n.context ?? "").match(new RegExp(`^tokens\\b.*\\b${prop}(<?)=([\\w.-]+)`)) ?? [];
   if (!token) return void violations.push(`fixed ${prop} ${v} without a size token in context: ${at}`);
   const variable = VARS[token.replaceAll(".", "-")];
   if (!variable) violations.push(`unknown size token ${token} (${prop}): ${at}`);
-  else if (variable.value !== v) violations.push(`${prop} ${v} != ${token} (${variable.value}): ${at}`);
+  else if (max ? v > variable.value : variable.value !== v) {
+    violations.push(`${prop} ${v} ${max ? ">" : "!="} ${token} (${variable.value}): ${at}`);
+  }
 }
 const DESKTOP_WIDTH = 1440;
 function screen(at, n, bounds) {
@@ -113,7 +119,7 @@ function tree(at, n, full) {
   for (const child of n.children ?? []) if (typeof child === "object") tree(`${at} / ${child.name ?? child.id}`, child, true);
 }
 
-for (const name of Object.keys(VARS)) if (name.startsWith("palette")) violations.push(`palette variable defined: ${name}`);
+for (const name of Object.keys(VARS)) if (RAW_SCALE.test(name)) violations.push(`${name.split("-")[0]} variable defined: ${name}`);
 
 const componentName = new Map();
 Get((n) => {
