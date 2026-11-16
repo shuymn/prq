@@ -2,6 +2,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PRESENCE_MS } from "./hub.ts";
+import type { PrSession } from "./pr-session/index.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
 import {
@@ -102,8 +103,8 @@ async function unreachableClaim(name: string) {
 }
 
 // Holds the session's claim calls in the session, before they choose a job: the first `pass` calls go on, the next one
-// is held. The Hub stops waiting for that call at once (its bound on a session call is made 1 ms for that call only).
-async function holdLateClaim(stub: Awaited<ReturnType<typeof localSessionWithJob>>["stub"], pass: number) {
+// is held.
+async function holdClaim(stub: DurableObjectStub<PrSession>, pass = 0) {
   const held = await gate(stub);
   await runInDurableObject(stub, (instance) => {
     const seams = prSessionSeams(instance);
@@ -117,6 +118,13 @@ async function holdLateClaim(stub: Awaited<ReturnType<typeof localSessionWithJob
       return owner();
     });
   });
+  return held;
+}
+
+// holdClaim, and the Hub stops waiting for the held call at once (its bound on a session call is made 1 ms for that
+// call only).
+async function holdLateClaim(stub: DurableObjectStub<PrSession>, pass: number) {
+  const held = await holdClaim(stub, pass);
   await runInDurableObject(await hub(), (instance) => {
     const seams = hubSeams(instance);
     const bound = seams.sessionCallMs.bind(instance);
@@ -232,15 +240,7 @@ describe("late claims after a retry", () => {
     captureLogs();
     const { stub, jobId } = await localSessionWithJob();
     // Attempt 10's fresh claim is held in the session before it chooses a job.
-    const held = await gate(stub);
-    await runInDurableObject(stub, (instance) => {
-      const seams = prSessionSeams(instance);
-      const owner = seams.ownerOf.bind(instance);
-      vi.spyOn(seams, "ownerOf").mockImplementationOnce(async () => {
-        await held.wait();
-        return owner();
-      });
-    });
+    const held = await holdClaim(stub);
     const late = tracked(stub.claim("laptop", "fresh", 10));
     await held.reached();
     // Attempt 11 claims the job, and the host retries it.

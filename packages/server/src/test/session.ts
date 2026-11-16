@@ -12,7 +12,7 @@ import type { Hub } from "../hub.ts";
 import { hubStub, prSessionStub } from "../names.ts";
 import type { CloudAgent } from "../pr-session/cloud.ts";
 import type { PrSession, Submission } from "../pr-session/index.ts";
-import type { JobRow } from "../pr-session/jobs.ts";
+import type { JobRow, Peek } from "../pr-session/jobs.ts";
 import { type AgentSocket, connect, hostToken } from "./chat.ts";
 import { latch } from "./latch.ts";
 
@@ -252,7 +252,7 @@ export function prSessionSeams(instance: object): PrSessionSeams {
 export type HubSeams = {
   sessionStub(session: string): Promise<DurableObjectStub<PrSession>>;
   sessionCallMs(): number;
-  peekSession(session: string, agentId: string): Promise<{ resume: boolean; fresh: boolean; open: boolean }>;
+  peekSession(session: string, agentId: string): Promise<Peek>;
   claimSession(session: string, agentId: string, mode: "resume" | "fresh", attempt: number): Promise<unknown>;
 };
 
