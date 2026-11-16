@@ -26,8 +26,8 @@ conversation.
   queued and the next `wait` returns them.
 - **One conversation per pull request.** A question never starts from zero, and the conversation the host sees is never
   lost.
-- **The owner of a session is fixed.** When a PR session is created, the pool decides whether it is `cloud` or `local`,
-  and the session keeps that owner. There is no handoff between the two. A `local` session whose agent is away waits;
+- **The owner of a session is fixed.** When a PR session receives its first job (the first push or question), the pool
+  decides whether it is `cloud` or `local`, and the session keeps that owner. There is no handoff between the two. A `local` session whose agent is away waits;
   it only gets slower, and the conversation continues when an agent returns. A handoff is added if that turns out to
   hurt in use.
 - **GitHub API use is minimal.** Events arrive by webhook and code comes from git.
@@ -49,7 +49,7 @@ Worker (Hono)
    │
    ├─ PrSession (AIChatAgent, one instance per PR, name = owner~repo~n)
    │    source of truth for the conversation (full history, AI SDK UIMessage)
-   │    owner (cloud | local, fixed at creation) and job state
+   │    owner (cloud | local, fixed at the first job) and job state
    │    model context (after compaction) and the analysis notes
    │    cloud owner: streamText with tools in onChatMessage; workspace is a Sandbox
    │    local owner: input is only stored → notify Hub → prq claims → the answer is appended
@@ -92,20 +92,33 @@ UI:    React + Vite (Workers Static Assets), connected to PrSession with useAgen
 
 PrSession keeps the owner and the job state in one place and processes `claim`, `submit` and retry one after another.
 
-- When a PrSession is created, the system shall look at the Hub pool and set the owner to `local` if any local agent is
-  present, otherwise `cloud`. When two creations race, the first decision wins. The owner does not change afterwards,
-  and all analyses and questions of the session are handled by it.
+- When a PrSession receives its first job (the first push or question), the system shall look at the Hub pool and set
+  the owner to `local` if any local agent is present, otherwise `cloud`; opening the PR in the UI decides nothing. When
+  two first jobs race, the first decision wins. The owner does not change afterwards, and all analyses and questions of
+  the session are handled by it.
 - `local` is a kind, not a binding to one AI session. Any local agent in the pool may claim a pending job, because the
   conversation and the notes are in PrSession and the worktree can be rebuilt.
 - A job has a `jobId` and a target. An analysis is identified by the PR and its head SHA; an answer by the message ID of
   the question. Every `claim` issues a new `claimId` and records the agent ID that made it.
+- A job is `pending` (waiting), `claimed` by a local agent, `finalizing` while its submit appends the result, `running`
+  in the cloud agent, `done`, `failed` or `superseded`. Each change is one SQL statement guarded by the state it
+  expects (and the claim), so a state is never read in one step and changed in another. The next job is the oldest
+  waiting answer, then the waiting analysis, for both owners.
 - When an agent calls `wait` or `claim`, the system shall return that agent ID's own claimed, unfinished job before any
   new job, with a new `claimId`. A process that was killed and restarted can therefore continue at once, and an answer
-  that arrives late from the old process is rejected.
+  that arrives late from the old process is rejected. A resume is a claim: it also sets the claim time again.
 - A job claimed by one agent ID shall not be returned to another agent ID.
-- When a `submit` arrives, the system shall accept it only if `jobId`, `claimId` and the target (head SHA or question
-  message ID) match the current state. When the same `jobId` is submitted again, the system shall return the result
-  already recorded and shall not add it to the conversation a second time.
+- When a `submit` arrives, the system shall accept it only if `jobId`, `claimId`, the agent ID and the target (head SHA
+  or question message ID) match the current state. When the submit that completed a job arrives again (the same
+  `claimId`, agent ID and target), the system shall return the result already recorded and shall not add it to the
+  conversation a second time; any other submit to a completed job is rejected.
+- A submit waits for the conversation to settle (`waitUntilStable`) before it enters the history write queue: the SDK
+  counts a client's save as pending until the save returns, so waiting inside the queue could wait on a save queued
+  behind the submit. Inside the queue it reads the job again, checks it, moves it from `claimed` to `finalizing` (the
+  point at which it wins), appends the answer as message `answer-<jobId>`, and marks the job `done`. A retry or resume
+  before that point makes the submit fail as a stale claim; a retry while the job is `finalizing` is refused, and a
+  resume does not return it. A submit that fails on the way leaves the job `claimed` for the agent to submit again. A
+  local agent cannot report a failure: an unfinished job stays claimed until the host retries it.
 - While no local agent is present, the jobs of a `local` session wait, questions included.
 - A job that was claimed but never submitted (the AI session was closed, for example) is not returned automatically.
   The UI shows which agent ID has been working on it and since when, and starts showing it as possibly stalled after 60
@@ -113,15 +126,23 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   before that mark appears. A retry puts the job back to pending and changes the `claimId`, so an answer that arrives
   late from the earlier claim is rejected.
 - A failed job is kept as `failed` with its reason and can be retried from the UI.
+- A cloud session hands its next waiting job to the cloud agent in the same step that made the job waiting, one job
+  at a time (the job is `running` until the agent ends it). While no cloud agent is configured, that step instead marks
+  the job `failed` with "cloud agent not configured"; no model is called and nothing is streamed.
 
 ### Intake
 
 UI, webhook and CLI input all enter through PrSession.
 
-- When the UI sends a message, it arrives in `onChatMessage`. PrSession looks at the owner first: for `cloud` it runs the
-  turn; for `local` it runs no turn, creates a job for every user question that has none, and notifies the Hub. A
-  question can already be stored when a later turn starts, which is why every question without a job gets one, not only
-  the last message.
+- When the UI sends a message, it arrives in `onChatMessage`. PrSession runs no turn there: it creates a job for every
+  user question that has none (deciding the owner at the session's first job) and hands the jobs on, to the Hub for a
+  `local` session and to the cloud agent for a `cloud` one. A question can already be stored when a later turn starts,
+  which is why every question without a job gets one, not only the last message.
+- Which questions wait for a job is kept in its own table, not found by reading the history. The history write that
+  adds questions (one at a time, in the write queue) writes an intake row for each before storing it, so a stored
+  question always has its job or its row, however long the history. Creating jobs reads the intake rows inside the same
+  queue, where no question is between its row and its insert: a row whose question is not stored was left by a write
+  that failed or stopped, and is dropped. Each job is created in one step with the removal of its row.
 - An analysis is made per push, at the pushed head SHA: GitHub sends one `pull_request` event per push, and the commits
   inside a push are not analyzed one by one.
 - When a webhook arrives, it goes to the PrSession, not to the Hub. The PrSession always records the pushed SHA as the
@@ -161,6 +182,19 @@ UI, webhook and CLI input all enter through PrSession.
   on one machine need two IDs. The ID is self-declared and is not authentication: every local agent uses the same
   service token.
 - `wait` only receives a notification and never removes a job. A job stays until PrSession `claim`s it.
+- When a local job becomes waiting (created or retried), PrSession writes an outbox row in the same storage step and
+  delivers it to the Hub (`notify`) right after. Before any write that can create work (storing new questions, a
+  retry), PrSession schedules a wake (`settle`, an Agents SDK schedule), so whenever work exists a wake already exists.
+  A wake is a new schedule row each time: an idempotent one would match the row of a `settle` that is running and
+  vanish when that run ends.
+- `settle` runs from the wake and at every start. It creates the jobs of the questions with intake rows, finishes
+  each `finalizing` job inside the history write queue (`done` when its message exists, else back to `claimed`), runs
+  the cloud hand-over, and delivers the outbox. A failed delivery keeps the row and schedules a retry (5 s, doubling to
+  60 s) only when no `settle` is scheduled for a later second; the check and the schedule run under one lock, so
+  failures during a Hub outage leave one retry, not one per failure.
+- Outbox rows and the Hub's notification rows carry a generation taken from a counter in the same object that only
+  grows. A delivery deletes its outbox row only if the row's generation is still the one it read, so a row that was
+  deleted and written again during a slow call is kept.
 - Each time `wait` reconnects it re-checks for pending jobs and returns at once if there are any. An authentication
   failure (401 or 403) is told apart from an ordinary timeout and ends with an error, so the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.
@@ -394,7 +428,8 @@ Server:
 - Workers observability (logs) is enabled. Webhook receipt, job state changes, LLM and tool errors, and compactions are
   logged with the PR key and `jobId`.
 - The UI shows, per PR, the job state (waiting, which agent ID is working on it, failed with its reason) and, per answer,
-  the target SHA, the model and the tokens used.
+  the target SHA, the model and the tokens used. The job state reaches it as the session's Agent state
+  (`PrSessionView` in `@prq/protocol`), which only the server sets.
 - A failed job is kept as `failed` and can be retried from the UI.
 
 ### Billing limits
@@ -425,7 +460,9 @@ prq/
 │  │       ├─ version.ts         the Prq-Version header name
 │  │       ├─ errors.ts          error codes and the error body
 │  │       ├─ pr.ts              pull request references, the canonical session name, the Hub's name
-│  │       └─ views.ts           what the UI reads from the server (the version message)
+│  │       ├─ cli.ts             jobs and what a local agent sends and receives
+│  │       ├─ messages.ts        the metadata of messages the server appends
+│  │       └─ views.ts           what the UI reads from the server (the version message, the session view)
 │  ├─ server/              @prq/server: the Worker (Hono + Agents SDK) and the UI
 │  │   ├─ src/
 │  │   │   ├─ index.ts           entry (Hono, routeAgentRequest)
@@ -438,13 +475,16 @@ prq/
 │  │   │   ├─ names.ts           the only Durable Object stubs; which Agents routes are served
 │  │   │   ├─ agents.ts          /agents/* (routeAgentRequest behind the name check), the version message
 │  │   │   ├─ schema.ts          SQLite schema steps per Durable Object class
+│  │   │   ├─ wait.ts            bounded waits: timeouts and the one-at-a-time queue
 │  │   │   ├─ webhook.ts         GitHub webhook (signature, own PRs only)
 │  │   │   ├─ cli-routes.ts      /cli/* (wait / claim / context / submit)
 │  │   │   ├─ api-routes.ts      /api/* (PR list and the like)
 │  │   │   ├─ hub.ts             Hub (ledger, pool, notifications)
 │  │   │   ├─ pr-session/        PrSession (intake, jobs, context assembly, tools)
-│  │   │   │   ├─ index.ts       the class and its chat hooks
-│  │   │   │   └─ history.ts     append-only history: the write queue, refused client frames
+│  │   │   │   ├─ index.ts       the class: intake, jobs, the wake and the outbox, its chat hooks
+│  │   │   │   ├─ history.ts     append-only history: refused client frames, insert-only writes
+│  │   │   │   ├─ jobs.ts        job rows and their guarded transitions
+│  │   │   │   └─ cloud.ts       the cloud agent seam
 │  │   │   ├─ github/            App token; attaching the token to outbound git traffic
 │  │   │   ├─ instructions/      prompts, skill registry, activate_skill / read_skill_resource
 │  │   │   ├─ workspace.ts       Sandbox

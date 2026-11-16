@@ -4,6 +4,11 @@
 // `warn` for a rejected request, `error` for something that should have worked and did not; others pass none.
 type LogLevel = "warn" | "error";
 
+// An error as a log field: its name only, since a message can carry request content or a configuration value.
+export function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
+}
+
 export function log(event: `prq.${string}`, fields: Record<string, unknown> = {}, level?: LogLevel): void {
   console[level ?? "log"]({ event, ...fields });
 }
