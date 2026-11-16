@@ -7,6 +7,7 @@ import type { PrSession } from "./pr-session/index.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import {
+  claimIn,
   cancelWakes,
   gate,
   holdInsert,
@@ -195,7 +196,7 @@ async function claimedQ1() {
   const session = await newSession("intake", sockets);
   const client = await session.open();
   await client.chat([Q1]);
-  const claim = await session.stub.claim("laptop", "fresh");
+  const claim = await claimIn(session.stub, "laptop", "fresh");
   return { ...session, client, claim };
 }
 

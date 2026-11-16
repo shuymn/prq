@@ -98,34 +98,67 @@ const WORKSPACE_SHA = `CASE kind WHEN 'analysis' THEN target ELSE (
   SELECT done.target FROM prq_jobs AS done WHERE done.kind = 'analysis' AND done.state = 'done'
   ORDER BY done.updated_at DESC, done.seq DESC LIMIT 1) END`;
 
+// A claim is one attempt of the Hub's, numbered from its counter. A session takes a claim only from an attempt newer
+// than every attempt the agent has claimed under there (prq_claim_attempts), so a claim that lands late (its caller
+// stopped waiting for it) changes nothing once a newer attempt of the agent has claimed, whatever happened to that
+// job since. Bound to the agent ID, then the attempt.
+const NEWER_ATTEMPT_CLAIMED = "EXISTS (SELECT 1 FROM prq_claim_attempts WHERE agent_id = ? AND attempt >= ?)";
+
+// Records that the agent's attempt claimed a job here; written in the claim's transaction.
+export function recordAttempt(sql: SqlStorage, agentId: string, attempt: number): void {
+  sql.exec(
+    `INSERT INTO prq_claim_attempts (agent_id, attempt) VALUES (?, ?)
+     ON CONFLICT (agent_id) DO UPDATE SET attempt = max(attempt, excluded.attempt)`,
+    agentId,
+    attempt,
+  );
+}
+
 // The agent's own claimed job, under a new claim (a resume is a claim: the time and the workspace are set again).
-export function resumeClaim(sql: SqlStorage, agentId: string, claimId: string, now: number): JobRow | undefined {
+export function resumeClaim(
+  sql: SqlStorage,
+  agentId: string,
+  claimId: string,
+  attempt: number,
+  now: number,
+): JobRow | undefined {
   return sql
     .exec<JobRow>(
       `UPDATE prq_jobs SET claim_id = ?, claimed_at = ?, updated_at = ?, workspace_sha = ${WORKSPACE_SHA}
        WHERE state = 'claimed' AND job_id = (
          SELECT job_id FROM prq_jobs WHERE state = 'claimed' AND agent_id = ? ORDER BY seq LIMIT 1)
+         AND NOT ${NEWER_ATTEMPT_CLAIMED}
        RETURNING *`,
       claimId,
       now,
       now,
       agentId,
+      agentId,
+      attempt,
     )
     .toArray()[0];
 }
 
 // The next pending job, claimed by the agent. Selection and update are one statement.
-export function freshClaim(sql: SqlStorage, agentId: string, claimId: string, now: number): JobRow | undefined {
+export function freshClaim(
+  sql: SqlStorage,
+  agentId: string,
+  claimId: string,
+  attempt: number,
+  now: number,
+): JobRow | undefined {
   return sql
     .exec<JobRow>(
       `UPDATE prq_jobs SET state = 'claimed', agent_id = ?, claim_id = ?, claimed_at = ?, updated_at = ?,
          workspace_sha = ${WORKSPACE_SHA}
-       WHERE state = 'pending' AND job_id = (${NEXT_PENDING})
+       WHERE state = 'pending' AND job_id = (${NEXT_PENDING}) AND NOT ${NEWER_ATTEMPT_CLAIMED}
        RETURNING *`,
       agentId,
       claimId,
       now,
       now,
+      agentId,
+      attempt,
     )
     .toArray()[0];
 }

@@ -12,7 +12,7 @@ import type { Hub } from "../hub.ts";
 import { hubStub, prSessionStub } from "../names.ts";
 import type { CloudAgent } from "../pr-session/cloud.ts";
 import type { PrSession, Submission } from "../pr-session/index.ts";
-import type { JobRow } from "../pr-session/jobs.ts";
+import type { JobRow, Peek } from "../pr-session/jobs.ts";
 import { type AgentSocket, connect, hostToken } from "./chat.ts";
 import { latch } from "./latch.ts";
 
@@ -51,6 +51,13 @@ export async function setPool(agentIds: readonly string[]): Promise<void> {
   }
 }
 
+// Empties the Hub's notification queue (of the sessions earlier tests of the file left).
+export async function clearQueue(): Promise<void> {
+  await runInDurableObject(await hub(), (_, state) => {
+    state.storage.sql.exec("DELETE FROM prq_notifications");
+  });
+}
+
 // The sessions in the Hub's notification queue.
 export async function queued(): Promise<string[]> {
   return runInDurableObject(await hub(), (_, state) =>
@@ -59,6 +66,25 @@ export async function queued(): Promise<string[]> {
       .toArray()
       .map((row) => row.session),
   );
+}
+
+// The next attempt number from the Hub's counter, for a claim made on a session directly.
+async function nextAttempt(): Promise<number> {
+  return runInDurableObject(
+    await hub(),
+    (_, state) =>
+      state.storage.sql.exec<{ gen: number }>("UPDATE prq_hub SET gen = gen + 1 WHERE id = 1 RETURNING gen").one().gen,
+  );
+}
+
+// A claim made on a session directly, as the Hub makes it: under the next attempt.
+export async function claimIn(
+  stub: DurableObjectStub<PrSession>,
+  agentId: string,
+  mode: "resume" | "fresh",
+): Promise<ClaimResponse> {
+  const attempt = await nextAttempt();
+  return stub.claim(agentId, mode, attempt);
 }
 
 export async function jobRows(stub: DurableObjectStub<PrSession>): Promise<JobRow[]> {
@@ -219,6 +245,26 @@ function hasPrSessionSeams(instance: object): instance is PrSessionSeams {
 export function prSessionSeams(instance: object): PrSessionSeams {
   if (!hasPrSessionSeams(instance)) {
     throw new TypeError("PrSession lacks a member the tests hold");
+  }
+  return instance;
+}
+
+export type HubSeams = {
+  sessionStub(session: string): Promise<DurableObjectStub<PrSession>>;
+  sessionCallMs(): number;
+  peekSession(session: string, agentId: string): Promise<Peek>;
+  claimSession(session: string, agentId: string, mode: "resume" | "fresh", attempt: number): Promise<unknown>;
+};
+
+const HUB_SEAMS = ["sessionStub", "sessionCallMs", "peekSession", "claimSession"] as const;
+
+function hasHubSeams(instance: object): instance is HubSeams {
+  return HUB_SEAMS.every((name) => typeof Reflect.get(instance, name) === "function");
+}
+
+export function hubSeams(instance: object): HubSeams {
+  if (!hasHubSeams(instance)) {
+    throw new TypeError("Hub lacks a member the tests hold");
   }
   return instance;
 }

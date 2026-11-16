@@ -193,8 +193,17 @@ UI, webhook and CLI input all enter through PrSession.
   60 s) only when no `settle` is scheduled for a later second; the check and the schedule run under one lock, so
   failures during a Hub outage leave one retry, not one per failure.
 - Outbox rows and the Hub's notification rows carry a generation taken from a counter in the same object that only
-  grows. A delivery deletes its outbox row only if the row's generation is still the one it read, so a row that was
+  grows. A delivery or a check deletes the row only if its generation is still the one it read, so a row that was
   deleted and written again during a slow call is kept.
+- The Hub keeps the sessions it was notified of in a queue. A check asks each queued session (`peek`) whether it has
+  the agent's own claimed job or a waiting one, and drops a session that has no open job. A `claim` asks the queued
+  sessions for the agent's own claimed job first, then for a waiting one. Each call to a session is bounded as a whole,
+  the session's start included, and a session that does not answer in time is skipped and stays queued.
+- A call the Hub stopped waiting for keeps running and can still land. So each `claim` is one attempt, numbered from the
+  Hub's counter, and a session takes a claim only from an attempt newer than every attempt that agent has claimed
+  under there: a late claim changes nothing once a newer one has claimed, and the `claimId` an agent received stays its
+  claim. The session keeps each agent's newest claiming attempt apart from the jobs and advances it in the claim's
+  transaction, so a retry, which clears a job's claim, does not lower it.
 - Each time `wait` reconnects it re-checks for pending jobs and returns at once if there are any. An authentication
   failure (401 or 403) is told apart from an ordinary timeout and ends with an error, so the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.
