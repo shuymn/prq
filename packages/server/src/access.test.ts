@@ -19,6 +19,7 @@ import {
   type KeyServer,
   type SigningKey,
 } from "./test/access.ts";
+import { latch } from "./test/latch.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -218,24 +219,35 @@ describe("key fetch failure", () => {
     const keys = serveKeys(teamDomain, key);
     const unimportable = { kty: "RSA", kid: key.kid, alg: "RS256", n: "!", e: "AQAB" };
     const good = { ...key.publicJwk, kid: key.kid, alg: "RS256" };
-    // Fetch 1 (request A) and fetch 2 (request B, slow) answer the unimportable key; later fetches the good one.
+    // Fetches 1 (request A) and 2 (request B) each signal that they started, wait to be released, and answer the
+    // unimportable key; later fetches answer the good one.
+    const started = [latch(), latch()];
+    const released = [latch(), latch()];
     keys.fail(async () => {
-      const fetch = keys.fetches();
-      if (fetch === 2) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      const held = keys.fetches() - 1;
+      const [start, release] = [started[held], released[held]];
+      if (start === undefined || release === undefined) {
+        return Response.json({ keys: [good] });
       }
-      return Response.json({ keys: [fetch <= 2 ? unimportable : good] });
+      start.open();
+      await release.promise;
+      return Response.json({ keys: [unimportable] });
     });
     captureLogs();
     const token = await tokenFor(teamDomain, key);
     const send = () => app.fetch(request("/cli/wait", token), envFor(teamDomain));
 
+    // A and B both start with the first set, each with its own fetch in flight.
     const a = send();
+    await started[0]?.promise;
     const b = send();
-    // A drops the set; C loads a good one while B still waits for its fetch.
+    await started[1]?.promise;
+    // A fails and drops the set; C then loads a good one.
+    released[0]?.open();
     expect((await a).status).toBe(503);
     expect((await send()).status).toBe(404);
-    // B fails with the set A dropped and must not drop C's.
+    // B fails with the set A dropped and must keep C's: the next request needs no fetch.
+    released[1]?.open();
     expect((await b).status).toBe(503);
     expect({ status: (await send()).status, fetches: keys.fetches() }).toEqual({ status: 404, fetches: 3 });
   });
