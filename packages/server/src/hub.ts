@@ -150,11 +150,11 @@ export class Hub extends Agent<Env, HubView> {
   // than that is read, however many agents and claims came before.
   #presentAgents(now: number): Set<string> {
     const recent = this.#sql.exec<{ agent_id: string }>(
-      "SELECT agent_id FROM prq_agents INDEXED BY prq_agents_seen WHERE last_seen_at > ?",
+      "SELECT agent_id FROM prq_agents WHERE last_seen_at > ?",
       now - PRESENCE_MS,
     );
     const holding = this.#sql.exec<{ agent_id: string }>(
-      "SELECT agent_id FROM prq_claims INDEXED BY prq_claims_claimed WHERE claimed_at > ?",
+      "SELECT agent_id FROM prq_claims WHERE claimed_at > ?",
       now - STALL_MS - PRESENCE_MS,
     );
     return new Set([
