@@ -142,13 +142,13 @@ export class Hub extends Agent<Env, HubView> {
   }
 
   #localPresent(now: number): boolean {
-    return this.#presences(now).size > 0;
+    return this.#presentAgents(now).size > 0;
   }
 
-  // Each agent ID present at now, with what its presence rests on, all on the Hub's clock: one with a contact or a claim
-  // recent enough to make it present (isPresent), each read as a range of the index on its time (schema.ts), or one in a
-  // wait. No contact or claim older than that is read, however many agents and claims came before.
-  #presences(now: number): Map<string, Presence> {
+  // Each agent ID present at now, on the Hub's clock: one with a contact or a claim recent enough to make it present
+  // (isPresent), each read as a range of the index on its time (schema.ts), or one in a wait. No contact or claim older
+  // than that is read, however many agents and claims came before.
+  #presentAgents(now: number): Set<string> {
     const recent = this.#sql.exec<{ agent_id: string }>(
       "SELECT agent_id FROM prq_agents INDEXED BY prq_agents_seen WHERE last_seen_at > ?",
       now - PRESENCE_MS,
@@ -157,11 +157,15 @@ export class Hub extends Agent<Env, HubView> {
       "SELECT agent_id FROM prq_claims INDEXED BY prq_claims_claimed WHERE claimed_at > ?",
       now - STALL_MS - PRESENCE_MS,
     );
-    const ids = new Set([
+    return new Set([
       ...[...recent, ...holding].map((row) => row.agent_id),
       ...[...this.#waiters].map((waiter) => waiter.agentId),
     ]);
-    return new Map([...ids].map((agentId) => [agentId, this.#presenceOf(agentId)]));
+  }
+
+  // Each present agent ID with what its presence rests on.
+  #presences(now: number): Map<string, Presence> {
+    return new Map([...this.#presentAgents(now)].map((agentId) => [agentId, this.#presenceOf(agentId)]));
   }
 
   // What an agent ID's presence rests on: whether it is in a wait, its last contact, and its claims.
@@ -347,7 +351,7 @@ export class Hub extends Agent<Env, HubView> {
   // ledger's totals and its version. Nothing in it changes on a contact alone.
   view(): HubView {
     const now = this.clock();
-    const presentAgents = this.#presences(now).size;
+    const presentAgents = this.#presentAgents(now).size;
     const totals = this.#sql
       .exec<{
         version: number;
