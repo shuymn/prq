@@ -114,8 +114,10 @@ describe("one write at a time", () => {
     const sender = await open();
     const observer = await open();
     await sender.chat([Q1, Q2]);
-    // Holds the SDK's save (AIChatAgent.prototype.persistMessages, inside the queue) for the next write.
+    // Holds the SDK's save (AIChatAgent.prototype.persistMessages, inside the queue) for the next write, and marks
+    // the server append's arrival at PrSession.persistMessages, before the queue.
     let entered = false;
+    let appendArrived = false;
     let release: (() => void) | null = null;
     await runInDurableObject(stub, (instance) => {
       const held = latch();
@@ -127,6 +129,11 @@ describe("one write at a time", () => {
         await held.promise;
         return save(...args);
       });
+      const persist = instance.persistMessages.bind(instance);
+      vi.spyOn(instance, "persistMessages").mockImplementation(async (messages) => {
+        appendArrived ||= messages.some((message) => message.id === A1.id);
+        return persist(messages);
+      });
     });
 
     const asked = sender.chat([Q1, Q2, Q3]);
@@ -135,7 +142,8 @@ describe("one write at a time", () => {
     const append = serverAppend(stub, A1).then(() => {
       appended = true;
     });
-    // The object keeps serving while the save is held, and the append waits for it.
+    await vi.waitFor(() => expect(appendArrived).toBe(true), { timeout: 2000 });
+    // The object keeps serving while the save is held, and the append, which has arrived, waits for it.
     expect(await storedMessages(path, token)).toEqual([Q1, Q2]);
     expect(appended).toBe(false);
     await runInDurableObject(stub, () => release?.());
