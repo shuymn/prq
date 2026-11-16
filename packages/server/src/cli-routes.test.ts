@@ -80,6 +80,8 @@ function holding(claim: ClaimResponse) {
   return { ...claim, job: claim.job };
 }
 
+type Held = ReturnType<typeof holding>;
+
 describe("wait returns at once", () => {
   it("answers ready when a pending job waits", async () => {
     captureLogs();
@@ -506,7 +508,7 @@ async function holdHubClaim() {
 
 // A claim the route stops waiting for (503) before it reaches the Hub; the agent's resend gets the job, `between` runs,
 // and then the first claim lands. Returns the resend's claim and the late claim's outcome.
-async function lateClaimAfterResend(session: Session, between?: (resend: ReturnType<typeof holding>) => Promise<void>) {
+async function lateClaimAfterResend(session: Session, between?: (resend: Held) => Promise<void>) {
   const held = await holdHubClaim();
   const limit = heldBound();
   const res = tracked(fetchBounded(limit.bound, postRequest("/cli/claim", session.token, { agentId: "laptop" })));
@@ -527,7 +529,7 @@ async function retryJobOver(session: Session, jobId: string): Promise<void> {
 
 // The recovery after stale_claim (docs/design.md, Owner and jobs): the answer produced under `answered`, sent again
 // under the claim the agent now holds, with the run it was produced under.
-function resubmit(session: Session, now: ReturnType<typeof holding>, answered: ReturnType<typeof holding>) {
+function resubmit(session: Session, now: Held, answered: Held) {
   const claim = { ...now, job: { ...now.job, run: answered.job.run } };
   return submitOver(session.token, session.ref, claim, "laptop", "the answer from before");
 }

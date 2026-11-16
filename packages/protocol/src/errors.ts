@@ -1,9 +1,9 @@
 import * as v from "valibot";
 
 // What went wrong. Statuses: 400 bad_request, 401 unauthorized, 404 not_found and unknown_job, 409 stale_claim,
-// target_mismatch, not_retryable and stale_job, 500 internal, 503 unavailable. 503 means the server could not complete the request
-// now: Access's keys could not be fetched, or a Durable Object did not answer in time. The caller tries again; it is
-// never an authentication failure.
+// target_mismatch, not_retryable and stale_job, 500 internal, 503 unavailable. 503 means the server could not complete
+// the request now: Access's keys could not be fetched, or a Durable Object did not answer in time. The caller tries
+// again; it is never an authentication failure.
 export const ErrorCode = v.picklist([
   "unauthorized",
   "bad_request",

@@ -140,12 +140,13 @@ export function heldBound() {
   const outcomes: Promise<unknown>[] = [];
   const expiry = latch();
   const bound: CallBound = (call, ms, what) => {
+    const outcome = Promise.resolve(call);
     bounds.push({ ms, what });
-    outcomes.push(Promise.resolve(call).catch((error: unknown) => error));
+    outcomes.push(outcome.catch((error: unknown) => error));
     const expired = expiry.promise.then((): never => {
       throw new WaitTimeout(`${what} expired`);
     });
-    return Promise.race([Promise.resolve(call), expired]);
+    return Promise.race([outcome, expired]);
   };
   const late = () => outcomes[0] ?? Promise.reject(new Error("no call was bounded"));
   return { bound, bounds, late, expire: () => expiry.open() };
