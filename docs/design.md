@@ -163,9 +163,6 @@ alarm set at the claim). The Hub adds only what it owns itself: whether a local 
 
 - **Latest event:** a push received, a question sent, a summary completed or an answer completed, with its time. Rows
   are ordered by it. Claims, heartbeats and streaming are not events.
-- **New:** the times of the latest completed summary and the latest completed answer are kept apart from the latest
-  event, so a later push does not hide an unread answer. The row is new while either time is after the time the host
-  last opened the PR; opening the PR detail records that time.
 - **Problem:** at most one label, the first that applies in this order:
   1. *Summary failed* — the analysis of the current head failed and it has no completed analysis. Clears when one
      completes.

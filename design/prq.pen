@@ -7073,38 +7073,21 @@
                   "children": [
                     {
                       "type": "frame",
-                      "id": "LyZ4C",
-                      "name": "start",
-                      "gap": "$gap-related",
-                      "alignItems": "center",
+                      "id": "RWT6j",
+                      "name": "repo-cell",
+                      "context": "tokens width<=size.column.repo",
+                      "width": 63,
                       "children": [
                         {
-                          "type": "frame",
-                          "id": "Ov34X",
-                          "name": "lead",
-                          "context": "tokens width=size.icon height=size.icon",
-                          "width": 16,
-                          "height": 16
-                        },
-                        {
-                          "type": "frame",
-                          "id": "RWT6j",
-                          "name": "repo-cell",
-                          "context": "tokens width<=size.column.repo",
-                          "width": 63,
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "NvZJv",
-                              "name": "repo",
-                              "fill": "$color-fg-muted",
-                              "content": "Repository",
-                              "lineHeight": "$text-small-strong-line-height",
-                              "fontFamily": "$text-small-strong-font-family",
-                              "fontSize": "$text-small-strong-font-size",
-                              "fontWeight": "$text-small-strong-font-weight"
-                            }
-                          ]
+                          "type": "text",
+                          "id": "NvZJv",
+                          "name": "repo",
+                          "fill": "$color-fg-muted",
+                          "content": "Repository",
+                          "lineHeight": "$text-small-strong-line-height",
+                          "fontFamily": "$text-small-strong-font-family",
+                          "fontSize": "$text-small-strong-font-size",
+                          "fontWeight": "$text-small-strong-font-weight"
                         }
                       ]
                     },
@@ -7195,52 +7178,23 @@
                   "children": [
                     {
                       "type": "frame",
-                      "id": "at4yz",
-                      "name": "start",
-                      "gap": "$gap-related",
+                      "id": "XNBlS",
+                      "name": "repo-cell",
+                      "context": "tokens width<=size.column.repo",
+                      "clip": true,
+                      "width": 63,
                       "alignItems": "center",
                       "children": [
                         {
-                          "type": "frame",
-                          "id": "lybXb",
-                          "name": "lead",
-                          "context": "tokens width=size.icon",
-                          "width": 16,
-                          "children": [
-                            {
-                              "id": "FDKFa",
-                              "type": "ref",
-                              "ref": "N0zRQb",
-                              "name": "new",
-                              "descendants": {
-                                "H61RCg": {
-                                  "fill": "$color-accent-fg"
-                                }
-                              }
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "XNBlS",
-                          "name": "repo-cell",
-                          "context": "tokens width<=size.column.repo",
-                          "clip": true,
-                          "width": 63,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "E62nng",
-                              "name": "repo",
-                              "fill": "$color-fg-default",
-                              "content": "prq",
-                              "lineHeight": "$text-body-line-height",
-                              "fontFamily": "$text-body-font-family",
-                              "fontSize": "$text-body-font-size",
-                              "fontWeight": "$text-body-font-weight"
-                            }
-                          ]
+                          "type": "text",
+                          "id": "E62nng",
+                          "name": "repo",
+                          "fill": "$color-fg-default",
+                          "content": "prq",
+                          "lineHeight": "$text-body-line-height",
+                          "fontFamily": "$text-body-font-family",
+                          "fontSize": "$text-body-font-size",
+                          "fontWeight": "$text-body-font-weight"
                         }
                       ]
                     },
@@ -15295,12 +15249,6 @@
                       "name": "PrRow prq #41",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Split the webhook handler by event type"
                         },
@@ -15337,9 +15285,6 @@
                       "name": "PrRow prq #42",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Add retry to stalled jobs"
                         },
@@ -15364,12 +15309,6 @@
                       "name": "PrRow kopje #16",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Render Markdown tables in answers"
                         },
@@ -15391,9 +15330,6 @@
                       "name": "PrRow zenith #87",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "lfqO6": {
                           "width": "fill_container"
                         },
@@ -15421,12 +15357,6 @@
                       "name": "PrRow kopje #15",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Pin skill commits on register"
                         },
@@ -15463,12 +15393,6 @@
                       "name": "PrRow zenith #85",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "ThKc5": {
                           "content": "Cache installation tokens per repository"
                         },
@@ -15505,9 +15429,6 @@
                       "name": "PrRow zenith #84",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "ThKc5": {
                           "content": "Retry GitHub API calls on secondary rate limits"
                         },
@@ -15532,12 +15453,6 @@
                       "name": "PrRow prq #39",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Document the job claim protocol"
                         },
@@ -15562,12 +15477,6 @@
                       "name": "PrRow prq #38",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Move settings to their own page"
                         },
@@ -15592,12 +15501,6 @@
                       "name": "PrRow kopje #14",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Show allowed tools in the skill review"
                         },
@@ -15763,12 +15666,6 @@
                       "name": "PrRow prq #41",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Split the webhook handler by event type"
                         },
@@ -15805,9 +15702,6 @@
                       "name": "PrRow prq #42",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Add retry to stalled jobs"
                         },
@@ -15832,12 +15726,6 @@
                       "name": "PrRow kopje #16",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Render Markdown tables in answers"
                         },
@@ -15859,9 +15747,6 @@
                       "name": "PrRow zenith #87",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "lfqO6": {
                           "width": "fill_container"
                         },
@@ -15889,12 +15774,6 @@
                       "name": "PrRow prq #40",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "E0ko1Q": {
                           "id": "BA8f6",
                           "type": "ref",
@@ -15930,12 +15809,6 @@
                       "name": "PrRow kopje #15",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Pin skill commits on register"
                         },
@@ -15972,12 +15845,6 @@
                       "name": "PrRow zenith #85",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "ThKc5": {
                           "content": "Cache installation tokens per repository"
                         },
@@ -16014,9 +15881,6 @@
                       "name": "PrRow zenith #84",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "ThKc5": {
                           "content": "Retry GitHub API calls on secondary rate limits"
                         },
@@ -16041,12 +15905,6 @@
                       "name": "PrRow zenith #83",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "E0ko1Q": {
                           "id": "hf39y",
                           "type": "ref",
@@ -16082,12 +15940,6 @@
                       "name": "PrRow prq #39",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Document the job claim protocol"
                         },
@@ -16112,12 +15964,6 @@
                       "name": "PrRow kopje #12",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "E0ko1Q": {
                           "id": "mx14N",
                           "type": "ref",
@@ -16153,12 +15999,6 @@
                       "name": "PrRow prq #38",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Move settings to their own page"
                         },
@@ -16183,12 +16023,6 @@
                       "name": "PrRow kopje #14",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Show allowed tools in the skill review"
                         },
@@ -16448,35 +16282,18 @@
                       "children": [
                         {
                           "type": "frame",
-                          "id": "gKtYd",
-                          "name": "start",
-                          "gap": "$gap-related",
+                          "id": "qXMq4",
+                          "name": "repo-cell",
+                          "context": "tokens width<=size.column.repo",
+                          "width": 63,
                           "alignItems": "center",
                           "children": [
                             {
-                              "type": "frame",
-                              "id": "Rx1Xv",
-                              "name": "lead",
-                              "context": "tokens width=size.icon height=size.icon",
-                              "width": 16,
-                              "height": 16
-                            },
-                            {
-                              "type": "frame",
-                              "id": "qXMq4",
-                              "name": "repo-cell",
-                              "context": "tokens width<=size.column.repo",
-                              "width": 63,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "id": "u1xfZN",
-                                  "type": "ref",
-                                  "ref": "HILEH",
-                                  "name": "repo-line",
-                                  "width": "fill_container"
-                                }
-                              ]
+                              "id": "u1xfZN",
+                              "type": "ref",
+                              "ref": "HILEH",
+                              "name": "repo-line",
+                              "width": "fill_container"
                             }
                           ]
                         },
@@ -16553,35 +16370,18 @@
                       "children": [
                         {
                           "type": "frame",
-                          "id": "sZO61",
-                          "name": "start",
-                          "gap": "$gap-related",
+                          "id": "t30yq",
+                          "name": "repo-cell",
+                          "context": "tokens width<=size.column.repo",
+                          "width": 63,
                           "alignItems": "center",
                           "children": [
                             {
-                              "type": "frame",
-                              "id": "Y1CB8d",
-                              "name": "lead",
-                              "context": "tokens width=size.icon height=size.icon",
-                              "width": 16,
-                              "height": 16
-                            },
-                            {
-                              "type": "frame",
-                              "id": "t30yq",
-                              "name": "repo-cell",
-                              "context": "tokens width<=size.column.repo",
-                              "width": 63,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "id": "dOY4O",
-                                  "type": "ref",
-                                  "ref": "HILEH",
-                                  "name": "repo-line",
-                                  "width": "fill_container"
-                                }
-                              ]
+                              "id": "dOY4O",
+                              "type": "ref",
+                              "ref": "HILEH",
+                              "name": "repo-line",
+                              "width": "fill_container"
                             }
                           ]
                         },
@@ -16658,35 +16458,18 @@
                       "children": [
                         {
                           "type": "frame",
-                          "id": "uukVf",
-                          "name": "start",
-                          "gap": "$gap-related",
+                          "id": "jiSeR",
+                          "name": "repo-cell",
+                          "context": "tokens width<=size.column.repo",
+                          "width": 63,
                           "alignItems": "center",
                           "children": [
                             {
-                              "type": "frame",
-                              "id": "L504s",
-                              "name": "lead",
-                              "context": "tokens width=size.icon height=size.icon",
-                              "width": 16,
-                              "height": 16
-                            },
-                            {
-                              "type": "frame",
-                              "id": "jiSeR",
-                              "name": "repo-cell",
-                              "context": "tokens width<=size.column.repo",
-                              "width": 63,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "id": "p8zQVT",
-                                  "type": "ref",
-                                  "ref": "HILEH",
-                                  "name": "repo-line",
-                                  "width": "fill_container"
-                                }
-                              ]
+                              "id": "p8zQVT",
+                              "type": "ref",
+                              "ref": "HILEH",
+                              "name": "repo-line",
+                              "width": "fill_container"
                             }
                           ]
                         },
@@ -16763,35 +16546,18 @@
                       "children": [
                         {
                           "type": "frame",
-                          "id": "T2e96",
-                          "name": "start",
-                          "gap": "$gap-related",
+                          "id": "IbrJ7",
+                          "name": "repo-cell",
+                          "context": "tokens width<=size.column.repo",
+                          "width": 63,
                           "alignItems": "center",
                           "children": [
                             {
-                              "type": "frame",
-                              "id": "nTv8t",
-                              "name": "lead",
-                              "context": "tokens width=size.icon height=size.icon",
-                              "width": 16,
-                              "height": 16
-                            },
-                            {
-                              "type": "frame",
-                              "id": "IbrJ7",
-                              "name": "repo-cell",
-                              "context": "tokens width<=size.column.repo",
-                              "width": 63,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "id": "ljF6x",
-                                  "type": "ref",
-                                  "ref": "HILEH",
-                                  "name": "repo-line",
-                                  "width": "fill_container"
-                                }
-                              ]
+                              "id": "ljF6x",
+                              "type": "ref",
+                              "ref": "HILEH",
+                              "name": "repo-line",
+                              "width": "fill_container"
                             }
                           ]
                         },
@@ -16868,35 +16634,18 @@
                       "children": [
                         {
                           "type": "frame",
-                          "id": "CWhzX",
-                          "name": "start",
-                          "gap": "$gap-related",
+                          "id": "V6emKp",
+                          "name": "repo-cell",
+                          "context": "tokens width<=size.column.repo",
+                          "width": 63,
                           "alignItems": "center",
                           "children": [
                             {
-                              "type": "frame",
-                              "id": "MtgkR",
-                              "name": "lead",
-                              "context": "tokens width=size.icon height=size.icon",
-                              "width": 16,
-                              "height": 16
-                            },
-                            {
-                              "type": "frame",
-                              "id": "V6emKp",
-                              "name": "repo-cell",
-                              "context": "tokens width<=size.column.repo",
-                              "width": 63,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "id": "haf3j",
-                                  "type": "ref",
-                                  "ref": "HILEH",
-                                  "name": "repo-line",
-                                  "width": "fill_container"
-                                }
-                              ]
+                              "id": "haf3j",
+                              "type": "ref",
+                              "ref": "HILEH",
+                              "name": "repo-line",
+                              "width": "fill_container"
                             }
                           ]
                         },
@@ -16973,35 +16722,18 @@
                       "children": [
                         {
                           "type": "frame",
-                          "id": "DpskI",
-                          "name": "start",
-                          "gap": "$gap-related",
+                          "id": "OchQF",
+                          "name": "repo-cell",
+                          "context": "tokens width<=size.column.repo",
+                          "width": 63,
                           "alignItems": "center",
                           "children": [
                             {
-                              "type": "frame",
-                              "id": "gRgpl",
-                              "name": "lead",
-                              "context": "tokens width=size.icon height=size.icon",
-                              "width": 16,
-                              "height": 16
-                            },
-                            {
-                              "type": "frame",
-                              "id": "OchQF",
-                              "name": "repo-cell",
-                              "context": "tokens width<=size.column.repo",
-                              "width": 63,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "id": "IKCP8",
-                                  "type": "ref",
-                                  "ref": "HILEH",
-                                  "name": "repo-line",
-                                  "width": "fill_container"
-                                }
-                              ]
+                              "id": "IKCP8",
+                              "type": "ref",
+                              "ref": "HILEH",
+                              "name": "repo-line",
+                              "width": "fill_container"
                             }
                           ]
                         },
@@ -21662,12 +21394,6 @@
                       "name": "PrRow prq #41",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Split the webhook handler by event type"
                         },
@@ -21704,9 +21430,6 @@
                       "name": "PrRow prq #42",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Add retry to stalled jobs"
                         },
@@ -21731,12 +21454,6 @@
                       "name": "PrRow kopje #16",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Render Markdown tables in answers"
                         },
@@ -21758,9 +21475,6 @@
                       "name": "PrRow zenith #87",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "lfqO6": {
                           "width": "fill_container"
                         },
@@ -21788,12 +21502,6 @@
                       "name": "PrRow kopje #15",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Pin skill commits on register"
                         },
@@ -21830,12 +21538,6 @@
                       "name": "PrRow zenith #85",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "ThKc5": {
                           "content": "Cache installation tokens per repository"
                         },
@@ -21860,9 +21562,6 @@
                       "name": "PrRow zenith #84",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "ThKc5": {
                           "content": "Retry GitHub API calls on secondary rate limits"
                         },
@@ -21887,12 +21586,6 @@
                       "name": "PrRow prq #39",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Document the job claim protocol"
                         },
@@ -21917,12 +21610,6 @@
                       "name": "PrRow prq #38",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Move settings to their own page"
                         },
@@ -21947,12 +21634,6 @@
                       "name": "PrRow kopje #14",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Show allowed tools in the skill review"
                         },
@@ -22137,12 +21818,6 @@
                       "name": "PrRow prq #41",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Split the webhook handler by event type"
                         },
@@ -22179,9 +21854,6 @@
                       "name": "PrRow prq #42",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Add retry to stalled jobs"
                         },
@@ -22206,12 +21878,6 @@
                       "name": "PrRow kopje #16",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Render Markdown tables in answers"
                         },
@@ -22233,9 +21899,6 @@
                       "name": "PrRow zenith #87",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "lfqO6": {
                           "width": "fill_container"
                         },
@@ -22263,12 +21926,6 @@
                       "name": "PrRow kopje #15",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Pin skill commits on register"
                         },
@@ -22305,12 +21962,6 @@
                       "name": "PrRow zenith #85",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "ThKc5": {
                           "content": "Cache installation tokens per repository"
                         },
@@ -22347,9 +21998,6 @@
                       "name": "PrRow zenith #84",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "ThKc5": {
                           "content": "Retry GitHub API calls on secondary rate limits"
                         },
@@ -22374,12 +22022,6 @@
                       "name": "PrRow prq #39",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Document the job claim protocol"
                         },
@@ -22404,12 +22046,6 @@
                       "name": "PrRow prq #38",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Move settings to their own page"
                         },
@@ -22434,12 +22070,6 @@
                       "name": "PrRow kopje #14",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Show allowed tools in the skill review"
                         },
@@ -22607,12 +22237,6 @@
                       "name": "PrRow prq #41",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Split the webhook handler by event type"
                         },
@@ -22649,9 +22273,6 @@
                       "name": "PrRow prq #42",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Add retry to stalled jobs"
                         },
@@ -22676,12 +22297,6 @@
                       "name": "PrRow kopje #16",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Render Markdown tables in answers"
                         },
@@ -22703,9 +22318,6 @@
                       "name": "PrRow zenith #87",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "lfqO6": {
                           "width": "fill_container"
                         },
@@ -22733,12 +22345,6 @@
                       "name": "PrRow kopje #15",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Pin skill commits on register"
                         },
@@ -22775,12 +22381,6 @@
                       "name": "PrRow zenith #85",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "ThKc5": {
                           "content": "Cache installation tokens per repository"
                         },
@@ -22817,9 +22417,6 @@
                       "name": "PrRow zenith #84",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "ThKc5": {
                           "content": "Retry GitHub API calls on secondary rate limits"
                         },
@@ -22844,12 +22441,6 @@
                       "name": "PrRow prq #39",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Document the job claim protocol"
                         },
@@ -22874,12 +22465,6 @@
                       "name": "PrRow prq #38",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Move settings to their own page"
                         },
@@ -22904,12 +22489,6 @@
                       "name": "PrRow kopje #14",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Show allowed tools in the skill review"
                         },
@@ -23066,12 +22645,6 @@
                       "name": "PrRow prq #41",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Split the webhook handler by event type"
                         },
@@ -23108,9 +22681,6 @@
                       "name": "PrRow prq #42",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Add retry to stalled jobs"
                         },
@@ -23135,12 +22705,6 @@
                       "name": "PrRow kopje #16",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Render Markdown tables in answers"
                         },
@@ -23162,9 +22726,6 @@
                       "name": "PrRow zenith #87",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "lfqO6": {
                           "width": "fill_container"
                         },
@@ -23192,12 +22753,6 @@
                       "name": "PrRow kopje #15",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Pin skill commits on register"
                         },
@@ -23234,12 +22789,6 @@
                       "name": "PrRow zenith #85",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "ThKc5": {
                           "content": "Cache installation tokens per repository"
                         },
@@ -23276,9 +22825,6 @@
                       "name": "PrRow zenith #84",
                       "width": "fill_container",
                       "descendants": {
-                        "E62nng": {
-                          "content": "zenith"
-                        },
                         "ThKc5": {
                           "content": "Retry GitHub API calls on secondary rate limits"
                         },
@@ -23303,12 +22849,6 @@
                       "name": "PrRow prq #39",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Document the job claim protocol"
                         },
@@ -23333,12 +22873,6 @@
                       "name": "PrRow prq #38",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "prq"
-                        },
                         "ThKc5": {
                           "content": "Move settings to their own page"
                         },
@@ -23363,12 +22897,6 @@
                       "name": "PrRow kopje #14",
                       "width": "fill_container",
                       "descendants": {
-                        "FDKFa": {
-                          "enabled": false
-                        },
-                        "E62nng": {
-                          "content": "kopje"
-                        },
                         "ThKc5": {
                           "content": "Show allowed tools in the skill review"
                         },

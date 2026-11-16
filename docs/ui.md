@@ -23,13 +23,12 @@ What the interface has to show and do, as the input for the visual design. The s
 
 ### 1. PR list
 
-Every pull request prq follows, across repositories. The list is for getting back to a PR and to what is new in it;
-processing is shown only where the host has to act.
+Every pull request prq follows, across repositories. The list is for getting back to a PR; processing is
+shown only where the host has to act.
 
 | Element | Data |
 | --- | --- |
 | Row | one compact line at a fixed height: PR state (open, closed, merged), repository (in its own column, not muted: the host tells PRs apart by it; only the name when every PR has the same owner, `owner/name` otherwise), title (truncated) and PR number, the latest event and its time ("Summary 12 min ago", "Answer 3 min ago", "Push received 2 min ago") |
-| New marker | a dot when a summary or an answer arrived after the host last opened the PR |
 | Status | short text in its own column, only while something is unresolved: "Summary failed", "Answer failed", "Possibly stalled", "Waiting for a local agent"; and "New push not summarized" while the latest summary is for an older head. One label at a time, in the order of the [PR ledger](design.md#pr-ledger). Empty for a healthy row |
 | Header | the pool status (see screen 3), a settings button |
 | Column headings | Repository, Pull request, Status, Last activity: rows are a table |
