@@ -20,12 +20,12 @@ const JobPath = v.object({
 export function apiRoutes(bound: CallBound) {
   return (
     new Hono<{ Bindings: Env }>()
-      // The host's retry of a claimed or failed job (docs/design.md, Owner and jobs). The session refuses it after its
-      // deadline, so one the route stopped waiting for changes nothing after the 503.
+      // The host's retry of a claimed or failed job (docs/design.md, Owner and jobs). A retry that lands after the route
+      // stopped waiting still applies if the job is claimed or failed when it runs; a second retry then gets 409.
       .post("/pr/:owner/:repo/:number/jobs/:jobId/retry", vValidator("param", JobPath, invalidRequest), async (c) => {
         const { jobId, ...pr } = c.req.valid("param");
-        const call = async (deadline: number): Promise<RetryResponse | ErrorResponse> =>
-          (await prSessionStub(c.env, pr)).retryJob(jobId, deadline);
+        const call = (async (): Promise<RetryResponse | ErrorResponse> =>
+          (await prSessionStub(c.env, pr)).retryJob(jobId))();
         const result = await bound(call, ROUTE_CALL_MS, "a session's retry");
         return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
       })

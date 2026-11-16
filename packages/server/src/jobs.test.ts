@@ -14,7 +14,6 @@ import {
   jobOf,
   jobRows,
   newSession,
-  NO_DEADLINE,
   prSessionSeams,
   type Session,
   sessionSql,
@@ -298,7 +297,7 @@ describe("submit against retry and resume", () => {
     });
     const a = tracked(stub.submit(submission(claimA, "agent-a", "answer A")));
     await held.reached();
-    expect(await stub.retryJob(claimA.job?.jobId ?? "", NO_DEADLINE)).toEqual({ status: "retried" });
+    expect(await stub.retryJob(claimA.job?.jobId ?? "")).toEqual({ status: "retried" });
     const claimB = await claimIn(stub, "agent-b", "fresh");
     expect(a.settled()).toBe(false);
     await held.open();
@@ -325,7 +324,7 @@ describe("submit against retry and resume", () => {
     });
     const a = tracked(stub.submit(submission(claimA, "agent-a", "answer A")));
     await held.reached();
-    expect(await stub.retryJob(jobId, NO_DEADLINE)).toMatchObject({ error: "not_retryable" });
+    expect(await stub.retryJob(jobId)).toMatchObject({ error: "not_retryable" });
     expect(await claimIn(stub, "agent-a", "resume")).toEqual({ job: null });
     const settling = tracked(stub.settle());
     expect((await stub.view()).jobs).toMatchObject([{ jobId, state: "running" }]);
@@ -386,7 +385,7 @@ describe("retry", () => {
     const { stub } = session;
     // The same agent claims again after a retry: only the new claimId is its claim.
     const firstA = await claimIn(stub, "agent-a", "fresh");
-    expect(await stub.retryJob(claimed(firstA).jobId, NO_DEADLINE)).toEqual({ status: "retried" });
+    expect(await stub.retryJob(claimed(firstA).jobId)).toEqual({ status: "retried" });
     const againA = await claimIn(stub, "agent-a", "fresh");
     expect(claimed(againA).jobId).toBe(claimed(firstA).jobId);
     expect(await stub.submit(submission(firstA, "agent-a"))).toMatchObject({ error: "stale_claim" });
@@ -396,7 +395,7 @@ describe("retry", () => {
     // Another agent claims after a retry.
     const claimA = await claimIn(stub, "agent-a", "fresh");
     const jobId = claimA.job?.jobId ?? "";
-    expect(await stub.retryJob(jobId, NO_DEADLINE)).toEqual({ status: "retried" });
+    expect(await stub.retryJob(jobId)).toEqual({ status: "retried" });
     expect((await jobOf(stub, "q2")).state).toBe("pending");
     const claimB = await claimIn(stub, "agent-b", "fresh");
     expect(claimed(claimB)).toMatchObject({ jobId, resumed: false });
@@ -420,9 +419,9 @@ describe("retry", () => {
         return schedule(...args);
       });
     });
-    const first = tracked(stub.retryJob(jobId, NO_DEADLINE));
+    const first = tracked(stub.retryJob(jobId));
     await held.reached();
-    expect(await stub.retryJob(jobId, NO_DEADLINE)).toEqual({ status: "retried" });
+    expect(await stub.retryJob(jobId)).toEqual({ status: "retried" });
     expect(first.settled()).toBe(false);
     await held.open();
     expect(await first.promise).toEqual({ error: "not_retryable", detail: "the job changed state" });
@@ -433,32 +432,15 @@ describe("retry", () => {
     captureLogs();
     const { stub } = await localSession(Q1);
     const jobId = (await jobOf(stub, "q1")).job_id;
-    expect(await stub.retryJob(jobId, NO_DEADLINE)).toMatchObject({ error: "not_retryable" });
+    expect(await stub.retryJob(jobId)).toMatchObject({ error: "not_retryable" });
     for (const state of ["finalizing", "running", "done"]) {
       await sessionSql(stub, "UPDATE prq_jobs SET state = ? WHERE job_id = ?", state, jobId);
-      expect(await stub.retryJob(jobId, NO_DEADLINE)).toMatchObject({ error: "not_retryable" });
+      expect(await stub.retryJob(jobId)).toMatchObject({ error: "not_retryable" });
     }
     await sessionSql(stub, "UPDATE prq_jobs SET state = 'failed', failure = 'it broke' WHERE job_id = ?", jobId);
-    expect(await stub.retryJob(jobId, NO_DEADLINE)).toEqual({ status: "retried" });
+    expect(await stub.retryJob(jobId)).toEqual({ status: "retried" });
     expect(await jobOf(stub, "q1")).toMatchObject({ state: "pending", failure: null });
-    expect(await stub.retryJob(crypto.randomUUID(), NO_DEADLINE)).toEqual({ error: "unknown_job" });
-  });
-  it("refuses a claim and a retry past their deadline, and changes nothing", async () => {
-    const logs = captureLogs();
-    const { stub } = await localSession(Q1);
-    const jobId = (await jobOf(stub, "q1")).job_id;
-    const late = { error: "unavailable", detail: "the call arrived after its deadline" };
-    expect(await stub.claim("agent-a", "fresh", 1, Date.now() - 1)).toEqual(late);
-    expect((await jobOf(stub, "q1")).state).toBe("pending");
-    const claim = claimed(await claimIn(stub, "agent-a", "fresh"));
-    expect(await stub.retryJob(jobId, Date.now() - 1)).toEqual(late);
-    expect(await jobOf(stub, "q1")).toMatchObject({ state: "claimed", claim_id: claim.claimId });
-    expect(
-      logs
-        .map((log) => log.entry)
-        .filter((entry) => entry["event"] === "prq.request.late")
-        .map((entry) => entry["call"]),
-    ).toEqual(["claim", "retry"]);
+    expect(await stub.retryJob(crypto.randomUUID())).toEqual({ error: "unknown_job" });
   });
 });
 
@@ -472,7 +454,7 @@ describe("logs", () => {
     const { stub, name } = await localSession(question("q1", "secret question"));
     const claimA = await claimIn(stub, "agent-a", "fresh");
     await claimIn(stub, "agent-a", "resume");
-    await stub.retryJob(claimA.job?.jobId ?? "", NO_DEADLINE);
+    await stub.retryJob(claimA.job?.jobId ?? "");
     const claimB = await claimIn(stub, "agent-b", "fresh");
     await stub.submit(submission(claimB, "agent-b", "secret answer"));
     await stub.submit(submission(claimB, "agent-b", "secret answer"));

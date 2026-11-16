@@ -4,11 +4,12 @@ import { access } from "./access.ts";
 import { routeAgents } from "./agents.ts";
 import { apiRoutes } from "./api-routes.ts";
 import { cliRoutes } from "./cli-routes.ts";
-import { boundCall, type CallBound, noStore, notFound, onError, prqVersion } from "./http.ts";
+import { type CallBound, noStore, notFound, onError, prqVersion } from "./http.ts";
+import { withTimeout } from "./wait.ts";
 
 // The Worker's routes and middleware. `bound` limits each route's calls to Durable Objects; tests pass one they end
 // by hand.
-export function createApp(bound: CallBound = boundCall) {
+export function createApp(bound: CallBound = withTimeout) {
   const app = new Hono<{ Bindings: Env }>();
 
   app.use(noStore);

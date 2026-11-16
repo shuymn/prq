@@ -22,7 +22,7 @@ export function cliRoutes(bound: CallBound) {
     new Hono<{ Bindings: Env }>()
       // Passed to the Hub as a request, whose signal ends the wait there: this request's when the agent goes away, or
       // the route's own when it stops waiting. The Hub answers within the wait's bound; the route allows ROUTE_CALL_MS
-      // on top of it for the Hub's start. It changes no job, so it carries no deadline.
+      // on top of it for the Hub's start.
       .post("/wait", vValidator("json", WaitRequest, invalidRequest), async (c) => {
         const body = c.req.valid("json");
         const stop = new AbortController();
@@ -32,7 +32,7 @@ export function cliRoutes(bound: CallBound) {
           body: JSON.stringify(body),
           signal: AbortSignal.any([c.req.raw.signal, stop.signal]),
         });
-        const call = async () => (await hubStub(c.env)).fetch(request);
+        const call = hubStub(c.env).then((hub) => hub.fetch(request));
         let res: Response;
         try {
           res = await bound(call, waitBoundMs(body.timeoutMs) + ROUTE_CALL_MS, "the Hub's wait");
@@ -45,24 +45,22 @@ export function cliRoutes(bound: CallBound) {
         }
         return c.json(v.parse(WaitResponse, await res.json()));
       })
-      // The Hub and each session refuse the claim after its deadline, so one the route stopped waiting for claims
-      // nothing after the 503.
+      // A claim that lands after the route stopped waiting is a newer attempt than the agent's resend, so it can resume
+      // the job the resend claimed under another claimId. The agent's submit then gets stale_claim, and its next claim
+      // resumes the job (docs/design.md, Owner and jobs).
       .post("/claim", vValidator("json", ClaimRequest, invalidRequest), async (c) => {
         const { agentId } = c.req.valid("json");
-        const call = async (deadline: number): Promise<ClaimResponse | ErrorResponse> =>
-          (await hubStub(c.env)).claim(agentId, deadline);
-        const result = await bound(call, ROUTE_CALL_MS, "the Hub's claim");
-        return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
+        const call = (async (): Promise<ClaimResponse> => (await hubStub(c.env)).claim(agentId))();
+        return c.json(await bound(call, ROUTE_CALL_MS, "the Hub's claim"));
       })
-      // A submit is a contact from the agent, whatever the session answers. It carries no deadline: only the job's
-      // current claim, held by this agent, stores an answer, and only once, so one that lands after the route stopped
-      // waiting stores what the agent's resend would, and the resend gets duplicate.
+      // A submit is a contact from the agent, whatever the session answers. One that lands after the route stopped
+      // waiting stores the answer once; the agent's resend gets duplicate.
       .post("/submit", vValidator("json", SubmitRequest, invalidRequest), async (c) => {
         const { pr, ...submission } = c.req.valid("json");
-        const call = async (): Promise<SubmitResponse | ErrorResponse> => {
+        const call = (async (): Promise<SubmitResponse | ErrorResponse> => {
           await (await hubStub(c.env)).touch(submission.agentId);
           return (await prSessionStub(c.env, pr)).submit(submission);
-        };
+        })();
         const result = await bound(call, ROUTE_CALL_MS, "the submit");
         return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
       })

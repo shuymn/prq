@@ -119,6 +119,11 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   before that point makes the submit fail as a stale claim; a retry while the job is `finalizing` is refused, and a
   resume does not return it. A submit that fails on the way leaves the job `claimed` for the agent to submit again. A
   local agent cannot report a failure: an unfinished job stays claimed until the host retries it.
+- When a submit gets 409 `stale_claim`, `prq` shall claim again and resubmit the same answer only if that claim returns
+  the same `jobId` with `resumed: true`; otherwise it shall drop the answer. A claim that lands after its route answered
+  503 can replace the `claimId` the agent holds (see [Notification and wait](#notification-and-wait-prq-wait)), and
+  this recovers it. After a retry the job is pending again, so the claim does not resume it and the job is worked on
+  again.
 - While no local agent is present, the jobs of a `local` session wait, questions included.
 - A job that was claimed but never submitted (the AI session was closed, for example) is not returned automatically.
   The UI shows which agent ID has been working on it and since when, and starts showing it as possibly stalled after 60
@@ -203,9 +208,9 @@ UI, webhook and CLI input all enter through PrSession.
   the session's start included, and a session that does not answer in time is skipped and stays queued.
 - A call the Hub stopped waiting for keeps running and can still land. So each `claim` is one attempt, numbered from the
   Hub's counter, and a session takes a claim only from an attempt newer than every attempt that agent has claimed
-  under there: a late claim changes nothing once a newer one has claimed, and the `claimId` an agent received stays its
-  claim. The session keeps each agent's newest claiming attempt apart from the jobs and advances it in the claim's
-  transaction, so a retry, which clears a job's claim, does not lower it.
+  under there: a session call from an older attempt changes nothing once a newer one has claimed. The session keeps
+  each agent's newest claiming attempt apart from the jobs and advances it in the claim's transaction, so a retry,
+  which clears a job's claim, does not lower it.
 - `wait` checks the queued sessions when it starts and returns `ready` at once if the agent has its own claimed job or
   a waiting one. Otherwise it sleeps until a `notify` wakes it and checks again, and returns `timeout` after
   `min(timeoutMs, 25 s)`. A notify that lands during a check advances the Hub's counter; the wait reads the counter
@@ -217,17 +222,13 @@ UI, webhook and CLI input all enter through PrSession.
 - Each route bounds its calls to the Hub and the sessions as a whole, their start included: 30 s, and for `wait` its own
   bound plus 30 s, so 55 s at most. These are the application's budgets, not a platform limit: a Worker may take any
   time to answer a client that is still connected. When the bound passes, the route answers 503 `unavailable`, which
-  `prq` and the UI take as a reason to try again, and the call keeps running.
-- A call that changes a job carries the route's deadline: the route's start plus its bound, less 5 s for the Worker's
-  and the Durable Object's clocks disagreeing (they are synchronized, so they differ by far less). The Hub checks it
-  before it numbers a claim's attempt, and a session checks it right before it claims or retries, with no `await`
-  between the check and the change; past the deadline the call is refused and changes nothing. So every change a
-  route's call makes happens before the route's 503, and whatever the client does after the 503 (a resend, a claim, a
-  retry) comes after that change. A retry that changed the job in time may still answer after the 503; a second retry
-  then gets 409 `not_retryable`, so the UI reads the job's state from the session view before retrying.
-- A submit carries no deadline: only the job's current claim, held by the agent, stores an answer, and only once, so a
-  late submit stores what the agent's resend would, and the resend gets `duplicate`. A `wait` changes no job; the route
-  aborts it, which ends it in the Hub.
+  `prq` and the UI take as a reason to try again, and the call keeps running; nothing orders where it lands against
+  what the client does after the 503. A late submit stores its answer once, and the agent's resend gets `duplicate`. A
+  claim that reaches the Hub after the 503 is a newer attempt than the agent's resend, so it can resume the job the
+  resend claimed under another `claimId`; the agent's submit then gets 409 `stale_claim`, and its next claim resumes
+  the job (see [Owner and jobs](#owner-and-jobs)). A late retry applies if the job is still claimed or failed when it
+  runs, and a second retry then gets 409 `not_retryable`, so the UI reads the job's state from the session view before
+  retrying. A `wait` is aborted, which ends it in the Hub.
 - An authentication failure (401 or 403) during `wait` is told apart from an ordinary timeout and ends with an error, so
   the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.

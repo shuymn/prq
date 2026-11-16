@@ -1,25 +1,5 @@
 // Bounded waits: every wait on another object, on the SDK or on an earlier task ends, at the latest with a WaitTimeout.
 
-import type { ErrorResponse } from "@prq/protocol";
-
-import { log } from "./log.ts";
-
-// How much of a route's bound its deadline leaves out, for the Worker's clock and the Durable Object's disagreeing. They
-// run on synchronized machines and each moves only at I/O, so they differ by milliseconds; seconds of margin cover that
-// and still leave the call most of its bound.
-const DEADLINE_MARGIN_MS = 5_000;
-
-// The deadline of a call a route starts now and bounds by ms: the last moment the object may change state for it.
-export function callDeadline(ms: number): number {
-  return Date.now() + ms - DEADLINE_MARGIN_MS;
-}
-
-// A route's call that reached its change after its deadline: refused, so the change never follows the route's 503.
-export function pastDeadline(call: string, fields: Record<string, unknown>): ErrorResponse {
-  log("prq.request.late", { call, ...fields }, "warn");
-  return { error: "unavailable", detail: "the call arrived after its deadline" };
-}
-
 export class WaitTimeout extends Error {
   override readonly name = "WaitTimeout";
 }

@@ -2,30 +2,15 @@ import { ErrorResponse } from "@prq/protocol";
 import { listDurableObjectIds, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import * as v from "valibot";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ROUTE_CALL_MS } from "./http.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
-import {
-  claimOver,
-  fetchBounded,
-  heldBound,
-  localSession,
-  passDeadline,
-  post,
-  postRequest,
-  retryOver,
-  retryPath,
-} from "./test/cli.ts";
-import { claimIn, clearQueue, gate, jobOf, prSessionSeams, sessionSql, tracked, within } from "./test/session.ts";
+import { fetchBounded, heldBound, localSession, post, postRequest, retryOver, retryPath } from "./test/cli.ts";
+import { claimIn, gate, jobOf, prSessionSeams, sessionSql, tracked, within } from "./test/session.ts";
 
 const sockets: AgentSocket[] = [];
-
-// Each test starts from an empty queue: the sessions of earlier tests may still have work.
-beforeEach(async () => {
-  await clearQueue();
-});
 
 afterEach(() => {
   for (const socket of sockets.splice(0)) {
@@ -111,7 +96,7 @@ describe("retry", () => {
 });
 
 describe("retry time limit", () => {
-  it("answers 503 when the session does not answer in time; a retry that changed the job in time still applies", async () => {
+  it("answers 503 when the session does not answer in time; the late retry still applies", async () => {
     captureLogs();
     const { stub, ref, token } = await localSession("api", sockets, question("q1"));
     await claimIn(stub, "laptop", "fresh");
@@ -138,43 +123,9 @@ describe("retry time limit", () => {
     const timedOut = await within(res.promise, 3000);
     expect(timedOut.headers.get("Cache-Control")).toBe("no-store");
     expect(await errorOf(timedOut)).toEqual({ status: 503, error: "unavailable" });
-    expect(limit.bounds()).toEqual([{ ms: ROUTE_CALL_MS, what: "a session's retry" }]);
+    expect(limit.bounds).toEqual([{ ms: ROUTE_CALL_MS, what: "a session's retry" }]);
     await held.open();
     // The retry the route stopped waiting for has applied: a second retry is refused.
     expect(await errorOf(retryOver(token, ref, job.job_id))).toEqual({ status: 409, error: "not_retryable" });
-  });
-
-  it("lets no retry that reaches its change after its deadline undo the claim made after the resend", async () => {
-    captureLogs();
-    const { stub, ref, token } = await localSession("api", sockets, question("q1"));
-    await claimIn(stub, "laptop", "fresh");
-    const job = await jobOf(stub, "q1");
-    // The retry is held in the session while it arms its wake, before it checks the deadline.
-    const held = await gate(stub);
-    await runInDurableObject(stub, (instance) => {
-      const schedule = instance.schedule.bind(instance);
-      vi.spyOn(instance, "schedule").mockImplementationOnce(async (...args) => {
-        await held.wait();
-        return schedule(...args);
-      });
-    });
-    const limit = heldBound();
-    const res = tracked(fetchBounded(limit.bound, postRequest(retryPath(ref, job.job_id), token, {})));
-    await held.reached();
-    limit.expire();
-    expect(await errorOf(within(res.promise, 3000))).toEqual({ status: 503, error: "unavailable" });
-
-    // The UI sends the retry again and the agent claims the job. The session's clock then passes the first retry's
-    // deadline.
-    expect(await outcome(retryOver(token, ref, job.job_id))).toEqual({ status: 200, body: { status: "retried" } });
-    const next = await claimOver(token, "laptop");
-    expect(next).toMatchObject({ job: { jobId: job.job_id } });
-    await runInDurableObject(stub, (instance) => passDeadline(prSessionSeams(instance), limit.deadline()));
-    await held.open();
-    expect(await limit.late()).toMatchObject({ error: "unavailable" });
-    expect(await jobOf(stub, "q1")).toMatchObject({
-      state: "claimed",
-      claim_id: next.job === null ? null : next.claimId,
-    });
   });
 });

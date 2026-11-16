@@ -6,18 +6,15 @@ import * as v from "valibot";
 
 import { log } from "./log.ts";
 import { SERVER_VERSION } from "./version.ts";
-import { callDeadline, WaitTimeout, withTimeout } from "./wait.ts";
+import { WaitTimeout } from "./wait.ts";
 
 // How long a route waits for a call to a Durable Object, the object's start included. An application budget, not a
 // platform limit (a Worker may answer a connected client after any time): far above a start and a call, and short
 // enough that the agent or the UI soon tries again.
 export const ROUTE_CALL_MS = 30_000;
 
-// How a route bounds a call: the call's outcome, or a WaitTimeout once ms has passed. The call is made with its
-// deadline (callDeadline), which every Durable Object call that changes state is given and checks.
-export type CallBound = <T>(call: (deadline: number) => PromiseLike<T>, ms: number, what: string) => Promise<T>;
-
-export const boundCall: CallBound = (call, ms, what) => withTimeout(call(callDeadline(ms)), ms, what);
+// How a route bounds a call: the call's outcome, or a WaitTimeout once ms has passed (withTimeout in production).
+export type CallBound = <T>(call: PromiseLike<T>, ms: number, what: string) => Promise<T>;
 
 const STATUS = {
   bad_request: 400,
@@ -78,7 +75,7 @@ export const notFound: NotFoundHandler = (c) => errorResponse(c, "not_found");
 
 // Logs the error's name only: a message can carry a configuration value or request content. Hono's validator throws a
 // 400 HTTPException for a body that is not JSON. A route that stopped waiting for a Durable Object answers 503, which
-// the caller retries; the call keeps running, and each route says why its late outcome is safe.
+// the caller retries; the call keeps running, and each route says what its late outcome does.
 export const onError: ErrorHandler = (error, c) => {
   if (error instanceof HTTPException && error.status === 400) {
     return errorResponse(c, "bad_request", "the body is not JSON");
