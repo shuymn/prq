@@ -134,7 +134,13 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   (null before its first webhook), the job as its claim fixed it, and the conversation. The job's `workspaceSha` is
   fixed at the claim: an analysis's head; for an answer, the head of the latest completed analysis, else the current
   head, else none. Only the job's current claim, held by the same agent ID, gets it; any other claim gets 409
-  `stale_claim`.
+  `stale_claim`. The conversation comes in pages of at most 8 MiB of messages (as UTF-8 JSON): a response crosses a
+  Durable Object RPC call, whose limit is 32 MiB of serialized data, and V8 serializes a string with characters beyond
+  Latin-1 at two bytes per code unit, so 8 MiB keeps a page well inside the limit. A response's `nextCursor` names
+  where the next page starts (a message and an offset in its text) and is null on the last page. The conversation is
+  append-only, so a cursor stays valid while messages are added; the next page then includes them. A message larger
+  than a page comes in parts, each carrying `part` (its offset and the message's whole length), and its parts joined
+  are the message. A cursor that names no place in the conversation gets 400 `bad_request`.
 - While no local agent is present, the jobs of a `local` session wait, questions included.
 - A job that was claimed but never submitted (the AI session was closed, for example) is not returned automatically.
   The UI shows which agent ID has been working on it and since when, and starts showing it as possibly stalled after 60
@@ -363,8 +369,9 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
   pre-approved tools, and prq has no interactive approval step, so a skill that declares none cannot run scripts: it
   contributes instructions and references only. The pinned SHA means a skill's code does not change under the host.
 - **Local runner.** `prq context` returns the two prompts and materializes the registered skills into the job's
-  worktree (for example `.prq/skills/<name>/`), so the local AI reads them as files. A local agent may also use skills it
-  already has on its own machine.
+  worktree (for example `.prq/skills/<name>/`), so the local AI reads them as files. It reads the conversation page by
+  page, following `nextCursor` (see [Owner and jobs](#owner-and-jobs)). A local agent may also use skills it already
+  has on its own machine.
 
 What is left out on purpose:
 
@@ -571,6 +578,7 @@ prq/
 │  │   │   │   ├─ index.ts       the class: intake, jobs, the wake and the outbox, its chat hooks
 │  │   │   │   ├─ history.ts     append-only history: refused client frames, insert-only writes
 │  │   │   │   ├─ jobs.ts        job rows and their guarded transitions, the webhook inbox and GitHub's order
+│  │   │   │   ├─ context.ts     the conversation's pages for /cli/context
 │  │   │   │   └─ cloud.ts       the cloud agent seam
 │  │   │   ├─ github/            App token; attaching the token to outbound git traffic
 │  │   │   ├─ instructions/      prompts, skill registry, activate_skill / read_skill_resource

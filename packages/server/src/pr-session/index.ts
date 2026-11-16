@@ -25,6 +25,15 @@ import { hubStub } from "../names.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
 import { SerialQueue, WaitTimeout, withTimeout } from "../wait.ts";
 import { CLOUD_NOT_CONFIGURED, type CloudAgent } from "./cloud.ts";
+import {
+  CONTEXT_PAGE_BYTES,
+  type ContextMessage,
+  type Cursor,
+  cursorText,
+  jsonBytes,
+  parseCursor,
+  take,
+} from "./context.ts";
 import { addedMessages, isChatList, questionsOnly, refusedChatResponse, refusedFrame } from "./history.ts";
 import {
   addInbox,
@@ -102,16 +111,16 @@ function textOf(message: StoredMessage): string {
   return message.parts.map((part) => (v.is(TextPart, part) ? part.text : "")).join("");
 }
 
-// A stored message as a local agent reads it (none for a role the conversation does not hold).
+// A stored message as a local agent reads it (null for a role the conversation does not hold).
 function contextMessage(
   message: StoredMessage & { id: string; role: string; metadata?: unknown },
-): ContextResponse["messages"] {
+): ContextMessage | null {
   const { id, role, metadata } = message;
   if (role !== "user" && role !== "assistant") {
-    return [];
+    return null;
   }
   const read = { id, role, text: textOf(message) } as const;
-  return [v.is(MessageMetadata, metadata) ? { ...read, metadata } : read];
+  return v.is(MessageMetadata, metadata) ? { ...read, metadata } : read;
 }
 
 // One pull request's conversation (named by sessionName), its owner and its jobs. It is the only place job state
@@ -530,11 +539,23 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // What a local agent works on its claimed job from (/cli/context): the pull request, its details, the job as its claim
-  // fixed it, and the conversation. Only the job's current claim, held by the agent, gets it. The claim is checked
-  // after the conversation is read, in the step that answers, so the answer never carries a claim that had already
-  // ended.
-  async context(agentId: string, jobId: string, claimId: string): Promise<ContextResponse | ErrorResponse> {
-    const history = await this.sessions.session().getHistory();
+  // fixed it, and a page of the conversation from the cursor (the start when there is none). Only the job's current
+  // claim, held by the agent, gets it. The claim is checked after the conversation is read, in the step that answers,
+  // so the answer never carries a claim that had already ended.
+  async context(
+    agentId: string,
+    jobId: string,
+    claimId: string,
+    cursor?: string,
+  ): Promise<ContextResponse | ErrorResponse> {
+    const start = cursor === undefined ? { id: null, offset: 0 } : parseCursor(cursor);
+    const page = start === null ? null : await this.#contextPage(start.id, start.offset);
+    if (page === null) {
+      return { error: "bad_request", detail: "the cursor names no place in this conversation" };
+    }
+    // A job's target never changes, so its question can be read before the job is checked.
+    const known = jobById(this.#sql, jobId);
+    const question = known?.kind === "answer" ? await this.#message(known.target) : undefined;
     const row = jobById(this.#sql, jobId);
     if (row === undefined) {
       return { error: "unknown_job" };
@@ -543,13 +564,51 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (!held || row.claim_id !== claimId || row.agent_id !== agentId) {
       return { error: "stale_claim", detail: "the claim is not the job's current one" };
     }
-    const question = row.kind === "answer" ? history.find((message) => message.id === row.target) : undefined;
     return {
       pr: this.#pr(),
       details: readDetails(this.#sql),
       job: this.#job(row, question),
-      messages: history.flatMap(contextMessage),
+      messages: page.messages,
+      nextCursor: page.next === null ? null : cursorText(page.next),
     };
+  }
+
+  // The messages from a place in the conversation (null for the start) that fit in CONTEXT_PAGE_BYTES, and where the
+  // next page starts; null when the place is not in the conversation. The messages' IDs are read without their content,
+  // and only the page's messages are read whole, one at a time. A page holds at least part of a message.
+  async #contextPage(
+    id: string | null,
+    offset: number,
+  ): Promise<{ messages: ContextMessage[]; next: Cursor | null } | null> {
+    const session = this.sessions.session();
+    const ids = (await session.getHistoryRowStats()).map((stat) => stat.id);
+    let index = id === null ? 0 : ids.indexOf(id);
+    if (index < 0) {
+      return null;
+    }
+    const messages: ContextMessage[] = [];
+    let left = CONTEXT_PAGE_BYTES;
+    for (let from = offset; index < ids.length; index += 1, from = 0) {
+      const stored = await session.getMessage(ids[index] ?? "");
+      const message = stored === null ? null : contextMessage(stored);
+      if (message === null) {
+        continue;
+      }
+      if (from > 0 && from >= message.text.length) {
+        return null;
+      }
+      const taken = take(message, from, left, messages.length === 0);
+      if (taken === null) {
+        return { messages, next: { id: message.id, offset: from } };
+      }
+      messages.push(taken);
+      const end = (taken.part?.offset ?? 0) + taken.text.length;
+      if (end < message.text.length) {
+        return { messages, next: { id: message.id, offset: end } };
+      }
+      left -= jsonBytes(taken);
+    }
+    return { messages, next: null };
   }
 
   #job(row: JobRow, question: StoredMessage | undefined): Job {

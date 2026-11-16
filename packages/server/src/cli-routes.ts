@@ -69,10 +69,10 @@ export function cliRoutes(bound: CallBound) {
       // A context is a contact from the agent too. It only reads the session, so one that lands after the route stopped
       // waiting changes no job; the agent's resend reads it again.
       .post("/context", vValidator("json", ContextRequest, invalidRequest), async (c) => {
-        const { pr, agentId, jobId, claimId } = c.req.valid("json");
+        const { pr, agentId, jobId, claimId, cursor } = c.req.valid("json");
         const call = (async (): Promise<ContextResponse | ErrorResponse> => {
           await (await hubStub(c.env)).touch(agentId);
-          return (await prSessionStub(c.env, pr)).context(agentId, jobId, claimId);
+          return (await prSessionStub(c.env, pr)).context(agentId, jobId, claimId, cursor);
         })();
         const result = await bound(call, ROUTE_CALL_MS, "the context");
         return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
