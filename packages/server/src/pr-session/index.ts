@@ -1,11 +1,12 @@
 import { AIChatAgent } from "@cloudflare/ai-chat";
+import { MessageType } from "@cloudflare/ai-chat/types";
 import type { Connection } from "agents";
 import type { UIMessage } from "ai";
 
 import { refuseSubAgent, sendServerVersion } from "../agents.ts";
 import { log } from "../log.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
-import { addedMessages, refusedFrame, WriteQueue } from "./history.ts";
+import { addedMessages, questionsOnly, refusedFrame, WriteQueue } from "./history.ts";
 
 // One pull request's conversation (named by sessionName). Its stored history is append-only.
 export class PrSession extends AIChatAgent<Env> {
@@ -14,8 +15,11 @@ export class PrSession extends AIChatAgent<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     migrate(ctx.storage, PR_SESSION_SCHEMA);
-    // AIChatAgent installs its frame handler in its constructor; this wrapper refuses the frames that would write
-    // history around persistMessages and passes everything else, the chat request included, through.
+    // AIChatAgent installs its frame handler in its constructor. This wrapper is where a client's input enters: it
+    // refuses the frames that write history other than through a chat request, takes the messages a client may not add
+    // out of a chat request (whose list the SDK also relays to the other connections), and passes the rest through.
+    // Whether a message is stored is read from this.messages, synchronously, so frames keep their order; a stored
+    // non-question outside it (a history over hydrationByteBudget) is only left out of the request, as it is stored.
     const handle = this.onMessage.bind(this);
     this.onMessage = (connection, message) => {
       const refused = refusedFrame(message);
@@ -23,7 +27,16 @@ export class PrSession extends AIChatAgent<Env> {
         log("prq.chat.refused", { pr: this.name, type: refused }, "warn");
         return;
       }
-      return handle(connection, message);
+      let cached: ReadonlySet<unknown> | undefined;
+      const request = questionsOnly(message, (id) => {
+        cached ??= new Set(this.messages.map((stored) => stored.id));
+        return cached.has(id);
+      });
+      if (request.removed > 0) {
+        const type = MessageType.CF_AGENT_USE_CHAT_REQUEST;
+        log("prq.chat.refused", { pr: this.name, type, messages: request.removed }, "warn");
+      }
+      return handle(connection, request.message);
     };
   }
 
