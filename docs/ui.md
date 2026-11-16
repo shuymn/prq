@@ -17,6 +17,8 @@ What the interface has to show and do, as the input for the visual design. The s
   explanations of why something is waiting.
 - **State is live.** The conversation streams over a WebSocket and survives disconnects; the UI shows connection state
   where it affects what the user can do.
+- **New version.** After a deploy, a tab still running the old bundle shows a notice to reload; it does not block
+  anything (see [Caching](design.md#caching)).
 - **Markdown output.** Summaries and answers are Markdown with code blocks; raw HTML is not rendered.
 
 ## Screens
@@ -78,7 +80,8 @@ States:
   limit) and "Retry" next to what failed: at the summary for an analysis, under the incomplete answer for a question.
   Text the turn had already produced stays in the conversation, marked incomplete. The failed job stays in the jobs
   list.
-- **Disconnected:** the connection to the server dropped; shows reconnecting and keeps the last known content.
+- **Disconnected:** the connection to the server dropped; shows reconnecting and keeps the last known content. When
+  reconnecting keeps failing (for example, the sign-in expired), it offers Reload.
 - **Question about an earlier version:** the user names a SHA in the question; the answer shows that SHA.
 
 Layout:

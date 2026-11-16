@@ -158,6 +158,9 @@ CLI exit codes: 0 ready, 2 timeout, 3 authentication failure, 4 claim mismatch, 
   "prq v0.3.0 talks to a v0.4.0 server; update prq if a command fails"). It is a notice, not an error: stdout and the
   exit code stay the same. A response without the header (a failure before the Worker, such as at Access) is not
   compared. Setting `PRQ_VERSION_NOTICE=0` turns the notice off.
+- The web UI learns the server's version from a message the server sends on every WebSocket connection, since a browser
+  cannot read WebSocket response headers. It compares it with its own build version the same way and shows the reload
+  notice described in [Caching](#caching).
 
 ### Presence
 
@@ -295,6 +298,51 @@ answers what was decided earlier after compaction. See [spikes.md](spikes.md) fo
 - This restriction applies only to traffic from inside the container. LLM calls and external tools (web search, for
   example) are made by PrSession on the Worker side and are not restricted by it. If tests are run in the container
   later, the destinations they need (an npm registry, for example) are added then.
+
+### Caching
+
+All data is private to the host and changes live, so prq caches only what is immutable or identified by a commit, and
+nothing in between is shared. Application data that can be cached is keyed by something that cannot change (a content
+hash, a commit SHA); everything else is read fresh.
+
+Browser and edge:
+
+- Built assets (scripts, styles, fonts) have content-hashed names and are served with
+  `Cache-Control: public, max-age=31536000, immutable`. The HTML shell (`/`, `/index.html` and every UI route that falls
+  back to it) is served with `no-cache`, so the next load after a deploy fetches the new bundle.
+- Every response the Worker generates is `Cache-Control: no-store`, errors included: `/api/*`, `/cli/*` and the Agents
+  SDK's HTTP endpoints under `/agents/*` (the conversation history the UI fetches when it opens a PR). The Cloudflare
+  cache and the Cache API are not used for them: every response is private and behind Access.
+- The UI keeps no data cache. It loads a PR's history over HTTP when it opens it; after that, conversation, jobs and the
+  ledger come over the Agents SDK WebSocket, which resyncs the state after each successful reconnect. There is no
+  service worker and no offline mode. Browser storage holds only view preferences (the rail collapsed, the list
+  filters).
+- When reconnecting keeps failing (an expired Access session fails every attempt, and a WebSocket cannot follow the
+  sign-in redirect), the UI offers to reload the page, which lets Access sign in again.
+- A tab opened before a deploy keeps running the old bundle. The server sends its version on every WebSocket connection
+  (see [Versions](#versions)); when it differs from the UI's build version, or a lazily loaded asset fails to load, the
+  UI shows a non-blocking notice to reload.
+
+Server:
+
+- **Per commit, stored once.** A completed analysis is stored per head SHA and not run again for that SHA (see
+  [Intake](#intake)); a failed one stays retryable (see [Owner and jobs](#owner-and-jobs)). A pinned skill's contents
+  are stored per commit SHA (see [Instructions and skills](#instructions-and-skills)). Both are immutable, so they need
+  no invalidation.
+- **Derived views.** The Hub's ledger is a copy that PrSession pushes on every change (see [PR ledger](#pr-ledger)), not
+  a cache with a lifetime.
+- **Credentials.** A GitHub installation token is reused until shortly before it expires (it lasts an hour), through
+  `@octokit/auth-app`'s own cache. Access's signing keys are cached by `jose`'s remote key set, which refetches an unknown
+  key ID subject to its defaults (30-second cooldown, 10-minute maximum age). Both caches belong to auth objects created
+  once per isolate and reused across requests; they are lost when the isolate is evicted, which only costs a refetch.
+- **Model prompt cache.** Providers may cache a repeated prompt prefix; it is best effort. The model context puts what
+  changes least first — system prompt, the host's prompt, the tool definitions and the skill list (sorted by name), the
+  analysis notes — and appends messages and tool results (including skill activations) after it, keeping earlier steps
+  as they were. A prefix still misses after a prompt or skill edit, a switch between the analysis and answer prompts,
+  the removal of reasoning at the end of a turn, a compaction, or the provider's eviction. Savings are judged from the
+  provider's reported cache hits, not assumed.
+- **Workspace.** The Sandbox starts from empty each time (see [Workspace (cloud)](#workspace-cloud)); a checkout cache
+  (snapshots or a backup) is added only if the start time turns out too slow.
 
 ### Authentication boundary
 
