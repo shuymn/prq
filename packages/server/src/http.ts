@@ -11,6 +11,10 @@ const STATUS = {
   not_found: 404,
   internal: 500,
   unavailable: 503,
+  unknown_job: 404,
+  stale_claim: 409,
+  target_mismatch: 409,
+  not_retryable: 409,
 } as const satisfies Record<ErrorCode, ContentfulStatusCode>;
 
 export function errorResponse(c: Context, error: ErrorCode, detail?: string): Response {

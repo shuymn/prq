@@ -33,3 +33,12 @@ export function parseSessionName(name: string): PrRef | null {
 
 // The name of the one Hub.
 export const HUB_NAME = "hub";
+
+// A commit SHA as GitHub sends it: 40 lowercase hex digits.
+export const Sha = v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/));
+
+// A conversation message's ID.
+export const MessageId = v.pipe(v.string(), v.minLength(1), v.maxLength(256));
+
+// A local agent's self-declared ID (`--agent-id`, the host name by default): printable ASCII without spaces.
+export const AgentId = v.pipe(v.string(), v.regex(/^[\x21-\x7e]{1,128}$/));

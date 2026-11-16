@@ -8,7 +8,7 @@ import * as v from "valibot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { prSessionStub } from "./names.ts";
-import { CHAT_REQUEST_REFUSED, WriteQueue, WriteWaitTimeout } from "./pr-session/history.ts";
+import { CHAT_REQUEST_REFUSED } from "./pr-session/history.ts";
 import type { PrSession } from "./pr-session/index.ts";
 import { captureLogs, type LogEntry } from "./test/access.ts";
 import { type AgentSocket, answer, connect, hostToken, question, storedMessages } from "./test/chat.ts";
@@ -172,59 +172,6 @@ describe("one write at a time", () => {
     expect(await storedMessages(path, token)).toEqual([Q1, Q2, Q3, A1]);
     expect(sender.chatLists().at(-1)).toEqual([Q1, Q2, Q3, A1]);
     expect(observer.chatLists().at(-1)).toEqual([Q1, Q2, Q3, A1]);
-  });
-
-  it("runs queued writes in order, also after one fails", async () => {
-    const queue = new WriteQueue(1000);
-    const held = latch();
-    const order: string[] = [];
-    const first = queue.run(async () => {
-      order.push("first");
-      await held.promise;
-      throw new Error("first failed");
-    });
-    const second = queue.run(async () => {
-      order.push("second");
-    });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(order).toEqual(["first"]);
-
-    held.open();
-
-    await expect(first).rejects.toThrow("first failed");
-    await second;
-    expect(order).toEqual(["first", "second"]);
-  });
-
-  it("fails a write that waits too long without running it, and keeps later writes behind the earlier ones", async () => {
-    vi.useFakeTimers();
-    try {
-      const queue = new WriteQueue(1000);
-      const held = latch();
-      const ran: string[] = [];
-      const first = queue.run(() => held.promise);
-      const late = queue.run(async () => {
-        ran.push("late");
-      });
-      const outcome = late.catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(1000);
-      expect(await outcome).toBeInstanceOf(WriteWaitTimeout);
-      const next = queue.run(async () => {
-        ran.push("next");
-      });
-      await vi.advanceTimersByTimeAsync(500);
-      expect(ran).toEqual([]);
-
-      held.open();
-
-      await first;
-      await next;
-      expect(ran).toEqual(["next"]);
-      // Every wait's timer is gone once its write has started or failed.
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });
 

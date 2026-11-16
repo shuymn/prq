@@ -7,11 +7,12 @@ import type { UIMessage } from "ai";
 import { refuseSubAgent, sendServerVersion } from "../agents.ts";
 import { log } from "../log.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
-import { addedMessages, isChatList, questionsOnly, refusedChatResponse, refusedFrame, WriteQueue } from "./history.ts";
+import { SerialQueue } from "../wait.ts";
+import { addedMessages, isChatList, questionsOnly, refusedChatResponse, refusedFrame } from "./history.ts";
 
 // One pull request's conversation (named by sessionName). Its stored history is append-only.
 export class PrSession extends AIChatAgent<Env> {
-  readonly #writes = new WriteQueue();
+  readonly #writes = new SerialQueue("a history write");
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
