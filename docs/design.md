@@ -356,8 +356,9 @@ Server:
 - The team domain and the application's audience are secrets. When either is missing or malformed, the Worker shall
   refuse every protected request with 500 instead of verifying with a check left out (`jose` skips the audience check
   when it is given none).
-- When the key set cannot be fetched (a network error, a timeout, an answer that is not a key set), the Worker shall
-  answer 503, not 401, so that `prq` does not read it as an authentication failure; the next request fetches again.
+- When the key set cannot be fetched or used (a network error, a timeout, an answer that is not a key set, a key that is
+  malformed or cannot be imported), the Worker shall answer 503, not 401, so that `prq` does not read it as an
+  authentication failure; the next request fetches again. A token naming a key the set does not hold is a 401.
 - When a webhook arrives, the system shall accept it only if the signature is valid and `pull_request.user.id` is the
   host's. `sender` is whoever made the update, not necessarily the PR author.
 - The GitHub App's private key is stored as PKCS#8. GitHub issues PKCS#1, which the WebCrypto-based path in workerd

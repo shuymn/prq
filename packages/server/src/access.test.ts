@@ -187,6 +187,59 @@ describe("key fetch failure", () => {
     expect(keys.fetches()).toBe(2);
   });
 
+  const unusable: Record<string, (key: SigningKey) => Record<string, unknown>> = {
+    "a matching key that cannot be imported": (key) => ({ kty: "RSA", kid: key.kid, alg: "RS256", n: "!", e: "AQAB" }),
+    "a key with a malformed kid": (key) => ({ ...key.publicJwk, kid: { invalid: true }, alg: "RS256" }),
+  };
+
+  it.for(Object.entries(unusable))("answers 503 for %s, then fetches again", async ([, entry]) => {
+    const teamDomain = freshTeamDomain();
+    const key = await runKey();
+    const keys = serveKeys(teamDomain, key);
+    keys.serveRaw(entry(key));
+    const logs = captureLogs();
+    const token = await tokenFor(teamDomain, key);
+
+    const failed = await app.fetch(request("/cli/wait", token), envFor(teamDomain));
+    expect(failed.status).toBe(503);
+    expect(logs).toContainEqual({
+      level: "error",
+      entry: expect.objectContaining({ event: "prq.access.keys_unavailable" }),
+    });
+
+    keys.serve(key);
+    const passed = await app.fetch(request("/cli/wait", token), envFor(teamDomain));
+    expect({ status: passed.status, fetches: keys.fetches() }).toEqual({ status: 404, fetches: 2 });
+  });
+
+  it("keeps a key set another request loaded after the failed one was dropped", async () => {
+    const teamDomain = freshTeamDomain();
+    const key = await runKey();
+    const keys = serveKeys(teamDomain, key);
+    const unimportable = { kty: "RSA", kid: key.kid, alg: "RS256", n: "!", e: "AQAB" };
+    const good = { ...key.publicJwk, kid: key.kid, alg: "RS256" };
+    // Fetch 1 (request A) and fetch 2 (request B, slow) answer the unimportable key; later fetches the good one.
+    keys.fail(async () => {
+      const fetch = keys.fetches();
+      if (fetch === 2) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return Response.json({ keys: [fetch <= 2 ? unimportable : good] });
+    });
+    captureLogs();
+    const token = await tokenFor(teamDomain, key);
+    const send = () => app.fetch(request("/cli/wait", token), envFor(teamDomain));
+
+    const a = send();
+    const b = send();
+    // A drops the set; C loads a good one while B still waits for its fetch.
+    expect((await a).status).toBe(503);
+    expect((await send()).status).toBe(404);
+    // B fails with the set A dropped and must not drop C's.
+    expect((await b).status).toBe(503);
+    expect({ status: (await send()).status, fetches: keys.fetches() }).toEqual({ status: 404, fetches: 3 });
+  });
+
   it("answers 503 when the fetch times out, then fetches again", async () => {
     const teamDomain = freshTeamDomain();
     const key = await runKey();

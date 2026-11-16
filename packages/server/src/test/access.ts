@@ -64,6 +64,8 @@ export type KeyServer = {
   serve(...keys: SigningKey[]): void;
   // The next fetches answer with `response` until serve is called again.
   fail(response: KeyResponse): void;
+  // The next fetches answer with these key entries as they are, until serve is called again.
+  serveRaw(...entries: Record<string, unknown>[]): void;
 };
 
 // Serves `teamDomain`'s key set through a fetch spy; any other fetch fails the request that made it.
@@ -79,6 +81,9 @@ export function serveKeys(teamDomain: string, ...keys: SigningKey[]): KeyServer 
     },
     fail(response) {
       respond = response;
+    },
+    serveRaw(...entries) {
+      respond = async () => Response.json({ keys: entries });
     },
   };
   server.serve(...keys);
