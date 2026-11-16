@@ -70,35 +70,33 @@ describe("presence", () => {
   const at = 1_800_000_000_123;
 
   it("lasts PRESENCE_MS after the last contact, up to but not at its end", () => {
-    const presence = { waiting: false, lastSeenAt: at, claimedAt: [] };
+    const presence = { waiting: false, lastSeenAt: at, latestClaimAt: null };
     expect(presenceEnd(presence)).toBe(at + PRESENCE_MS);
     expect(isPresent(presence, at + PRESENCE_MS - 1)).toBe(true);
     expect(isPresent(presence, at + PRESENCE_MS)).toBe(false);
   });
 
   it("lasts STALL_MS + PRESENCE_MS after a held claim, whatever the last contact", () => {
-    const presence = { waiting: false, lastSeenAt: at - 5 * PRESENCE_MS, claimedAt: [at] };
+    const presence = { waiting: false, lastSeenAt: at - 5 * PRESENCE_MS, latestClaimAt: at };
     expect(presenceEnd(presence)).toBe(at + STALL_MS + PRESENCE_MS);
     expect(isPresent(presence, at + STALL_MS + PRESENCE_MS - 1)).toBe(true);
     expect(isPresent(presence, at + STALL_MS + PRESENCE_MS)).toBe(false);
-    // The latest claim counts.
-    expect(presenceEnd({ ...presence, claimedAt: [at - STALL_MS, at] })).toBe(at + STALL_MS + PRESENCE_MS);
   });
 
   it("never ends while the agent waits, and is not there with nothing known", () => {
-    expect(isPresent({ waiting: true, lastSeenAt: null, claimedAt: [] }, at)).toBe(true);
-    expect(isPresent({ waiting: false, lastSeenAt: null, claimedAt: [] }, Number.MIN_SAFE_INTEGER)).toBe(false);
+    expect(isPresent({ waiting: true, lastSeenAt: null, latestClaimAt: null }, at)).toBe(true);
+    expect(isPresent({ waiting: false, lastSeenAt: null, latestClaimAt: null }, Number.MIN_SAFE_INTEGER)).toBe(false);
   });
 
   it("ends PRESENCE_MS after a submit that ends the claim before STALL_MS, and does not come back for a later end", () => {
     const submitted = at + 30 * 60_000;
-    const released = { waiting: false, lastSeenAt: claimReleasedAt(at, submitted), claimedAt: [] };
+    const released = { waiting: false, lastSeenAt: claimReleasedAt(at, submitted), latestClaimAt: null };
     expect(isPresent(released, submitted + PRESENCE_MS - 1)).toBe(true);
     expect(isPresent(released, submitted + PRESENCE_MS)).toBe(false);
 
     // A claim retried after STALL_MS stopped applying at STALL_MS: presence ended PRESENCE_MS after that.
     const late = at + STALL_MS + 2 * PRESENCE_MS;
     expect(claimReleasedAt(at, late)).toBe(at + STALL_MS);
-    expect(isPresent({ waiting: false, lastSeenAt: claimReleasedAt(at, late), claimedAt: [] }, late)).toBe(false);
+    expect(isPresent({ waiting: false, lastSeenAt: claimReleasedAt(at, late), latestClaimAt: null }, late)).toBe(false);
   });
 });

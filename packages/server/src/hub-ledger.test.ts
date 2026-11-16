@@ -666,6 +666,35 @@ describe("presence from claims", () => {
     expect(await localPresent()).toBe(false);
   });
 
+  it("ends an agent's presence by its latest claim, whichever order its claims come in", async () => {
+    captureLogs();
+    const clock = hubClock();
+    const old = STALL_MS + PRESENCE_MS + 60_000;
+    for (const [n, ages] of [
+      [old, 0],
+      [0, old],
+    ].entries()) {
+      // A Hub of its own, where laptop is present only by the newer of its two claims.
+      const stub = await getAgentByName(env.Hub, `claim-latest-${n}`);
+      await stub.upsertLedger(
+        "octo~latest~1",
+        1,
+        quiet({ claims: ages.map((ageMs, job) => ({ agentId: "laptop", jobId: `j${job}`, since: 0, ageMs })) }),
+      );
+      const { alarms, page } = await runInDurableObject(stub, async (instance) => ({
+        alarms: (await instance.listSchedules())
+          .filter((schedule) => schedule.callback === "presenceEnded")
+          .map((schedule) => schedule.time),
+        page: instance.agentPage(),
+      }));
+      expect(alarms).toEqual([Math.ceil((clock.now() + STALL_MS + PRESENCE_MS) / 1000)]);
+      expect(page).toEqual({
+        rows: [{ agentId: "laptop", lastSeenAt: null, waiting: false, holdsJob: true }],
+        nextCursor: null,
+      });
+    }
+  });
+
   it("places a claim on the Hub's clock by its age when the session sends it", async () => {
     captureLogs();
     const { stub, name, client } = await localSession("ledger", sockets, Q1);
@@ -1210,7 +1239,7 @@ describe("bounded view and ledger pages", () => {
     expect(await agentRow("sleeper")).toMatchObject({ waiting: false });
   });
 
-  it("reads no agent whose presence ended, nor a claim that stopped applying, on a contact or a pool page", async () => {
+  it("reads no agent whose presence ended, nor a past claim of a present agent or another, on a contact or a pool page", async () => {
     captureLogs();
     // A Hub of its own, with one agent present by its contact and one by its claim.
     const stub = await getAgentByName(env.Hub, "pool-scan");
@@ -1225,24 +1254,30 @@ describe("bounded view and ledger pages", () => {
       const contactAndPage = async () => {
         const contact = await reading(sql, () => instance.touch("desk"));
         const page = await reading(sql, () => instance.agentPage());
-        const listed = v.parse(AgentPage, page.value).rows.map((row) => row.agentId);
+        // The rows as they stay from one contact to the next (a contact moves desk's last one).
+        const listed = v
+          .parse(AgentPage, page.value)
+          .rows.map(({ lastSeenAt, ...row }) => ({ ...row, seen: lastSeenAt !== null }));
         return {
           reads: { contact: contact.read, page: page.read },
           listed,
           queries: [...contact.queries, ...page.queries],
         };
       };
-      // Agents whose last contact, and whose claim, ended their presence long ago: one, then STALE_AGENTS. The presence
-      // alarm is armed by the contacts above, so each contact below does the same.
+      // Claims made long ago, never retried, each in a session of its own: of an agent last seen as long ago, and of
+      // each present agent. One of each, then STALE_AGENTS. The presence alarm is armed by the contacts above, so each
+      // contact below does the same.
       const stale = (from: number, to: number) => {
         for (let n = from; n < to; n += 1) {
           sql.exec("INSERT INTO prq_agents (agent_id, last_seen_at) VALUES (?, ?)", `stale-${n}`, n);
-          sql.exec(
-            "INSERT INTO prq_claims (session, job_id, agent_id, claimed_at) VALUES (?, 'j', ?, ?)",
-            `octo~stale~${n + 1}`,
-            `stale-${n}`,
-            n,
-          );
+          for (const agentId of [`stale-${n}`, "desk", "laptop"]) {
+            sql.exec(
+              "INSERT INTO prq_claims (session, job_id, agent_id, claimed_at) VALUES (?, 'j', ?, ?)",
+              `octo~old-${agentId}~${n + 1}`,
+              agentId,
+              n,
+            );
+          }
         }
       };
       stale(0, 1);
@@ -1259,16 +1294,21 @@ describe("bounded view and ledger pages", () => {
         );
       return { before: ready, after: loaded, plans: [...new Set(details)].toSorted() };
     });
-    expect(before.listed).toEqual(["desk", "laptop"]);
-    expect(after.listed).toEqual(["desk", "laptop"]);
+    // Both hold a claim (desk only one from long ago); only desk has a contact.
+    const rows = [
+      { agentId: "desk", waiting: false, holdsJob: true, seen: true },
+      { agentId: "laptop", waiting: false, holdsJob: true, seen: false },
+    ];
+    expect(before.listed).toEqual(rows);
+    expect(after.listed).toEqual(rows);
     expect(before.reads.contact).toBeGreaterThan(0);
     expect(after.reads).toEqual(before.reads);
     // Each read of the pool's tables is a range of an index: the present agents' contacts and claims by their time, then
-    // each present agent's by its ID.
+    // each present agent's contact by its ID and its latest claim.
     expect(plans).toEqual([
       "SEARCH prq_agents USING INDEX prq_agents_seen (last_seen_at>?)",
       "SEARCH prq_agents USING INDEX sqlite_autoindex_prq_agents_1 (agent_id=?)",
-      "SEARCH prq_claims USING INDEX prq_claims_agent (agent_id=?)",
+      "SEARCH prq_claims USING COVERING INDEX prq_claims_agent_claimed (agent_id=?)",
       "SEARCH prq_claims USING INDEX prq_claims_claimed (claimed_at>?)",
     ]);
   });

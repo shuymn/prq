@@ -53,8 +53,8 @@ export function needsAttention(problem: Problem | null): boolean {
 }
 
 // An agent ID's presence as the Hub knows it, on the Hub's clock: whether it is in a wait, its last contact, and when
-// each claim it holds was made.
-export type Presence = { waiting: boolean; lastSeenAt: number | null; claimedAt: readonly number[] };
+// the latest claim it holds was made (null when it holds none), which is the only claim its presence depends on.
+export type Presence = { waiting: boolean; lastSeenAt: number | null; latestClaimAt: number | null };
 
 // When the agent stops being present unless something changes: never while it waits; otherwise PRESENCE_MS after its
 // last contact or after its latest claim stops applying (STALL_MS after the claim), whichever is later. -Infinity
@@ -64,7 +64,9 @@ export function presenceEnd(presence: Presence): number {
     return Number.POSITIVE_INFINITY;
   }
   const contact = presence.lastSeenAt === null ? Number.NEGATIVE_INFINITY : presence.lastSeenAt + PRESENCE_MS;
-  return Math.max(contact, ...presence.claimedAt.map((at) => at + STALL_MS + PRESENCE_MS));
+  const claim =
+    presence.latestClaimAt === null ? Number.NEGATIVE_INFINITY : presence.latestClaimAt + STALL_MS + PRESENCE_MS;
+  return Math.max(contact, claim);
 }
 
 export function isPresent(presence: Presence, now: number): boolean {

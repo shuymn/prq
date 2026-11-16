@@ -350,7 +350,8 @@ CLI exit codes: 0 ready, 2 timeout, 3 authentication failure, 4 claim mismatch, 
   and 64 KiB a page, with its last contact (none when the Hub has had none from it), whether it is in a `wait` and
   whether it holds a claim. They are not in the view, so a contact sends the UI nothing. A contact and a pool page read
   only what can make an agent present: the contacts and the claims recent enough, each a range of an index on its time,
-  and the waits in memory. An agent's row stays after its presence ends (one row an agent ID, which is the host name by
+  and the waits in memory, then for each present agent its last contact and its latest claim, one row each however many
+  claims it has held. An agent's row stays after its presence ends (one row an agent ID, which is the host name by
   default), and is read again only once the agent is present again.
 - The Hub runs `presenceEnded` at the first whole second at or after the next time a present agent's presence ends
   (re-checked when it runs, since the scheduler stores whole seconds), so the list and "Waiting for a local agent"

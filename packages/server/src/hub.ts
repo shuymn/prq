@@ -168,7 +168,8 @@ export class Hub extends Agent<Env, HubView> {
     return new Map([...this.#presentAgents(now)].map((agentId) => [agentId, this.#presenceOf(agentId)]));
   }
 
-  // What an agent ID's presence rests on: whether it is in a wait, its last contact, and its claims.
+  // What an agent ID's presence rests on: whether it is in a wait, its last contact, and its latest claim, read as one
+  // row of the index on the agent's claims by time (schema.ts), however many claims it holds.
   #presenceOf(agentId: string): Presence {
     return {
       waiting: [...this.#waiters].some((waiter) => waiter.agentId === agentId),
@@ -176,10 +177,13 @@ export class Hub extends Agent<Env, HubView> {
         this.#sql
           .exec<{ at: number }>("SELECT last_seen_at AS at FROM prq_agents WHERE agent_id = ?", agentId)
           .toArray()[0]?.at ?? null,
-      claimedAt: this.#sql
-        .exec<{ at: number }>("SELECT claimed_at AS at FROM prq_claims WHERE agent_id = ?", agentId)
-        .toArray()
-        .map((row) => row.at),
+      latestClaimAt:
+        this.#sql
+          .exec<{ at: number }>(
+            "SELECT claimed_at AS at FROM prq_claims WHERE agent_id = ? ORDER BY claimed_at DESC LIMIT 1",
+            agentId,
+          )
+          .toArray()[0]?.at ?? null,
     };
   }
 
@@ -429,11 +433,11 @@ export class Hub extends Agent<Env, HubView> {
       AGENT_PAGE_ROWS,
       AGENT_PAGE_BYTES,
       MAX_AGENT_ID_CHARS,
-      ([agentId, { lastSeenAt, waiting, claimedAt }]): AgentRow => ({
+      ([agentId, { lastSeenAt, waiting, latestClaimAt }]): AgentRow => ({
         agentId,
         lastSeenAt,
         waiting,
-        holdsJob: claimedAt.length > 0,
+        holdsJob: latestClaimAt !== null,
       }),
       ([agentId]) => agentId,
     );

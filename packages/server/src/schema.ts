@@ -55,6 +55,10 @@ export const HUB_SCHEMA: SchemaSteps = [
   // to make an agent present, however many came before.
   "CREATE INDEX prq_agents_seen ON prq_agents (last_seen_at)",
   "CREATE INDEX prq_claims_claimed ON prq_claims (claimed_at)",
+  // Each agent's claims by time, so a present agent's latest claim is one row however many it holds; it takes the place
+  // of the index on the agent alone.
+  "CREATE INDEX prq_claims_agent_claimed ON prq_claims (agent_id, claimed_at)",
+  "DROP INDEX prq_claims_agent",
 ];
 
 export const PR_SESSION_SCHEMA: SchemaSteps = [
