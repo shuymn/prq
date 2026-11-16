@@ -85,7 +85,7 @@ describe("headers on every response", () => {
     // Response.redirect has immutable headers, as responses from fetch and Durable Object stubs do.
     probe.get("/api/immutable", () => Response.redirect("https://prq.example/elsewhere", 302));
     probe.get("/cli/throws", () => {
-      throw new Error("route failed");
+      throw new Error("ACCESS_AUD is secret-audience-value");
     });
     probe.get("/agents/socket", () => {
       const [client, server] = Object.values(new WebSocketPair());
@@ -109,16 +109,19 @@ describe("headers on every response", () => {
       expectHeaders(res, "/api/immutable");
     });
 
-    it("answers a thrown error with 500 and logs it", async () => {
+    it("answers a thrown error with 500 and logs its name, not its message", async () => {
       const logs = captureLogs();
       const res = await probe.fetch(request("/cli/throws"));
       expect(res.status).toBe(500);
       expect(await res.json()).toEqual({ error: "internal" });
       expectHeaders(res, "/cli/throws");
-      expect(logs).toContainEqual({
-        level: "error",
-        entry: expect.objectContaining({ event: "prq.request.failed", path: "/cli/throws", error: "Error" }),
-      });
+      expect(logs).toEqual([
+        {
+          level: "error",
+          entry: { event: "prq.request.failed", method: "GET", path: "/cli/throws", error: "Error" },
+        },
+      ]);
+      expect(JSON.stringify(logs)).not.toContain("secret-audience-value");
     });
 
     it("passes a WebSocket upgrade through with its socket", async () => {

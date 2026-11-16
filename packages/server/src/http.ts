@@ -47,11 +47,8 @@ export const prqVersion: MiddlewareHandler = async (c, next) => {
 
 export const notFound: NotFoundHandler = (c) => errorResponse(c, "not_found");
 
+// Logs the error's name only: a message can carry a configuration value or request content.
 export const onError: ErrorHandler = (error, c) => {
-  log(
-    "prq.request.failed",
-    { method: c.req.method, path: c.req.path, error: error.name, message: error.message },
-    "error",
-  );
+  log("prq.request.failed", { method: c.req.method, path: c.req.path, error: error.name }, "error");
   return errorResponse(c, "internal");
 };
