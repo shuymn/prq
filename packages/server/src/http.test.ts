@@ -23,7 +23,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const PATHS = ["/cli/wait", "/api/pr/octo/demo/1", "/agents/hub/hub", "/webhook", "/unknown"];
+// /agents/hub/other: a name the Agents route refuses.
+const PATHS = ["/cli/wait", "/api/pr/octo/demo/1", "/agents/hub/other", "/webhook", "/unknown"];
 
 // A WebSocket upgrade as a route returns it.
 function upgradeResponse(): Response {
@@ -82,7 +83,8 @@ describe("headers on every response", () => {
     expectHeaders(res, path);
   });
 
-  // No route answers 200 yet, so these run the same middleware and handlers on a probe app.
+  // Beside the Agents endpoints (below), no route answers yet, so these run the same middleware and handlers on a
+  // probe app.
   describe("responses from routes", () => {
     const probe = new Hono();
     probe.use(noStore);
@@ -141,6 +143,25 @@ describe("headers on every response", () => {
       res.webSocket?.accept();
       res.webSocket?.close();
     });
+  });
+});
+
+describe("agents endpoints", () => {
+  // The stub's response has immutable headers, so no-store arrives only through the copy.
+  it("serves a session's stored history behind Access, with no-store", async () => {
+    captureLogs();
+    const path = "/agents/pr-session/octo~http~1/get-messages";
+    const denied = await exports.default.fetch(request(path));
+    expect(denied.status).toBe(401);
+    expectHeaders(denied, path);
+
+    const key = await runKey();
+    serveKeys(env.ACCESS_TEAM_DOMAIN, key);
+    const res = await exports.default.fetch(request(path, await accessToken(key)));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/json");
+    expect(await res.json()).toEqual([]);
+    expectHeaders(res, path);
   });
 });
 

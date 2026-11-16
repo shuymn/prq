@@ -8,7 +8,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@cloudflare/ai-chat": "catalog:",
     "@prq/protocol": "workspace:*",
+    "agents": "catalog:",
+    "ai": "catalog:",
     "hono": "catalog:",
     "jose": "catalog:",
     "valibot": "catalog:"
