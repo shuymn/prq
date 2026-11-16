@@ -1,0 +1,12 @@
+// Unused files, dependencies and exports (`pnpm run knip`, CI's Check job). Entries the plugins find (the vitest
+// config, lefthook, oxlint, commitlint) are not listed again; the rest are below, each with what loads it.
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      // The design scripts, run by hand (`node design/*.mjs`) or through the Pencil MCP `execute` tool
+      // (design/README.md).
+      "entry": ["design/*.{js,mjs}"],
+    },
+  },
+}

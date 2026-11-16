@@ -1,7 +1,8 @@
 packages:
   - packages/*
 
-# Every pinned version of the workspace's packages, each named `catalog:` in a package.json.
+# Every pinned version of the workspace's packages, each named `catalog:` in a package.json. A package adds its own
+# entries with its first code: knip reports an entry no package uses.
 catalog:
   # Cloudflare Workers: the runtime types and the workerd test pool.
   "@cloudflare/vitest-plugin": 1.8.1
@@ -11,9 +12,10 @@ catalog:
   typescript: 7.0.2
   vitest: 5.1.0
 
-  # Lint, format, commit messages, and the Git hooks.
+  # Lint, format, unused files, dependencies and exports (knip.jsonc), commit messages, and the Git hooks.
   "@commitlint/cli": 21.2.4
   "@commitlint/config-conventional": 21.2.4
+  knip: 6.45.1
   # 2.2.2 was published without the provenance earlier releases carry; trustPolicy refuses it (.github/renovate.json).
   lefthook: 2.2.1
   oxfmt: 0.78.0

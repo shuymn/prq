@@ -8,6 +8,7 @@
     "lint:fix": "oxlint --type-aware --fix",
     "fmt": "oxfmt --check",
     "fmt:fix": "oxfmt",
+    "knip": "knip",
     "typecheck": "pnpm -r --no-bail run typecheck",
     "test": "pnpm -r --no-bail run test",
     "prepare": "lefthook install"
@@ -15,6 +16,7 @@
   "devDependencies": {
     "@commitlint/cli": "catalog:",
     "@commitlint/config-conventional": "catalog:",
+    "knip": "catalog:",
     "lefthook": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
