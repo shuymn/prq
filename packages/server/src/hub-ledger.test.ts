@@ -1315,10 +1315,13 @@ describe("failure paths", () => {
     await stub.upsertLedger("octo~refused~1", 1, malformed as LedgerEntry);
     // An event time a page's cursor could not carry.
     await stub.upsertLedger("octo~refused~2", 1, quiet({ latestEvent: { kind: "question", at: 1.5 } }));
+    // A job count the totals could not add up.
+    await stub.upsertLedger("octo~refused~3", 1, quiet({ jobs: { waiting: -1, running: 0, failed: 0 } }));
     expect(await stored("hub")).toBeUndefined();
     expect(await stored("octo~refused~1")).toBeUndefined();
     expect(await stored("octo~refused~2")).toBeUndefined();
-    expect(logs.filter((log) => log.entry["event"] === "prq.hub.ledger_refused")).toHaveLength(3);
+    expect(await stored("octo~refused~3")).toBeUndefined();
+    expect(logs.filter((log) => log.entry["event"] === "prq.hub.ledger_refused")).toHaveLength(4);
   });
 
   it("does not show a contact whose presence alarm cannot be scheduled; a retry or the Hub's start arms it, on time", async () => {

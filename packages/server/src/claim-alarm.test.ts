@@ -6,7 +6,17 @@ import type { PrSession } from "./pr-session/index.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
 import { localSession } from "./test/cli.ts";
-import { cancelWakes, claimIn, clearQueue, hub, jobRows, ledgerRowOf, retryIn, sessionSql } from "./test/session.ts";
+import {
+  cancelWakes,
+  claimIn,
+  clearQueue,
+  hub,
+  jobRows,
+  ledgerRowOf,
+  retryIn,
+  sessionSql,
+  submission,
+} from "./test/session.ts";
 
 const sockets: AgentSocket[] = [];
 
@@ -135,6 +145,31 @@ describe("claimAged", () => {
     expect(await checks(stub)).toEqual([]);
     expect(await problemOf(name)).not.toBe("possibly_stalled");
     expect(logs.some((log) => log.entry["event"] === "prq.job.stalled")).toBe(false);
+  });
+
+  it("changes nothing, before its deadline, for a claim a resume replaced or a submit completed", async () => {
+    captureLogs();
+    const { stub, name, payload } = await claimed();
+    // What a check for an ended claim must leave as it is: the ledger's row and the session's checks.
+    const unchanged = async (check: { jobId: string; claimId: string }) => {
+      const before = { rev: await ledgerRev(name), checks: await checks(stub) };
+      await runInDurableObject(stub, (instance) => instance.claimAged(check));
+      expect({ rev: await ledgerRev(name), checks: await checks(stub) }).toEqual(before);
+    };
+    // The resume holds the job under a new claim, which has its own check.
+    const resumed = await claimIn(stub, "laptop", "resume");
+    if (resumed.job === null) {
+      throw new Error("nothing was resumed");
+    }
+    expect(resumed.job.jobId).toBe(payload.jobId);
+    await unchanged(payload);
+    // The submit completes the job under the resumed claim, which it keeps.
+    expect(await stub.submit(submission(resumed, "laptop"))).not.toHaveProperty("error");
+    expect((await jobRows(stub)).find((row) => row.job_id === payload.jobId)).toMatchObject({
+      state: "done",
+      claim_id: resumed.claimId,
+    });
+    await unchanged({ jobId: payload.jobId, claimId: resumed.claimId });
   });
 
   it("leaves a stall whose check was lost to settle, which publishes it once; a second settle does nothing", async () => {
