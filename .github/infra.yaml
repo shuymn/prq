@@ -55,7 +55,6 @@ spec:
         creation: false
         required_linear_history: false
         required_signatures: true
-    # Required status checks are added with the CI workflows.
     - name: pull-request-gate
       target: branch
       enforcement: active
@@ -73,6 +72,13 @@ spec:
           require_code_owner_review: false
           require_last_push_approval: false
           required_review_thread_resolution: true
+        required_status_checks:
+          strict_required_status_checks_policy: true
+          contexts:
+            - context: Check
+              app: github-actions
+            - context: security / betterleaks
+              app: github-actions
   actions:
     enabled: true
     allowed_actions: selected
@@ -87,6 +93,7 @@ spec:
         - actions/checkout@*
         - actions/create-github-app-token@*
         - jdx/mise-action@*
+        - oven-sh/setup-bun@*
         - shuymn/github-actions/.github/workflows/gha.yml@*
         - shuymn/github-actions/.github/workflows/renovate.yml@*
         - shuymn/github-actions/.github/workflows/security.yml@*
