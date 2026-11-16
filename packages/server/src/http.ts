@@ -1,6 +1,7 @@
 import { type ErrorCode, type ErrorResponse, PRQ_VERSION_HEADER } from "@prq/protocol";
 import type { Context, ErrorHandler, MiddlewareHandler, NotFoundHandler } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import * as v from "valibot";
 
 import { log } from "./log.ts";
 import { SERVER_VERSION } from "./version.ts";
@@ -20,6 +21,16 @@ const STATUS = {
 export function errorResponse(c: Context, error: ErrorCode, detail?: string): Response {
   const body: ErrorResponse = detail === undefined ? { error } : { error, detail };
   return c.json(body, STATUS[error]);
+}
+
+// The validators' shared hook: a request that does not match its schema gets 400 naming the fields at fault, never
+// their values.
+export function invalidRequest(result: v.SafeParseResult<v.GenericSchema>, c: Context): Response | undefined {
+  if (result.success) {
+    return undefined;
+  }
+  const fields = [...new Set(result.issues.map((issue) => v.getDotPath(issue) ?? "the body"))];
+  return errorResponse(c, "bad_request", `invalid ${fields.join(", ")}`);
 }
 
 // Sets a header on the response a handler produced. A response from fetch or a Durable Object stub has immutable

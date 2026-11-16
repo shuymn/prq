@@ -125,7 +125,9 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   minutes. "Retry" is available on any claimed or failed job at any time, because the host may know the session is gone
   before that mark appears. A retry puts the job back to pending and changes the `claimId`, so an answer that arrives
   late from the earlier claim is rejected.
-- A failed job is kept as `failed` with its reason and can be retried from the UI.
+- A failed job is kept as `failed` with its reason and can be retried from the UI. The UI retries a job through
+  `POST /api/pr/:owner/:repo/:number/jobs/:jobId/retry`; owner and repository are accepted in any case and address the
+  one session of the pull request.
 - A cloud session hands its next waiting job to the cloud agent in the same step that made the job waiting, one job
   at a time (the job is `running` until the agent ends it). While no cloud agent is configured, that step instead marks
   the job `failed` with "cloud agent not configured"; no model is called and nothing is streamed.
@@ -471,7 +473,7 @@ prq/
 │  │       ├─ pr.ts              pull request references, the canonical session name, the Hub's name
 │  │       ├─ cli.ts             jobs and what a local agent sends and receives
 │  │       ├─ messages.ts        the metadata of messages the server appends
-│  │       └─ views.ts           what the UI reads from the server (the version message, the session view)
+│  │       └─ views.ts           what the UI reads from the server (the version message, the session view, the retry answer)
 │  ├─ server/              @prq/server: the Worker (Hono + Agents SDK) and the UI
 │  │   ├─ src/
 │  │   │   ├─ index.ts           entry (Hono, routeAgentRequest)
@@ -487,7 +489,7 @@ prq/
 │  │   │   ├─ wait.ts            bounded waits: timeouts and the one-at-a-time queue
 │  │   │   ├─ webhook.ts         GitHub webhook (signature, own PRs only)
 │  │   │   ├─ cli-routes.ts      /cli/* (wait / claim / context / submit)
-│  │   │   ├─ api-routes.ts      /api/* (PR list and the like)
+│  │   │   ├─ api-routes.ts      /api/* (job retry; the PR list later)
 │  │   │   ├─ hub.ts             Hub (ledger, pool, notifications)
 │  │   │   ├─ pr-session/        PrSession (intake, jobs, context assembly, tools)
 │  │   │   │   ├─ index.ts       the class: intake, jobs, the wake and the outbox, its chat hooks
