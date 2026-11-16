@@ -120,10 +120,11 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
 - A submit waits for the conversation to settle (`waitUntilStable`) before it enters the history write queue: the SDK
   counts a client's save as pending until the save returns, so waiting inside the queue could wait on a save queued
   behind the submit. Inside the queue it reads the job again, checks it, moves it from `claimed` to `finalizing` (the
-  point at which it wins), appends the answer as message `answer-<jobId>`, and marks the job `done`. A retry or resume
-  before that point makes the submit fail as a stale claim; a retry while the job is `finalizing` is refused, and a
-  resume does not return it. A submit that fails on the way leaves the job `claimed` for the agent to submit again. A
-  local agent cannot report a failure: an unfinished job stays claimed until the host retries it.
+  point at which it wins), appends the answer as message `<kind>-<jobId>` (`answer-<jobId>` for a question,
+  `analysis-<jobId>` for an analysis), and marks the job `done`. A retry or resume before that point makes the submit
+  fail as a stale claim; a retry while the job is `finalizing` is refused, and a resume does not return it. A submit
+  that fails on the way leaves the job `claimed` for the agent to submit again. A local agent cannot report a failure:
+  an unfinished job stays claimed until the host retries it.
 - When a submit gets 409 `stale_claim`, `prq` shall claim again once and, if that claim returns the same `jobId`,
   resubmit the answer under the new `claimId` with the run the answer was produced under. The server accepts it only if
   no retry came since; otherwise (another job, no job, or 409 `stale_claim` again) `prq` shall drop the answer and work

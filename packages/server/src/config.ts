@@ -7,8 +7,9 @@ function isHttpsOrigin(value: string): boolean {
   return url?.protocol === "https:" && url.origin === value;
 }
 
-// The Worker's secrets (env.d.ts), checked per use: a request is refused only for a value it needs. Each issue names the
-// variable and the problem, never the value.
+// The Worker's secrets (env.d.ts), in groups by the part that needs them. Each group is validated once per env object
+// (configReader), and a request is refused only for a group it needs. Each issue names the variable and the problem,
+// never the value.
 const accessSchema = v.object(
   {
     // The Access team's origin, `https://<team>.cloudflareaccess.com`: the tokens' issuer and the key set's host.
