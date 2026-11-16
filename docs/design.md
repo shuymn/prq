@@ -348,10 +348,16 @@ Server:
 
 - There are two Access applications. `/webhook` bypasses Access. The rest of the host is allowed for the host's email
   (browser) or a service token (`prq`). Agents SDK's WebSocket path (`/agents/:binding/:name`) is inside the protection.
-- On every protected path the Worker verifies `Cf-Access-Jwt-Assertion` with `jose`: signature, audience, a fixed issuer
-  and expiry. A caller that passes Access is treated as the host; the host and the service token are not told apart per
-  path. The verification stays so that a request reaching the Worker without passing Access (through a `workers.dev`
-  address, for example) is refused.
+- On every protected path the Worker verifies `Cf-Access-Jwt-Assertion` with `jose`: an RS256 signature from the team's
+  key set, the audience, a fixed issuer (the team's domain) and an expiry, which the token must carry. A caller that
+  passes Access is treated as the host; the host and the service token are not told apart per path. The verification
+  stays so that a request reaching the Worker without passing Access (through a `workers.dev` address, for example) is
+  refused with 401.
+- The team domain and the application's audience are secrets. When either is missing or malformed, the Worker shall
+  refuse every protected request with 500 instead of verifying with a check left out (`jose` skips the audience check
+  when it is given none).
+- When the key set cannot be fetched (a network error, a timeout, an answer that is not a key set), the Worker shall
+  answer 503, not 401, so that `prq` does not read it as an authentication failure; the next request fetches again.
 - When a webhook arrives, the system shall accept it only if the signature is valid and `pull_request.user.id` is the
   host's. `sender` is whoever made the update, not necessarily the PR author.
 - The GitHub App's private key is stored as PKCS#8. GitHub issues PKCS#1, which the WebCrypto-based path in workerd
@@ -389,11 +395,18 @@ prq/
 ├─ packages/
 │  ├─ protocol/            @prq/protocol: valibot schemas and types (the /cli/* and /api/* contracts, jobs, summary format)
 │  │   └─ src/
+│  │       ├─ index.ts           re-exports
+│  │       ├─ version.ts         the Prq-Version header name
+│  │       └─ errors.ts          error codes and the error body
 │  ├─ server/              @prq/server: the Worker (Hono + Agents SDK) and the UI
 │  │   ├─ src/
 │  │   │   ├─ index.ts           entry (Hono, routeAgentRequest)
 │  │   │   ├─ env.d.ts
+│  │   │   ├─ config.ts          the secrets, checked once per isolate (fail closed)
 │  │   │   ├─ access.ts          Access JWT verification (jose)
+│  │   │   ├─ http.ts            no-store and Prq-Version headers, error bodies
+│  │   │   ├─ version.ts         the server version (packages/server/package.json)
+│  │   │   ├─ log.ts             log events
 │  │   │   ├─ webhook.ts         GitHub webhook (signature, own PRs only)
 │  │   │   ├─ cli-routes.ts      /cli/* (wait / claim / context / submit)
 │  │   │   ├─ api-routes.ts      /api/* (PR list and the like)
@@ -435,8 +448,8 @@ prq/
 
 Only a deployment can show these.
 
-- **Real Access.** The prototype replaced Access with an HS256 JWT. Production uses RS256 with a remote JWK set, and the
-  service-token versus user distinction (`common_name`) has to be confirmed against real tokens.
+- **Real Access.** The Worker's check is tested with a local RS256 key pair and a stubbed key set. Real Access tokens,
+  from a browser and from a service token, and Access's key set endpoint are checked on a deployment.
 - **Real GitHub.** App installation, webhook delivery, and token injection for a private repository (only a public
   repository was reached in the prototype, with the injection written but not exercised).
 - **Sandbox in production.** Start and rebuild times, and checkout time of a large repository. The local Docker
