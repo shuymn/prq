@@ -1,4 +1,3 @@
-import { type HubView, sessionName } from "@prq/protocol";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,7 +6,7 @@ import type { PrSession } from "./pr-session/index.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
 import { localSession } from "./test/cli.ts";
-import { cancelWakes, claimIn, clearQueue, hub, jobRows, retryIn, sessionSql } from "./test/session.ts";
+import { cancelWakes, claimIn, clearQueue, hub, jobRows, ledgerRowOf, retryIn, sessionSql } from "./test/session.ts";
 
 const sockets: AgentSocket[] = [];
 
@@ -36,8 +35,7 @@ async function checks(stub: DurableObjectStub<PrSession>): Promise<ClaimAged[]> 
 }
 
 async function problemOf(name: string): Promise<string | null | undefined> {
-  const view: HubView | undefined = await runInDurableObject(await hub(), (instance) => instance.state);
-  return view?.prs.find((row) => sessionName(row.pr) === name)?.problem;
+  return (await ledgerRowOf(name))?.problem;
 }
 
 async function ledgerRev(name: string): Promise<number | undefined> {
@@ -45,6 +43,20 @@ async function ledgerRev(name: string): Promise<number | undefined> {
     await hub(),
     (_, state) =>
       state.storage.sql.exec<{ rev: number }>("SELECT rev FROM prq_ledger WHERE session = ?", name).toArray()[0]?.rev,
+  );
+}
+
+async function scheduleCount(stub: DurableObjectStub<PrSession>): Promise<number> {
+  return runInDurableObject(stub, async (instance) => (await instance.listSchedules()).length);
+}
+
+// The session's ledger outbox rows: a revision written and not yet delivered.
+async function ledgerOutbox(stub: DurableObjectStub<PrSession>): Promise<number> {
+  return runInDurableObject(
+    stub,
+    (_, state) =>
+      state.storage.sql.exec<{ rows: number }>("SELECT count(*) AS rows FROM prq_outbox WHERE kind = 'ledger'").one()
+        .rows,
   );
 }
 
@@ -123,6 +135,30 @@ describe("claimAged", () => {
     expect(await checks(stub)).toEqual([]);
     expect(await problemOf(name)).not.toBe("possibly_stalled");
     expect(logs.some((log) => log.entry["event"] === "prq.job.stalled")).toBe(false);
+  });
+
+  it("leaves a stall whose check was lost to settle, which publishes it once; a second settle does nothing", async () => {
+    const logs = captureLogs();
+    const { stub, name, payload } = await claimed();
+    await cancelWakes(stub);
+    await sessionSql(stub, "UPDATE prq_jobs SET claimed_at = ?", Date.now() - STALL_MS - 1000);
+    expect(await problemOf(name)).toBeNull();
+    const stalls = () => logs.filter((log) => log.entry["event"] === "prq.job.stalled").length;
+
+    await stub.settle();
+    expect((await stub.view()).jobs[0]?.stalled).toBe(true);
+    expect(await problemOf(name)).toBe("possibly_stalled");
+    expect(stalls()).toBe(1);
+    const rev = await ledgerRev(name);
+    const schedules = await scheduleCount(stub);
+
+    await stub.settle();
+    await runInDurableObject(stub, (instance) => instance.claimAged(payload));
+    expect(await ledgerRev(name)).toBe(rev);
+    expect(await ledgerOutbox(stub)).toBe(0);
+    expect(await scheduleCount(stub)).toBe(schedules);
+    expect(await checks(stub)).toEqual([]);
+    expect(stalls()).toBe(1);
   });
 
   it("is armed by settle when the claim's own schedule failed", async () => {

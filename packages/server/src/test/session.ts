@@ -2,10 +2,11 @@
 // tests of one file (and not across files), so each test takes a pull request of its own and sets the pool it needs.
 
 import type { AIChatAgent } from "@cloudflare/ai-chat";
-import type { ClaimResponse, Owner, PrRef } from "@prq/protocol";
+import { type ClaimResponse, LedgerPage, type LedgerRow, type Owner, type PrRef, sessionName } from "@prq/protocol";
 import type { UIMessage } from "ai";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import * as v from "valibot";
 import { expect, vi } from "vitest";
 
 import type { Hub } from "../hub.ts";
@@ -51,6 +52,23 @@ export async function setPool(agentIds: readonly string[]): Promise<void> {
   for (const agentId of agentIds) {
     await stub.touch(agentId);
   }
+}
+
+// Every row of the Hub's ledger, read page by page as the UI reads them.
+export async function ledgerRows(): Promise<LedgerRow[]> {
+  const rows: LedgerRow[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = v.parse(LedgerPage, await (await hub()).ledgerPage(cursor));
+    rows.push(...page.rows);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return rows;
+}
+
+// A session's row in the Hub's ledger.
+export async function ledgerRowOf(name: string): Promise<LedgerRow | undefined> {
+  return (await ledgerRows()).find((row) => sessionName(row.pr) === name);
 }
 
 // Empties the Hub's notification queue (of the sessions earlier tests of the file left).
@@ -277,9 +295,17 @@ export type HubSeams = {
   peekSession(session: string, agentId: string): Promise<Peek>;
   claimSession(session: string, agentId: string, mode: "resume" | "fresh", attempt: number): Promise<unknown>;
   waitTimer(ms: number, end: () => void): () => void;
+  ledgerPageBytes(): number;
 };
 
-const HUB_SEAMS = ["sessionStub", "sessionCallMs", "peekSession", "claimSession", "waitTimer"] as const;
+const HUB_SEAMS = [
+  "sessionStub",
+  "sessionCallMs",
+  "peekSession",
+  "claimSession",
+  "waitTimer",
+  "ledgerPageBytes",
+] as const;
 
 function hasHubSeams(instance: object): instance is HubSeams {
   return HUB_SEAMS.every((name) => typeof Reflect.get(instance, name) === "function");

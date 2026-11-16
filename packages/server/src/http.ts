@@ -13,6 +13,11 @@ import { WaitTimeout } from "./wait.ts";
 // enough that the agent or the UI soon tries again.
 export const ROUTE_CALL_MS = 30_000;
 
+// A call a route makes that did not take effect and may be made again: the route answers 503, which the caller retries.
+export class Unavailable extends Error {
+  override readonly name = "Unavailable";
+}
+
 // How a route bounds a call: the call's outcome, or a WaitTimeout once ms has passed (withTimeout in production).
 export type CallBound = <T>(call: PromiseLike<T>, ms: number, what: string) => Promise<T>;
 
@@ -76,7 +81,8 @@ export const notFound: NotFoundHandler = (c) => errorResponse(c, "not_found");
 
 // Logs the error's name only: a message can carry a configuration value or request content. Hono's validator throws a
 // 400 HTTPException for a body that is not JSON. A route that stopped waiting for a Durable Object answers 503, which
-// the caller retries; the call keeps running, and each route says what its late outcome does.
+// the caller retries; the call keeps running, and each route says what its late outcome does. A call that did not take
+// effect (Unavailable) answers 503 as well.
 export const onError: ErrorHandler = (error, c) => {
   if (error instanceof HTTPException && error.status === 400) {
     return errorResponse(c, "bad_request", "the body is not JSON");
@@ -84,6 +90,10 @@ export const onError: ErrorHandler = (error, c) => {
   if (error instanceof WaitTimeout) {
     log("prq.request.timed_out", { method: c.req.method, path: c.req.path }, "warn");
     return errorResponse(c, "unavailable", "the server did not answer in time; try again");
+  }
+  if (error instanceof Unavailable) {
+    log("prq.request.unavailable", { method: c.req.method, path: c.req.path }, "warn");
+    return errorResponse(c, "unavailable", "the server could not take the call; try again");
   }
   log("prq.request.failed", { method: c.req.method, path: c.req.path, error: error.name }, "error");
   return errorResponse(c, "internal");

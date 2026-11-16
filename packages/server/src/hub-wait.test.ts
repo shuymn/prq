@@ -168,8 +168,8 @@ describe("the wait's bound", () => {
 });
 
 describe("a wait whose first contact fails", () => {
-  it("answers 500 and drops its waiter and its timer", async () => {
-    captureLogs();
+  it("answers 503, which the agent retries, and drops its waiter and its timer", async () => {
+    const logs = captureLogs();
     await setPool([]);
     const token = await hostToken();
     const timers = await controlWaitTimers();
@@ -179,7 +179,8 @@ describe("a wait whose first contact fails", () => {
       });
     });
 
-    expect((await waitOver(token, "laptop", LONG_MS)).status).toBe(500);
+    expect((await waitOver(token, "laptop", LONG_MS)).status).toBe(503);
+    expect(logs.some((log) => log.entry["event"] === "prq.hub.wait_failed")).toBe(true);
     expect(timers.timers()).toEqual([{ ms: LONG_MS, cancelled: true }]);
     // The wait's end is still a contact; once that is old, nothing keeps the agent present.
     await lastSeenAgo(PRESENCE_MS);

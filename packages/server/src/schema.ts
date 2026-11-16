@@ -14,14 +14,23 @@ export const HUB_SCHEMA: SchemaSteps = [
   // The notification queue: sessions that may have local work, with the generation of their latest notify.
   `CREATE TABLE prq_notifications (
     session TEXT PRIMARY KEY, gen INTEGER NOT NULL, notified_at INTEGER NOT NULL)`,
-  // The ledger: each session's newest entry (JSON) with its revision, and the time of its latest event (NULL until
-  // one), which orders the list.
+  // The ledger: each session's newest entry (JSON) with its revision, the time of its latest event (NULL until one),
+  // which orders the list, and whether its problem needs attention with a local agent present and without one.
   `CREATE TABLE prq_ledger (
-    session TEXT PRIMARY KEY, rev INTEGER NOT NULL, latest_event_at INTEGER, entry TEXT NOT NULL)`,
+    session TEXT PRIMARY KEY, rev INTEGER NOT NULL, latest_event_at INTEGER, entry TEXT NOT NULL,
+    attention_present INTEGER NOT NULL CHECK (attention_present IN (0, 1)),
+    attention_absent INTEGER NOT NULL CHECK (attention_absent IN (0, 1)))`,
+  // The list's order (NULLs sort last when descending), which pages walk.
+  "CREATE INDEX prq_ledger_order ON prq_ledger (latest_event_at DESC, session)",
   // The claims the ledger entries hold, per session and job: the agent ID and the claim's time on the Hub's clock.
   `CREATE TABLE prq_claims (
     session TEXT NOT NULL, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, claimed_at INTEGER NOT NULL,
     PRIMARY KEY (session, job_id))`,
+  // ledger_version: advanced by every entry the ledger stores. attention_*: how many rows need attention with a local
+  // agent present and without one, kept with each stored entry so no count reads every row.
+  "ALTER TABLE prq_hub ADD COLUMN ledger_version INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE prq_hub ADD COLUMN attention_present INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE prq_hub ADD COLUMN attention_absent INTEGER NOT NULL DEFAULT 0",
 ];
 
 export const PR_SESSION_SCHEMA: SchemaSteps = [
@@ -102,6 +111,9 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
   "INSERT INTO prq_outbox_next (kind, gen) SELECT kind, gen FROM prq_outbox",
   "DROP TABLE prq_outbox",
   "ALTER TABLE prq_outbox_next RENAME TO prq_outbox",
+  // The claims whose stall the ledger has been told of: a claim past its deadline is published once, by claimAged or by
+  // settle, whichever finds it first. Rows of claims no longer held are dropped with the next mark.
+  "CREATE TABLE prq_stalls (claim_id TEXT PRIMARY KEY)",
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {

@@ -1,4 +1,4 @@
-import { LatestEvent, LedgerRow, Owner, PrDetails, type Problem } from "@prq/protocol";
+import { LatestEvent, LedgerClaim, LedgerRow, Owner, PrDetails, type Problem } from "@prq/protocol";
 import * as v from "valibot";
 
 // The ledger's rules, pure (docs/design.md, PR ledger and Presence): which problem a pull request's row shows, and
@@ -25,9 +25,7 @@ export const LedgerEntry = v.object({
   waitingWork: v.boolean(),
   unsummarized: v.boolean(),
   jobs: LedgerRow.entries.jobs,
-  claims: v.array(
-    v.object({ agentId: v.string(), jobId: v.string(), since: v.number(), ageMs: v.pipe(v.number(), v.minValue(0)) }),
-  ),
+  claims: v.array(v.object({ ...LedgerClaim.entries, ageMs: v.pipe(v.number(), v.minValue(0)) })),
 });
 export type LedgerEntry = v.InferOutput<typeof LedgerEntry>;
 

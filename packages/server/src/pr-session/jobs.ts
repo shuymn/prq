@@ -535,6 +535,32 @@ export function heldJobs(sql: SqlStorage): JobRow[] {
   return sql.exec<JobRow>("SELECT * FROM prq_jobs WHERE state IN ('claimed', 'finalizing') ORDER BY seq").toArray();
 }
 
+// Marks every held claim past its deadline whose stall the ledger has not been told of, and drops the marks of claims
+// no longer held. Returns the jobs it marked: the caller writes the ledger row in the same step, so each claim's stall
+// is published once.
+export function markStalls(sql: SqlStorage, now: number): JobRow[] {
+  sql.exec(
+    `DELETE FROM prq_stalls WHERE claim_id NOT IN (
+       SELECT claim_id FROM prq_jobs WHERE state IN ('claimed', 'finalizing') AND claim_id IS NOT NULL)`,
+  );
+  const marked = sql
+    .exec<{ claim_id: string }>(
+      `INSERT INTO prq_stalls (claim_id)
+       SELECT claim_id FROM prq_jobs
+       WHERE state IN ('claimed', 'finalizing') AND claim_id IS NOT NULL AND claimed_at <= ?
+       ON CONFLICT (claim_id) DO NOTHING RETURNING claim_id`,
+      now - STALL_MS,
+    )
+    .toArray()
+    .map((row) => row.claim_id);
+  return marked.flatMap((claimId) => sql.exec<JobRow>("SELECT * FROM prq_jobs WHERE claim_id = ?", claimId).toArray());
+}
+
+// Whether a claim's stall has been published.
+export function stallMarked(sql: SqlStorage, claimId: string): boolean {
+  return sql.exec("SELECT 1 FROM prq_stalls WHERE claim_id = ?", claimId).toArray().length > 0;
+}
+
 // The claim's deadline: when a held job's claim has had no result for STALL_MS.
 export function stallDeadline(row: Pick<JobRow, "claimed_at">): number {
   if (row.claimed_at === null) {

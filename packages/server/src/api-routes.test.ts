@@ -1,11 +1,11 @@
-import { ErrorResponse } from "@prq/protocol";
+import { ErrorResponse, LedgerPage, type LedgerRow, MAX_LEDGER_CURSOR_CHARS } from "@prq/protocol";
 import { listDurableObjectIds, runInDurableObject } from "cloudflare:test";
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import * as v from "valibot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ROUTE_CALL_MS } from "./http.ts";
-import { captureLogs } from "./test/access.ts";
+import { type CallBound, ROUTE_CALL_MS } from "./http.ts";
+import { captureLogs, request } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
 import {
   claimOver,
@@ -21,13 +21,17 @@ import {
   claimIn,
   clearQueue,
   gate,
+  hub,
+  hubSeams,
   jobOf,
+  ledgerRows,
   prSessionSeams,
   revOf,
   sessionSql,
   tracked,
   within,
 } from "./test/session.ts";
+import { WaitTimeout } from "./wait.ts";
 
 const sockets: AgentSocket[] = [];
 
@@ -225,5 +229,75 @@ describe("retry time limit", () => {
       state: "claimed",
       claim_id: next.job === null ? null : next.claimId,
     });
+  });
+});
+
+function ledgerRequest(token: string | undefined, cursor?: string): Request {
+  return request(cursor === undefined ? "/api/ledger" : `/api/ledger?cursor=${encodeURIComponent(cursor)}`, token);
+}
+
+function bytesOf(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
+}
+
+describe("ledger pages", () => {
+  it("walks the ledger page by page through each page's cursor", async () => {
+    captureLogs();
+    const { token } = await localSession("api", sockets, question("q1"));
+    await localSession("api", sockets, question("q1"));
+    await localSession("api", sockets, question("q1"));
+    const all: LedgerRow[] = await ledgerRows();
+    // Pages small enough that the walk takes several.
+    const envelope = bytesOf({ rows: [], nextCursor: "x".repeat(MAX_LEDGER_CURSOR_CHARS) });
+    const largest = Math.max(...all.map(bytesOf));
+    await runInDurableObject(await hub(), (instance) => {
+      vi.spyOn(hubSeams(instance), "ledgerPageBytes").mockReturnValue(envelope + largest);
+    });
+    const walked: LedgerRow[] = [];
+    let pages = 0;
+    let cursor: string | undefined;
+    do {
+      const res = await exports.default.fetch(ledgerRequest(token, cursor));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Cache-Control")).toBe("no-store");
+      const page = v.parse(LedgerPage, await res.json());
+      walked.push(...page.rows);
+      pages += 1;
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+    expect(pages).toBeGreaterThan(1);
+    expect(walked).toEqual(all);
+  });
+
+  it("answers 400 to a cursor outside the query or the list, and 401 without a token", async () => {
+    captureLogs();
+    const { token } = await localSession("api", sockets);
+    for (const cursor of ["", "x".repeat(MAX_LEDGER_CURSOR_CHARS + 1), "x", "1.hub", "01.octo~api~1"]) {
+      const res = await exports.default.fetch(ledgerRequest(token, cursor));
+      expect({ cursor, ...(await errorOf(res)) }).toEqual({ cursor, status: 400, error: "bad_request" });
+    }
+    expect(await errorOf(exports.default.fetch(ledgerRequest(undefined)))).toEqual({
+      status: 401,
+      error: "unauthorized",
+    });
+  });
+
+  it("answers 503 when the Hub does not answer in time, and 500 for a row that does not fit in a page", async () => {
+    const logs = captureLogs();
+    const { token } = await localSession("api", sockets, question("q1"));
+    const bounds: { ms: number; what: string }[] = [];
+    const timedOut: CallBound = (call, ms, what) => {
+      bounds.push({ ms, what });
+      void Promise.resolve(call).catch(() => undefined);
+      return Promise.reject(new WaitTimeout(`${what} expired`));
+    };
+    expect(await errorOf(fetchBounded(timedOut, ledgerRequest(token)))).toEqual({ status: 503, error: "unavailable" });
+    expect(bounds).toEqual([{ ms: ROUTE_CALL_MS, what: "the Hub's ledger page" }]);
+
+    await runInDurableObject(await hub(), (instance) => {
+      vi.spyOn(hubSeams(instance), "ledgerPageBytes").mockReturnValue(0);
+    });
+    expect(await errorOf(exports.default.fetch(ledgerRequest(token)))).toEqual({ status: 500, error: "internal" });
+    expect(logs.some((log) => log.entry["event"] === "prq.ledger.overflow")).toBe(true);
   });
 });

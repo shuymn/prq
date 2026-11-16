@@ -395,7 +395,58 @@ describe("headers on every outcome", () => {
   });
 });
 
+// The Hub's next contact fails: the presence alarm it arms cannot be scheduled.
+async function failNextContact(): Promise<void> {
+  await runInDurableObject(await hub(), async (instance) => {
+    for (const schedule of await instance.listSchedules()) {
+      await instance.cancelSchedule(schedule.id);
+    }
+    vi.spyOn(instance, "schedule").mockRejectedValueOnce(new Error("storage failed"));
+  });
+}
+
 describe("contacts", () => {
+  it("answers 503 to a submit or a context whose contact the Hub could not record, and the resend goes through", async () => {
+    const logs = captureLogs();
+    const session = await localSession("cli", sockets, Q1);
+    const claim = holding(await claimOver(session.token, "laptop"));
+    const context = { agentId: "laptop", pr: session.ref, jobId: claim.job.jobId, claimId: claim.claimId };
+    await failNextContact();
+    expect(await failure(await submitOver(session.token, session.ref, claim, "laptop"))).toEqual(
+      failed(503, "unavailable"),
+    );
+    // The session was not called: the job is still claimed.
+    expect((await jobRows(session.stub))[0]?.state).toBe("claimed");
+    await failNextContact();
+    expect(await failure(await post("/cli/context", session.token, context))).toEqual(failed(503, "unavailable"));
+    expect(logs.filter((log) => log.entry["event"] === "prq.request.unavailable")).toHaveLength(2);
+
+    expect((await post("/cli/context", session.token, context)).status).toBe(200);
+    expect(await accepted(submitOver(session.token, session.ref, claim, "laptop"))).toMatchObject({
+      status: "accepted",
+    });
+  });
+
+  it("answers 503 to a claim whose contact the Hub could not record, and the next claim takes the job", async () => {
+    captureLogs();
+    const session = await localSession("cli", sockets, Q1);
+    await failNextContact();
+    expect(await failure(await post("/cli/claim", session.token, { agentId: "laptop" }))).toEqual(
+      failed(503, "unavailable"),
+    );
+    expect((await jobRows(session.stub))[0]?.state).toBe("pending");
+    expect(holding(await claimOver(session.token, "laptop")).job.target).toMatchObject({ kind: "answer" });
+  });
+
+  it("answers 503 to a wait whose start the Hub could not record, and the next wait answers", async () => {
+    const logs = captureLogs();
+    const session = await localSession("cli", sockets, Q1);
+    await failNextContact();
+    expect(await failure(await waitOver(session.token, "laptop", 0))).toEqual(failed(503, "unavailable"));
+    expect(logs.some((log) => log.entry["event"] === "prq.hub.wait_failed")).toBe(true);
+    expect(await waitStatus(waitOver(session.token, "laptop", 0))).toBe("ready");
+  });
+
   it("counts a claim and a submit, accepted or not, as a contact from the agent", async () => {
     captureLogs();
     const session = await localSession("cli", sockets, Q1);

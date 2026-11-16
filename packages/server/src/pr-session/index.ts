@@ -49,6 +49,7 @@ import {
   type JobState,
   jobView,
   ledgerEntry,
+  markStalls,
   moveHead,
   type OutboxKind,
   outboxRow,
@@ -66,6 +67,7 @@ import {
   resumeClaim,
   retry,
   stallDeadline,
+  stallMarked,
   startNext,
   takeInbox,
   writeDetails,
@@ -584,7 +586,8 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   // A claim's 60-minute check (docs/design.md, PR ledger). With the claim still held and its deadline passed, the
   // ledger entry and the view now show the job possibly stalled. Run before the deadline, it schedules itself again
-  // (a new row: an idempotent one would match this running one). For a claim that has ended, nothing changes.
+  // (a new row: an idempotent one would match this running one). For a claim that has ended, or whose stall settle has
+  // published already, nothing changes.
   async claimAged(payload: ClaimRef): Promise<void> {
     const held = (): JobRow | undefined => {
       const row = jobById(this.#sql, payload.jobId);
@@ -599,20 +602,33 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       await this.schedule(wholeSecondFrom(deadline), "claimAged", payload, { idempotent: false });
       return;
     }
-    await this.#armWake();
-    const aged = this.ctx.storage.transactionSync(() => {
-      const still = held();
-      if (still !== undefined) {
-        writeLedger(this.#sql);
-      }
-      return still;
-    });
-    if (aged === undefined) {
+    if (stallMarked(this.#sql, payload.claimId)) {
       return;
     }
-    log("prq.job.stalled", { ...this.#jobFields(aged), agentId: aged.agent_id });
-    this.#publishView();
-    await this.#deliverOutbox();
+    await this.#armWake();
+    if (this.#publishStalls()) {
+      await this.#deliverOutbox();
+    }
+  }
+
+  // Publishes the stall of every held claim past its deadline that the ledger has not been told of: a new ledger
+  // revision, written in the step that marks them, once per claim. claimAged runs it at a claim's deadline, and settle
+  // for a claim whose check was lost. Returns whether it marked any.
+  #publishStalls(): boolean {
+    const marked = this.ctx.storage.transactionSync(() => {
+      const rows = markStalls(this.#sql, Date.now());
+      if (rows.length > 0) {
+        writeLedger(this.#sql);
+      }
+      return rows;
+    });
+    for (const row of marked) {
+      log("prq.job.stalled", { ...this.#jobFields(row), agentId: row.agent_id });
+    }
+    if (marked.length > 0) {
+      this.#publishView();
+    }
+    return marked.length > 0;
   }
 
   // What a local agent works on its claimed job from (/cli/context): the pull request, its details, the job as its claim
@@ -876,11 +892,13 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     await this.#attempt("sweep", () => this.#writes.run(() => this.#sweepFinalizing()));
     await this.#attempt("cloud", () => this.#settleCloud());
     await this.#attempt("claim_aged", () => this.#rearmClaimAged());
+    await this.#attempt("stalls", () => void this.#publishStalls());
     await this.#deliverOutbox();
   }
 
   // Every held job whose claim has not reached its deadline has its claimAged check (one a stop between the claim and
-  // its schedule left without). A claim past its deadline is not armed again: the entry built from then on shows it.
+  // its schedule left without). A claim past its deadline gets no check again: settle publishes its stall once
+  // (#publishStalls), so a lost check costs no repeated alarm or settle work.
   async #rearmClaimAged(): Promise<void> {
     const now = Date.now();
     for (const row of heldJobs(this.#sql)) {

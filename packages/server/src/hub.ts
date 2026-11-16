@@ -1,9 +1,15 @@
 import {
   type ClaimResponse,
+  type ErrorResponse,
   type HubView,
+  LEDGER_PAGE_BYTES,
+  LEDGER_PAGE_ROWS,
+  type LedgerPage,
   type LedgerRow,
+  MAX_LEDGER_CURSOR_CHARS,
+  MAX_ROW_CLAIMS,
+  MAX_VIEW_AGENTS,
   parseSessionName,
-  type PoolAgent,
   type PrRef,
   WaitRequest,
   type WaitResponse,
@@ -24,6 +30,7 @@ import {
 } from "./ledger.ts";
 import { errorName, log } from "./log.ts";
 import { prSessionStub } from "./names.ts";
+import { jsonBytes } from "./pr-session/context.ts";
 import type { PrSession } from "./pr-session/index.ts";
 import type { Peek } from "./pr-session/jobs.ts";
 import { HUB_SCHEMA, migrate } from "./schema.ts";
@@ -43,6 +50,14 @@ type Notification = { session: string; gen: number };
 
 type AgentPresence = Presence & { claimedAt: number[] };
 
+// A stored ledger row as a page reads it.
+type StoredRow = { session: string; latest_event_at: number | null; entry: string };
+
+// A place in the list's order: a row's latest event time (null when it has none) and its session.
+type LedgerCursor = { at: number | null; session: string };
+
+const BAD_LEDGER_CURSOR: ErrorResponse = { error: "bad_request", detail: "the cursor names no place in the ledger" };
+
 // The one Hub (HUB_NAME): the pool of local agents, the queue of sessions that may have work for them, and the ledger
 // of every session's row. It holds no job state: it asks each PrSession (peek, claim), each PrSession asks it about
 // presence, and each sends it its ledger entry. Its view (HubView) is its Agent state.
@@ -60,9 +75,14 @@ export class Hub extends Agent<Env, HubView> {
     migrate(ctx.storage, HUB_SCHEMA);
   }
 
-  // Presence may have ended while the Hub was not running.
+  // Presence may have ended, or lost its alarm, while the Hub was not running: the view and presenceEnded are set again.
+  // A failure is logged; the next contact sets both.
   override async onStart(): Promise<void> {
-    await this.#poolChanged();
+    try {
+      await this.#poolChanged();
+    } catch (error) {
+      log("prq.hub.reconcile_failed", { error: errorName(error) }, "error");
+    }
   }
 
   override onConnect(connection: Connection): void {
@@ -102,7 +122,10 @@ export class Hub extends Agent<Env, HubView> {
   // Whether any local agent is present (docs/design.md, Presence): one in a wait, one whose last contact is less than
   // PRESENCE_MS ago, or one holding a claim made less than STALL_MS + PRESENCE_MS ago.
   isLocalPresent(): boolean {
-    const now = Date.now();
+    return this.#localPresent(Date.now());
+  }
+
+  #localPresent(now: number): boolean {
     return [...this.#presences(now).values()].some((presence) => isPresent(presence, now));
   }
 
@@ -141,21 +164,16 @@ export class Hub extends Agent<Env, HubView> {
     return presences;
   }
 
-  // After any change to the pool or the ledger: the view, set only when it changed, and presenceEnded at the next
-  // time an agent's presence ends. Neither failure undoes the change that called it: a later change sets both again.
+  // After any change to the pool or the ledger, and at the Hub's start: presenceEnded at the next time an agent's
+  // presence ends unless a row is due by then (which also restores one lost earlier), then the view, set only when it
+  // changed. In that order, the view shows no presence that nothing is armed to end. A failure of either fails the call
+  // that made the change, so the change is not acknowledged and is made again: a contact's route answers 503 and the
+  // agent retries, a ledger delivery is redelivered, and the scheduler runs presenceEnded again.
   async #poolChanged(): Promise<void> {
-    try {
-      const view = this.view();
-      if (JSON.stringify(view) !== JSON.stringify(this.state)) {
-        this.setState(view);
-      }
-    } catch (error) {
-      log("prq.hub.view_failed", { error: errorName(error) }, "error");
-    }
-    try {
-      await this.#presenceAlarm.run(() => this.#armPresenceEnded());
-    } catch (error) {
-      log("prq.hub.presence_alarm_failed", { error: errorName(error) }, "error");
+    await this.#presenceAlarm.run(() => this.#armPresenceEnded());
+    const view = this.view();
+    if (JSON.stringify(view) !== JSON.stringify(this.state)) {
+      this.setState(view);
     }
   }
 
@@ -193,22 +211,42 @@ export class Hub extends Agent<Env, HubView> {
       return;
     }
     const now = Date.now();
+    // Whether the row needs attention with a local agent present and without one: the Hub's counts follow each stored
+    // entry, so the view's count reads no row.
+    const present = Number(needsAttention(problemOf(entry, true)));
+    const absent = Number(needsAttention(problemOf(entry, false)));
     const stored = this.ctx.storage.transactionSync(() => {
+      const before = this.#sql
+        .exec<{ present: number; absent: number }>(
+          "SELECT attention_present AS present, attention_absent AS absent FROM prq_ledger WHERE session = ?",
+          session,
+        )
+        .toArray()[0] ?? { present: 0, absent: 0 };
       const applied = this.#sql
         .exec(
-          `INSERT INTO prq_ledger (session, rev, latest_event_at, entry) VALUES (?, ?, ?, ?)
+          `INSERT INTO prq_ledger (session, rev, latest_event_at, entry, attention_present, attention_absent)
+           VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT (session) DO UPDATE SET rev = excluded.rev, latest_event_at = excluded.latest_event_at,
-             entry = excluded.entry
+             entry = excluded.entry, attention_present = excluded.attention_present,
+             attention_absent = excluded.attention_absent
            WHERE excluded.rev > prq_ledger.rev RETURNING rev`,
           session,
           rev,
           entry.latestEvent?.at ?? null,
           JSON.stringify(entry),
+          present,
+          absent,
         )
         .toArray();
       if (applied.length === 0) {
         return this.#sql.exec<{ rev: number }>("SELECT rev FROM prq_ledger WHERE session = ?", session).one().rev;
       }
+      this.#sql.exec(
+        `UPDATE prq_hub SET ledger_version = ledger_version + 1, attention_present = attention_present + ?,
+           attention_absent = attention_absent + ? WHERE id = 1`,
+        present - before.present,
+        absent - before.absent,
+      );
       this.#replaceClaims(session, entry, now);
       return null;
     });
@@ -245,30 +283,97 @@ export class Hub extends Agent<Env, HubView> {
 
   // --- The view ---
 
-  // The Hub as the UI shows it: the present agents, and every row by latest event with its problem.
+  // The Hub as the UI shows it (its Agent state), bounded whatever the number of rows and agents: presence, the first
+  // MAX_VIEW_AGENTS present agents by ID, the ledger's version and the count of rows that need attention. Nothing in
+  // it changes on a contact alone.
   view(): HubView {
     const now = Date.now();
-    const agents: PoolAgent[] = [...this.#presences(now)]
+    const present = [...this.#presences(now)]
       .filter(([, presence]) => isPresent(presence, now))
-      .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([agentId, presence]) => ({
-        agentId,
-        lastSeenAt: presence.lastSeenAt,
-        waiting: presence.waiting,
-        holdsJob: presence.claimedAt.length > 0,
-      }));
-    const localAgentPresent = agents.length > 0;
-    const prs = this.#sql
-      .exec<{ session: string; entry: string }>(
-        "SELECT session, entry FROM prq_ledger ORDER BY latest_event_at IS NULL, latest_event_at DESC, session",
+      .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const hub = this.#sql
+      .exec<{ version: number; present: number; absent: number }>(
+        `SELECT ledger_version AS version, attention_present AS present, attention_absent AS absent
+         FROM prq_hub WHERE id = 1`,
       )
-      .toArray()
-      .flatMap((row) => {
-        const pr = parseSessionName(row.session);
-        const entry = v.safeParse(LedgerEntry, JSON.parse(row.entry));
-        return pr === null || !entry.success ? [] : [ledgerRow(pr, entry.output, localAgentPresent)];
-      });
-    return { localAgentPresent, agents, prs, needsAttention: prs.filter((row) => needsAttention(row.problem)).length };
+      .one();
+    const localAgentPresent = present.length > 0;
+    return {
+      localAgentPresent,
+      presentAgents: present.length,
+      agents: present
+        .slice(0, MAX_VIEW_AGENTS)
+        .map(([agentId, presence]) => ({ agentId, holdsJob: presence.claimedAt.length > 0 })),
+      ledgerVersion: hub.version,
+      needsAttention: localAgentPresent ? hub.present : hub.absent,
+    };
+  }
+
+  // A page of the ledger's rows after the cursor (from the first without one), each with the problem presence gives it
+  // now, within LEDGER_PAGE_BYTES and LEDGER_PAGE_ROWS. The order is the list's (latest event descending, rows without
+  // one last, then the session name) and the cursor a place in it, so a page goes on after the row the cursor names
+  // whatever changed meanwhile. A row is bounded (its fields and MAX_ROW_CLAIMS claims), far below a page; one that did
+  // not fit would be refused rather than sent over the budget.
+  ledgerPage(cursor?: string): LedgerPage | ErrorResponse {
+    const after = cursor === undefined ? undefined : parseLedgerCursor(cursor);
+    if (after === null) {
+      return BAD_LEDGER_CURSOR;
+    }
+    const present = this.#localPresent(Date.now());
+    const stored = this.#ledgerRows(after, LEDGER_PAGE_ROWS + 1);
+    const rows: LedgerRow[] = [];
+    let left = this.ledgerPageBytes() - jsonBytes({ rows: [], nextCursor: "x".repeat(MAX_LEDGER_CURSOR_CHARS) });
+    let last: StoredRow | undefined;
+    for (const row of stored.slice(0, LEDGER_PAGE_ROWS)) {
+      const pr = parseSessionName(row.session);
+      const entry = v.safeParse(LedgerEntry, JSON.parse(row.entry));
+      // A row stored before the entry's shape was checked is passed over; the cursor still moves past it.
+      if (pr !== null && entry.success) {
+        const shown = ledgerRow(pr, entry.output, present);
+        const bytes = jsonBytes(shown) + (rows.length > 0 ? 1 : 0);
+        if (bytes > left) {
+          if (last === undefined) {
+            log("prq.ledger.overflow", { pr: row.session }, "error");
+            return { error: "internal", detail: "a ledger row does not fit in a page" };
+          }
+          return { rows, nextCursor: ledgerCursor(last) };
+        }
+        left -= bytes;
+        rows.push(shown);
+      }
+      last = row;
+    }
+    const more = stored.length > LEDGER_PAGE_ROWS;
+    return { rows, nextCursor: more && last !== undefined ? ledgerCursor(last) : null };
+  }
+
+  // The bytes a page may take (spied on in tests).
+  protected ledgerPageBytes(): number {
+    return LEDGER_PAGE_BYTES;
+  }
+
+  // Up to `limit` stored rows after a place in the list's order (NULLs sort last when descending, as the index does).
+  #ledgerRows(after: LedgerCursor | undefined, limit: number): StoredRow[] {
+    const select = "SELECT session, latest_event_at, entry FROM prq_ledger";
+    const order = "ORDER BY latest_event_at DESC, session LIMIT ?";
+    if (after === undefined) {
+      return this.#sql.exec<StoredRow>(`${select} ${order}`, limit).toArray();
+    }
+    if (after.at === null) {
+      return this.#sql
+        .exec<StoredRow>(`${select} WHERE latest_event_at IS NULL AND session > ? ${order}`, after.session, limit)
+        .toArray();
+    }
+    return this.#sql
+      .exec<StoredRow>(
+        `${select} WHERE latest_event_at < ? OR (latest_event_at = ? AND session > ?) OR latest_event_at IS NULL
+         ${order}`,
+        after.at,
+        after.at,
+        after.session,
+        limit,
+      )
+      .toArray();
   }
 
   // The next value of the Hub's counter, which only grows.
@@ -340,7 +445,15 @@ export class Hub extends Agent<Env, HubView> {
       return new Response(null, { status: 404 });
     }
     const { agentId, timeoutMs } = v.parse(WaitRequest, await request.json());
-    return Response.json(await this.#wait(agentId, timeoutMs, request.signal));
+    try {
+      return Response.json(await this.#wait(agentId, timeoutMs, request.signal));
+    } catch (error) {
+      // A wait whose contact the Hub could not record (its view or its presence alarm) is not acknowledged: 503, which
+      // the agent retries.
+      log("prq.hub.wait_failed", { error: errorName(error) }, "error");
+      const unavailable: ErrorResponse = { error: "unavailable" };
+      return Response.json(unavailable, { status: 503 });
+    }
   }
 
   // Ready as soon as a queued session has work for the agent, else timeout once the bound passes; it never takes a job.
@@ -487,6 +600,21 @@ function ledgerRow(pr: PrRef, entry: LedgerEntry, localAgentPresent: boolean): L
     latestEvent: entry.latestEvent,
     problem: problemOf(entry, localAgentPresent),
     jobs: entry.jobs,
-    claims: entry.claims.map(({ agentId, jobId, since }) => ({ agentId, jobId, since })),
+    claims: entry.claims.slice(0, MAX_ROW_CLAIMS).map(({ agentId, jobId, since }) => ({ agentId, jobId, since })),
   };
+}
+
+// A row's place in the list's order, as a cursor: its latest event time ("-" for none), a dot, and its session.
+function ledgerCursor(row: StoredRow): string {
+  return `${row.latest_event_at ?? "-"}.${row.session}`;
+}
+
+function parseLedgerCursor(text: string): LedgerCursor | null {
+  const match = /^(-|0|[1-9][0-9]*)\.(.+)$/.exec(text);
+  const at = match?.[1] === "-" ? null : Number(match?.[1]);
+  const session = match?.[2];
+  if (session === undefined || parseSessionName(session) === null || (at !== null && !Number.isSafeInteger(at))) {
+    return null;
+  }
+  return { at, session };
 }
