@@ -1052,8 +1052,12 @@ describe("bounded view and ledger pages", () => {
     const timers = await controlWaitTimers();
     const wait = tracked(waitOver(await hostToken(), "sleeper", 20_000));
     await timers.started();
-    // The page is read while the wait is held in the Hub.
+    // The page is read while the wait is held in the Hub. The wait alone keeps the agent present, whatever its last
+    // contact, and a page after it does not list it again.
     expect(await agentRow("sleeper")).toMatchObject({ waiting: true });
+    await setLastSeen("sleeper", Date.now() - PRESENCE_MS);
+    expect(await agentRow("sleeper")).toMatchObject({ waiting: true });
+    expect(v.parse(AgentPage, await (await hub()).agentPage("sleeper")).rows).toEqual([]);
     expect(wait.settled()).toBe(false);
     await timers.expire();
     expect(await waitStatus(wait.promise)).toBe("timeout");
