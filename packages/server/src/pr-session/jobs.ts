@@ -23,6 +23,7 @@ export type JobRow = {
   created_at: number;
   updated_at: number;
   rev: number;
+  run: number;
 };
 
 export function jobTarget(row: JobRow): JobTarget {
@@ -183,22 +184,25 @@ export function peekJobs(sql: SqlStorage, agentId: string): Peek {
   };
 }
 
-// claimed → finalizing: the point at which a submit wins. Only the job's current claim, by the agent that holds it.
+// claimed → finalizing: the point at which a submit wins. Only the job's current claim, by the agent that holds it, with
+// an answer produced under the job's current run (no retry since).
 export function reserve(
   sql: SqlStorage,
   jobId: string,
   claimId: string,
   agentId: string,
+  run: number,
   now: number,
 ): JobRow | undefined {
   return sql
     .exec<JobRow>(
       `UPDATE prq_jobs SET rev = rev + 1, state = 'finalizing', updated_at = ?
-       WHERE job_id = ? AND state = 'claimed' AND claim_id = ? AND agent_id = ? RETURNING *`,
+       WHERE job_id = ? AND state = 'claimed' AND claim_id = ? AND agent_id = ? AND run = ? RETURNING *`,
       now,
       jobId,
       claimId,
       agentId,
+      run,
     )
     .toArray()[0];
 }
@@ -220,13 +224,14 @@ export function finalizingJobs(sql: SqlStorage): JobRow[] {
   return sql.exec<JobRow>("SELECT * FROM prq_jobs WHERE state = 'finalizing' ORDER BY seq").toArray();
 }
 
-// claimed or failed → pending, with the claim cleared, so the earlier claimId no longer matches. Only while the job is
-// still at expectedRev, the revision the retry was made from.
+// claimed or failed → pending, with the claim cleared, so the earlier claimId no longer matches, and the next run, so no
+// answer produced before the retry is accepted. Only while the job is still at expectedRev, the revision the retry was
+// made from.
 export function retry(sql: SqlStorage, jobId: string, expectedRev: number, now: number): JobRow | undefined {
   return sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET rev = rev + 1, state = 'pending', agent_id = NULL, claim_id = NULL, claimed_at = NULL,
-         workspace_sha = NULL, failure = NULL, updated_at = ?
+      `UPDATE prq_jobs SET rev = rev + 1, run = run + 1, state = 'pending', agent_id = NULL, claim_id = NULL,
+         claimed_at = NULL, workspace_sha = NULL, failure = NULL, updated_at = ?
        WHERE job_id = ? AND rev = ? AND state IN ('claimed', 'failed') RETURNING *`,
       now,
       jobId,

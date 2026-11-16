@@ -16,12 +16,17 @@ export const JobTarget = v.variant("kind", [
 ]);
 export type JobTarget = v.InferOutput<typeof JobTarget>;
 
+// The job's run: 1 at first, advanced only when the host retries the job. A submit names the run its answer was
+// produced under, and is accepted only while the job is still in that run.
+const Run = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
+
 // A job as a local agent receives it. workspaceSha is the commit to work at, fixed when the job was claimed: an
 // analysis's head; for an answer the head of the latest completed analysis, or null when there is none. question is
 // the question's text, for an answer.
 export const Job = v.object({
   jobId: Uuid,
   pr: PrRef,
+  run: Run,
   target: JobTarget,
   workspaceSha: v.nullable(Sha),
   question: v.optional(v.string()),
@@ -51,12 +56,14 @@ export const ClaimResponse = v.union([
 ]);
 export type ClaimResponse = v.InferOutput<typeof ClaimResponse>;
 
-// /cli/submit: the answer to a claimed job, under the claim that holds it. pr is accepted in any case.
+// /cli/submit: the answer to a claimed job, under the claim that holds it and the run it was produced under. pr is
+// accepted in any case.
 export const SubmitRequest = v.object({
   agentId: AgentId,
   pr: PrRef,
   jobId: Uuid,
   claimId: Uuid,
+  run: Run,
   target: JobTarget,
   text: v.pipe(v.string(), v.minLength(1), v.maxLength(MAX_ANSWER_CHARS)),
 });

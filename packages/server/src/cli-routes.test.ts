@@ -504,9 +504,9 @@ async function holdHubClaim() {
   return held;
 }
 
-// A claim the route stops waiting for (503) before it reaches the Hub; the agent's resend gets the job, and then the
-// first claim lands. Returns the resend's claim and the late claim's outcome.
-async function lateClaimAfterResend(session: Session) {
+// A claim the route stops waiting for (503) before it reaches the Hub; the agent's resend gets the job, `between` runs,
+// and then the first claim lands. Returns the resend's claim and the late claim's outcome.
+async function lateClaimAfterResend(session: Session, between?: (resend: ReturnType<typeof holding>) => Promise<void>) {
   const held = await holdHubClaim();
   const limit = heldBound();
   const res = tracked(fetchBounded(limit.bound, postRequest("/cli/claim", session.token, { agentId: "laptop" })));
@@ -514,12 +514,26 @@ async function lateClaimAfterResend(session: Session) {
   limit.expire();
   expect(await failure(within(res.promise, 3000))).toEqual(failed(503, "unavailable"));
   const resend = holding(await claimOver(session.token, "laptop"));
+  await between?.(resend);
   await held.open();
   return { resend, late: await limit.late() };
 }
 
+// The host retries the job from the view it shows.
+async function retryJobOver(session: Session, jobId: string): Promise<void> {
+  const rev = await revOf(session.stub, jobId);
+  expect(await (await retryOver(session.token, session.ref, jobId, rev)).json()).toEqual({ status: "retried" });
+}
+
+// The recovery after stale_claim (docs/design.md, Owner and jobs): the answer produced under `answered`, sent again
+// under the claim the agent now holds, with the run it was produced under.
+function resubmit(session: Session, now: ReturnType<typeof holding>, answered: ReturnType<typeof holding>) {
+  const claim = { ...now, job: { ...now.job, run: answered.job.run } };
+  return submitOver(session.token, session.ref, claim, "laptop", "the answer from before");
+}
+
 describe("a claim that lands after the route's 503", () => {
-  it("replaces the claim the resend got; the submit under it gets stale_claim, and a reclaim resumes the job", async () => {
+  it("replaces the claim the resend got; the answer, sent again under the next claim, is accepted", async () => {
     captureLogs();
     const session = await localSession("cli", sockets, Q1);
     const { resend, late } = await lateClaimAfterResend(session);
@@ -529,25 +543,45 @@ describe("a claim that lands after the route's 503", () => {
     expect((await jobRows(session.stub))[0]?.claim_id).not.toBe(resend.claimId);
     expect(await failure(submitOver(session.token, session.ref, resend, "laptop"))).toEqual(failed(409, "stale_claim"));
 
-    // The agent claims again and gets the same job, resumed; its answer goes in under the new claim.
+    // No retry came in between: the job is still in the run the answer was produced under.
     const reclaim = holding(await claimOver(session.token, "laptop"));
-    expect(reclaim).toMatchObject({ job: { jobId }, resumed: true });
-    expect(await accepted(submitOver(session.token, session.ref, reclaim, "laptop"))).toMatchObject({
-      status: "accepted",
-    });
+    expect(reclaim).toMatchObject({ job: { jobId, run: resend.job.run } });
+    expect(await accepted(resubmit(session, reclaim, resend))).toMatchObject({ status: "accepted" });
     expect(await answers(session)).toHaveLength(1);
   });
 
-  it("leaves nothing to resume once the host retried the job: the reclaim takes it fresh", async () => {
+  it("refuses the answer from before a retry that came after the late claim", async () => {
     captureLogs();
     const session = await localSession("cli", sockets, Q1);
     const { resend } = await lateClaimAfterResend(session);
     const { jobId } = resend.job;
-    const rev = await revOf(session.stub, jobId);
-    expect(await (await retryOver(session.token, session.ref, jobId, rev)).json()).toEqual({ status: "retried" });
+    await retryJobOver(session, jobId);
     expect(await failure(submitOver(session.token, session.ref, resend, "laptop"))).toEqual(failed(409, "stale_claim"));
 
-    // The reclaim does not resume: the agent drops its answer and works on the job again.
-    expect(holding(await claimOver(session.token, "laptop"))).toMatchObject({ job: { jobId }, resumed: false });
+    const reclaim = holding(await claimOver(session.token, "laptop"));
+    expect(reclaim).toMatchObject({ job: { jobId }, resumed: false });
+    expect(await failure(resubmit(session, reclaim, resend))).toEqual(failed(409, "stale_claim"));
+    expect(await answers(session)).toHaveLength(0);
+  });
+
+  it("refuses the answer from before a retry that came before the late claim, though the reclaim resumes", async () => {
+    captureLogs();
+    const session = await localSession("cli", sockets, Q1);
+    const { resend, late } = await lateClaimAfterResend(session, (claimed) => retryJobOver(session, claimed.job.jobId));
+    const { jobId } = resend.job;
+    // The late claim took the retried job fresh, in its next run.
+    expect(late).toMatchObject({ job: { jobId, run: resend.job.run + 1 }, resumed: false });
+    expect(await failure(submitOver(session.token, session.ref, resend, "laptop"))).toEqual(failed(409, "stale_claim"));
+
+    // The reclaim resumes the job the late claim holds, but the answer is from the run the retry ended.
+    const reclaim = holding(await claimOver(session.token, "laptop"));
+    expect(reclaim).toMatchObject({ job: { jobId }, resumed: true });
+    expect(await failure(resubmit(session, reclaim, resend))).toEqual(failed(409, "stale_claim"));
+    expect(await answers(session)).toHaveLength(0);
+
+    // The agent works on the job again, in its current run.
+    expect(await accepted(submitOver(session.token, session.ref, reclaim, "laptop"))).toMatchObject({
+      status: "accepted",
+    });
   });
 });

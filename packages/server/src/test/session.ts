@@ -291,5 +291,6 @@ export function submission(claim: ClaimResponse, agentId: string, text = "the an
   if (claim.job === null) {
     throw new Error("nothing was claimed");
   }
-  return { agentId, jobId: claim.job.jobId, claimId: claim.claimId, target: claim.job.target, text };
+  const { jobId, run, target } = claim.job;
+  return { agentId, jobId, claimId: claim.claimId, run, target, text };
 }

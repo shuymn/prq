@@ -99,7 +99,9 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
 - `local` is a kind, not a binding to one AI session. Any local agent in the pool may claim a pending job, because the
   conversation and the notes are in PrSession and the worktree can be rebuilt.
 - A job has a `jobId` and a target. An analysis is identified by the PR and its head SHA; an answer by the message ID of
-  the question. Every `claim` issues a new `claimId` and records the agent ID that made it.
+  the question. Every `claim` issues a new `claimId` and records the agent ID that made it. A job also has a run
+  (`run`), 1 at first, which only a retry advances, in its own statement; a claim returns it, and a submit names the
+  run its answer was produced under.
 - A job is `pending` (waiting), `claimed` by a local agent, `finalizing` while its submit appends the result, `running`
   in the cloud agent, `done`, `failed` or `superseded`. Each change is one SQL statement guarded by the state it
   expects (and the claim), so a state is never read in one step and changed in another, and the same statement
@@ -109,9 +111,10 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   new job, with a new `claimId`. A process that was killed and restarted can therefore continue at once, and an answer
   that arrives late from the old process is rejected. A resume is a claim: it also sets the claim time again.
 - A job claimed by one agent ID shall not be returned to another agent ID.
-- When a `submit` arrives, the system shall accept it only if `jobId`, `claimId`, the agent ID and the target (head SHA
-  or question message ID) match the current state. When the submit that completed a job arrives again (the same
-  `claimId`, agent ID and target), the system shall return the result already recorded and shall not add it to the
+- When a `submit` arrives, the system shall accept it only if `jobId`, `claimId`, the agent ID, the target (head SHA
+  or question message ID) and the run match the current state, so an answer produced before a retry is never accepted.
+  When the submit that completed a job arrives again (the same `claimId`, run, agent ID and target), the system shall
+  return the result already recorded and shall not add it to the
   conversation a second time; any other submit to a completed job is rejected.
 - A submit waits for the conversation to settle (`waitUntilStable`) before it enters the history write queue: the SDK
   counts a client's save as pending until the save returns, so waiting inside the queue could wait on a save queued
@@ -120,11 +123,12 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   before that point makes the submit fail as a stale claim; a retry while the job is `finalizing` is refused, and a
   resume does not return it. A submit that fails on the way leaves the job `claimed` for the agent to submit again. A
   local agent cannot report a failure: an unfinished job stays claimed until the host retries it.
-- When a submit gets 409 `stale_claim`, `prq` shall claim again and resubmit the same answer only if that claim returns
-  the same `jobId` with `resumed: true`; otherwise it shall drop the answer. A claim that lands after its route answered
-  503 can replace the `claimId` the agent holds (see [Notification and wait](#notification-and-wait-prq-wait)), and
-  this recovers it. After a retry the job is pending again, so the claim does not resume it and the job is worked on
-  again.
+- When a submit gets 409 `stale_claim`, `prq` shall claim again once and, if that claim returns the same `jobId`,
+  resubmit the answer under the new `claimId` with the run the answer was produced under. The server accepts it only if
+  no retry came since; otherwise (another job, no job, or 409 `stale_claim` again) `prq` shall drop the answer and work
+  on what the claim returned. A claim that lands after its route answered 503 can replace the `claimId` the agent
+  holds (see [Notification and wait](#notification-and-wait-prq-wait)), and this recovers it without accepting an
+  answer from before a retry, whichever order the retry and the late claim came in.
 - While no local agent is present, the jobs of a `local` session wait, questions included.
 - A job that was claimed but never submitted (the AI session was closed, for example) is not returned automatically.
   The UI shows which agent ID has been working on it and since when, and starts showing it as possibly stalled after 60
@@ -230,11 +234,11 @@ UI, webhook and CLI input all enter through PrSession.
   time to answer a client that is still connected. When the bound passes, the route answers 503 `unavailable`, which
   `prq` and the UI take as a reason to try again, and the call keeps running; nothing orders where it lands against
   what the client does after the 503. A late submit stores its answer once, and the agent's resend gets `duplicate`. A
-  claim that reaches the Hub after the 503 is a newer attempt than the agent's resend, so it can resume the job the
-  resend claimed under another `claimId`; the agent's submit then gets 409 `stale_claim`, and its next claim resumes
-  the job (see [Owner and jobs](#owner-and-jobs)). A late retry applies only if nothing changed the job after the view
-  it came from, and otherwise gets 409 `stale_job` (see [Owner and jobs](#owner-and-jobs)). A `wait` is aborted, which
-  ends it in the Hub.
+  claim that reaches the Hub after the 503 is a newer attempt than the agent's resend, so it can take the job under
+  another `claimId`; the agent's submit then gets 409 `stale_claim`, and the agent claims again and resubmits under the
+  run its answer was produced under, which the server accepts only if no retry came since (see
+  [Owner and jobs](#owner-and-jobs)). A late retry applies only if nothing changed the job after the view it came
+  from, and otherwise gets 409 `stale_job`. A `wait` is aborted, which ends it in the Hub.
 - An authentication failure (401 or 403) during `wait` is told apart from an ordinary timeout and ends with an error, so
   the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.

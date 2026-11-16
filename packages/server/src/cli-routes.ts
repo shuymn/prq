@@ -45,9 +45,9 @@ export function cliRoutes(bound: CallBound) {
         }
         return c.json(v.parse(WaitResponse, await res.json()));
       })
-      // A claim that lands after the route stopped waiting is a newer attempt than the agent's resend, so it can resume
-      // the job the resend claimed under another claimId. The agent's submit then gets stale_claim, and its next claim
-      // resumes the job (docs/design.md, Owner and jobs).
+      // A claim that lands after the route stopped waiting is a newer attempt than the agent's resend, so it can take
+      // the job under another claimId. The agent's submit then gets stale_claim; it claims again and resubmits under the
+      // run its answer was produced under, accepted only if no retry came since (docs/design.md, Owner and jobs).
       .post("/claim", vValidator("json", ClaimRequest, invalidRequest), async (c) => {
         const { agentId } = c.req.valid("json");
         const call = (async (): Promise<ClaimResponse> => (await hubStub(c.env)).claim(agentId))();

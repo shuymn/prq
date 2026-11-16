@@ -66,7 +66,14 @@ const HUB_CALL_MS = 10_000;
 const STABLE_WAIT_MS = 30_000;
 
 // A local agent's answer to its claimed job (/cli/submit).
-export type Submission = { agentId: string; jobId: string; claimId: string; target: JobTarget; text: string };
+export type Submission = {
+  agentId: string;
+  jobId: string;
+  claimId: string;
+  run: number;
+  target: JobTarget;
+  text: string;
+};
 
 // What one step that can make jobs waiting did beyond its own change: cloud jobs failed or handed over.
 type CloudOutcome = { failed: JobRow[]; started: { row: JobRow; agent: CloudAgent } | null };
@@ -411,7 +418,13 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   #job(row: JobRow, question: StoredMessage | undefined): Job {
-    const job: Job = { jobId: row.job_id, pr: this.#pr(), target: jobTarget(row), workspaceSha: row.workspace_sha };
+    const job: Job = {
+      jobId: row.job_id,
+      pr: this.#pr(),
+      run: row.run,
+      target: jobTarget(row),
+      workspaceSha: row.workspace_sha,
+    };
     return question === undefined ? job : { ...job, question: textOf(question) };
   }
 
@@ -440,7 +453,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   async #finalize(submission: Submission): Promise<SubmitResponse | ErrorResponse> {
-    const { agentId, jobId, claimId, target, text } = submission;
+    const { agentId, jobId, claimId, run, target, text } = submission;
     const row = jobById(this.#sql, jobId);
     if (row === undefined) {
       return this.#reject(submission, null, { error: "unknown_job" });
@@ -449,20 +462,22 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (target.kind !== row.kind || wanted !== row.target) {
       return this.#reject(submission, row, { error: "target_mismatch" });
     }
-    // A done job answers the submit that finished it, by the claim and the agent that held it, with its result again.
+    // A done job answers the submit that finished it, by the claim, run and agent that held it, with its result again.
     if (row.state === "done") {
-      if (row.done_claim_id === claimId && row.agent_id === agentId && row.result_message_id !== null) {
+      const same = row.done_claim_id === claimId && row.run === run && row.agent_id === agentId;
+      if (same && row.result_message_id !== null) {
         log("prq.job.duplicate", { ...this.#jobFields(row), agentId });
         return { status: "duplicate", messageId: row.result_message_id };
       }
       return this.#reject(submission, row, { error: "stale_claim", detail: "the job is done under another claim" });
     }
-    // The reservation is the claim check: only the job's current claim, held by this agent, moves it.
-    const reserved = reserve(this.#sql, jobId, claimId, agentId, Date.now());
+    // The reservation is the claim check: only the job's current claim, held by this agent, under the job's current
+    // run, moves it.
+    const reserved = reserve(this.#sql, jobId, claimId, agentId, run, Date.now());
     if (reserved === undefined) {
       return this.#reject(submission, row, {
         error: "stale_claim",
-        detail: "the claim is not the job's current claim",
+        detail: "the claim or the run is not the job's current one",
       });
     }
     this.#publishView();
