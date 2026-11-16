@@ -146,6 +146,16 @@ UI, webhook and CLI input all enter through PrSession.
 
 CLI exit codes: 0 ready, 2 timeout, 3 authentication failure, 4 claim mismatch, 1 anything else.
 
+### Versions
+
+- The Worker and the web UI it serves are deployed together and share one version, `vX.Y.Z`; the UI shows it next to
+  the product name. The CLI carries the version it was built with. How releases set the version is decided with the
+  deploy setup.
+- Every `/cli/*` response carries the server's version in a `Prq-Version` header. When it differs from the CLI's own,
+  the CLI adds a `notice` to its output naming both versions (for example "prq v0.3.0 talks to a v0.4.0 server; update
+  prq if a command fails"). It is not an error: the exit code and the rest of the output stay the same. Setting
+  `PRQ_VERSION_NOTICE=0` turns the notice off.
+
 ### Presence
 
 - Registering in the pool is the `prq` connection itself, and presence is kept per agent ID. There is no registration

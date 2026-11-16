@@ -6092,7 +6092,7 @@
                   "id": "XKvKc",
                   "name": "start",
                   "gap": "$gap-related",
-                  "alignItems": "center",
+                  "alignItems": "end",
                   "children": [
                     {
                       "type": "text",
@@ -6104,6 +6104,17 @@
                       "fontFamily": "$text-heading-font-family",
                       "fontSize": "$text-heading-font-size",
                       "fontWeight": "$text-heading-font-weight"
+                    },
+                    {
+                      "type": "text",
+                      "id": "c1Rmh",
+                      "name": "version",
+                      "fill": "$color-fg-muted",
+                      "content": "v0.4.0",
+                      "lineHeight": "$text-small-line-height",
+                      "fontFamily": "$text-small-font-family",
+                      "fontSize": "$text-small-font-size",
+                      "fontWeight": "$text-small-font-weight"
                     }
                   ]
                 },
