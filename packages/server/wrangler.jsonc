@@ -1,6 +1,12 @@
-// The Worker's configuration. The entry, flags and bindings are added with the Worker's code.
+// The Worker's configuration. Secrets (ACCESS_TEAM_DOMAIN, ACCESS_AUD; src/env.d.ts) are set outside this file.
 {
   "name": "prq",
+  "main": "src/index.ts",
   // No later than the workerd that @cloudflare/vitest-plugin bundles.
   "compatibility_date": "2026-11-10",
+  // The Agents SDK needs the Node.js APIs.
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+  },
 }
