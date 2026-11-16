@@ -23,24 +23,28 @@ describe("withTimeout", () => {
 describe("SerialQueue", () => {
   it("runs queued writes in order, also after one fails", async () => {
     const queue = new SerialQueue("a write", 1000);
+    const started = latch();
     const held = latch();
     const order: string[] = [];
     const first = queue.run(async () => {
       order.push("first");
+      started.open();
       await held.promise;
+      order.push("first ends");
       throw new Error("first failed");
     });
     const second = queue.run(async () => {
       order.push("second");
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The first write runs and is held; the second waits for it.
+    await started.promise;
     expect(order).toEqual(["first"]);
 
     held.open();
 
     await expect(first).rejects.toThrow("first failed");
     await second;
-    expect(order).toEqual(["first", "second"]);
+    expect(order).toEqual(["first", "first ends", "second"]);
   });
 
   it("fails a write that waits too long without running it, and keeps later writes behind the earlier ones", async () => {
