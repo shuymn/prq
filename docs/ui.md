@@ -28,12 +28,12 @@ What the interface has to show and do, as the input for the visual design. The s
 Every pull request prq follows, across repositories. The list is for getting back to a PR; processing is
 shown only where the host has to act.
 
-| Element | Data |
-| --- | --- |
-| Row | one compact line at a fixed height: PR state (open, closed, merged), repository (in its own column, not muted: the host tells PRs apart by it; only the name when every PR has the same owner, `owner/name` otherwise), title (truncated) and PR number, the latest event and its time ("Summary 12 min ago", "Answer 3 min ago", "Push received 2 min ago") |
-| Status | short text in its own column, only while something is unresolved: "Summary failed", "Answer failed", "Possibly stalled", "Waiting for a local agent"; and "New push not summarized" while the latest summary is for an older head. One label at a time, in the order of the [PR ledger](design.md#pr-ledger). Empty for a healthy row |
-| Header | the product name with the deployed version (`vX.Y.Z`, muted), the pool status (see screen 3), a settings button |
-| Column headings | Repository, Pull request, Status, Last activity: rows are a table |
+| Element         | Data                                                                                                                                                                                                                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Row             | one compact line at a fixed height: PR state (open, closed, merged), repository (in its own column, not muted: the host tells PRs apart by it; only the name when every PR has the same owner, `owner/name` otherwise), title (truncated) and PR number, the latest event and its time ("Summary 12 min ago", "Answer 3 min ago", "Push received 2 min ago") |
+| Status          | short text in its own column, only while something is unresolved: "Summary failed", "Answer failed", "Possibly stalled", "Waiting for a local agent"; and "New push not summarized" while the latest summary is for an older head. One label at a time, in the order of the [PR ledger](design.md#pr-ledger). Empty for a healthy row                        |
+| Header          | the product name with the deployed version (`vX.Y.Z`, muted), the pool status (see screen 3), a settings button                                                                                                                                                                                                                                              |
+| Column headings | Repository, Pull request, Status, Last activity: rows are a table                                                                                                                                                                                                                                                                                            |
 
 Rows are in the order of their latest event: a push received, a question sent, a summary or an answer completed.
 Claims, heartbeats and streaming do not move a row. Routine progress (queued, running, done) is not shown in the list.
@@ -54,15 +54,15 @@ start), and keeps those rows. "New push not summarized" does not count, nor does
 
 One pull request: the summary, its history by version, the conversation and the jobs.
 
-| Element | Data | Narrow panel |
-| --- | --- | --- |
-| Header | repository, number, title, PR state, link to the PR on GitHub | **[panel]** (compact) |
-| Summary | the latest analysis (Markdown), the head SHA it was made for, the time, the model and tokens used | **[panel]** |
-| Version history | the analyses by head SHA: SHA (short), time, status (done, running, waiting, failed, superseded). Selecting one only displays that summary; questions are still answered at the latest analyzed head unless the question names a SHA | **[panel]** (as a menu) |
-| Conversation | the full history in saved order: user questions and answers. Each answer is paired with its question and shows the SHA it was answered against, the model and the tokens used | **[panel]** |
-| Composer | text field and send. Disabled or marked while the connection is down | **[panel]** |
-| Job status | for each job: target (head SHA or question), state (waiting, running, failed, done), and while running the agent ID that is working on it and since when | **[panel]** (inline, compact) |
-| Job actions | "Retry" on any claimed or failed job, at any time (the host may know the local session is gone before the stalled mark appears) | **[panel]** |
+| Element         | Data                                                                                                                                                                                                                                 | Narrow panel                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
+| Header          | repository, number, title, PR state, link to the PR on GitHub                                                                                                                                                                        | **[panel]** (compact)         |
+| Summary         | the latest analysis (Markdown), the head SHA it was made for, the time, the model and tokens used                                                                                                                                    | **[panel]**                   |
+| Version history | the analyses by head SHA: SHA (short), time, status (done, running, waiting, failed, superseded). Selecting one only displays that summary; questions are still answered at the latest analyzed head unless the question names a SHA | **[panel]** (as a menu)       |
+| Conversation    | the full history in saved order: user questions and answers. Each answer is paired with its question and shows the SHA it was answered against, the model and the tokens used                                                        | **[panel]**                   |
+| Composer        | text field and send. Disabled or marked while the connection is down                                                                                                                                                                 | **[panel]**                   |
+| Job status      | for each job: target (head SHA or question), state (waiting, running, failed, done), and while running the agent ID that is working on it and since when                                                                             | **[panel]** (inline, compact) |
+| Job actions     | "Retry" on any claimed or failed job, at any time (the host may know the local session is gone before the stalled mark appears)                                                                                                      | **[panel]**                   |
 
 States:
 
@@ -105,11 +105,11 @@ Layout:
 
 A status area available from the list and the detail screens (see Placement below).
 
-| Element | Data | Narrow panel |
-| --- | --- | --- |
+| Element        | Data                                                                                                  | Narrow panel     |
+| -------------- | ----------------------------------------------------------------------------------------------------- | ---------------- |
 | Local presence | whether any local agent is present, and per agent ID: last seen, whether it is waiting or holds a job | status line only |
-| Cloud | always available | status line only |
-| Jobs in flight | count of waiting, running and failed jobs | status line only |
+| Cloud          | always available                                                                                      | status line only |
+| Jobs in flight | count of waiting, running and failed jobs                                                             | status line only |
 
 States:
 
@@ -122,13 +122,13 @@ the details above. In the panel it is one status line with no popover.
 
 ### 4. Settings
 
-| Element | Data |
-| --- | --- |
-| Analysis prompt | a multi-line editor for the free-form prompt used for summaries, with save |
-| Answer prompt | a multi-line editor for the free-form prompt used for answers, with save |
-| Skills list | one row per registered skill: name, description, source (repository and path), ref, pinned commit SHA, the tools its `allowed-tools` permits |
-| Skill actions | remove; update to a new ref (shows the SHA change before applying) |
-| Add a skill | a dialog with one field: the GitHub link to the skill's `SKILL.md` (`https://github.com/<owner>/<repo>/blob/<ref>/<path>/SKILL.md`), which gives the repository, ref and path |
+| Element         | Data                                                                                                                                                                          |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Analysis prompt | a multi-line editor for the free-form prompt used for summaries, with save                                                                                                    |
+| Answer prompt   | a multi-line editor for the free-form prompt used for answers, with save                                                                                                      |
+| Skills list     | one row per registered skill: name, description, source (repository and path), ref, pinned commit SHA, the tools its `allowed-tools` permits                                  |
+| Skill actions   | remove; update to a new ref (shows the SHA change before applying)                                                                                                            |
+| Add a skill     | a dialog with one field: the GitHub link to the skill's `SKILL.md` (`https://github.com/<owner>/<repo>/blob/<ref>/<path>/SKILL.md`), which gives the repository, ref and path |
 
 The prompts are plain text, such as "Write in Japanese. Polish the final text with the yomiyasu skill." There is no
 language field.

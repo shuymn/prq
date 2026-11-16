@@ -23,14 +23,14 @@ None of them is a production value. Nothing was deployed.
 
 ## Results
 
-| Check | Verdict | Notes |
-| --- | --- | --- |
-| Local-owner PR session and `prq wait` / `claim` / `submit`, agent IDs | Works, with notes | A UI question became a job without a model turn, `wait` returned it, `claim` and `submit` appended the answer to connected clients. See below. |
-| Cloud-owner turn with a mock model | Works, with notes | Streaming over several `text-delta` parts and persistence; webhook analyses appended after `waitUntilStable()` with the function form of `saveMessages`. |
-| GitHub App tokens and webhook signature in workerd | Works, with notes | `@octokit/auth-app` and `@octokit/webhooks-methods`. The private key must be PKCS#8. |
-| Sandbox rebuild | Works, with notes | Rebuild from empty at a pinned SHA, and git traffic restricted to one repository on `github.com` through the Worker. |
-| Tool calling and streaming with an OpenAI-compatible provider | Works | Two models of one provider, with valibot tool schemas. |
-| Context compaction | Works under conditions | Earlier decisions and facts survived six compactions. Needed the changes listed below. |
+| Check                                                                 | Verdict                | Notes                                                                                                                                                    |
+| --------------------------------------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local-owner PR session and `prq wait` / `claim` / `submit`, agent IDs | Works, with notes      | A UI question became a job without a model turn, `wait` returned it, `claim` and `submit` appended the answer to connected clients. See below.           |
+| Cloud-owner turn with a mock model                                    | Works, with notes      | Streaming over several `text-delta` parts and persistence; webhook analyses appended after `waitUntilStable()` with the function form of `saveMessages`. |
+| GitHub App tokens and webhook signature in workerd                    | Works, with notes      | `@octokit/auth-app` and `@octokit/webhooks-methods`. The private key must be PKCS#8.                                                                     |
+| Sandbox rebuild                                                       | Works, with notes      | Rebuild from empty at a pinned SHA, and git traffic restricted to one repository on `github.com` through the Worker.                                     |
+| Tool calling and streaming with an OpenAI-compatible provider         | Works                  | Two models of one provider, with valibot tool schemas.                                                                                                   |
+| Context compaction                                                    | Works under conditions | Earlier decisions and facts survived six compactions. Needed the changes listed below.                                                                   |
 
 ### Local owner, `wait`, agent IDs
 
@@ -145,15 +145,15 @@ the change, decisions, the user's interests and preferences, open questions and 
 
 What turned out wrong, and what the design does about it:
 
-| Found | Design |
-| --- | --- |
-| Characters ÷ 4 under-counted Japanese text and diffs by 1.3 to 1.7 times (median 1.49) | Count from the provider's usage and estimate only what was added since, at characters ÷ 3 or a measured ratio |
-| One turn can overrun the window through tool results; in run 2 a retry only passed because the model read less | Cap each tool result (12,000 characters) and the amount one turn reads; answer from what was read |
+| Found                                                                                                            | Design                                                                                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Characters ÷ 4 under-counted Japanese text and diffs by 1.3 to 1.7 times (median 1.49)                           | Count from the provider's usage and estimate only what was added since, at characters ÷ 3 or a measured ratio                                                          |
+| One turn can overrun the window through tool results; in run 2 a retry only passed because the model read less   | Cap each tool result (12,000 characters) and the amount one turn reads; answer from what was read                                                                      |
 | Notes grew from 3,560 to 13,406 characters over six updates, and the model added interests the user never stated | No size cap (a realistic window compacts only a few times; a summary cut by the output limit is not adopted); "interests and preferences" only from what the user said |
-| The summary added reasons nobody gave | "Decisions" in the user's words, a reason only if given |
-| Cutting inside a turn happened six times out of six | Summarizing the first half of a split turn is required |
-| Compaction costs 14 to 23 seconds | Compact after the answer is returned, not before the next question |
-| Reasoning content | Removed from the context when a turn ends; no problem was seen |
+| The summary added reasons nobody gave                                                                            | "Decisions" in the user's words, a reason only if given                                                                                                                |
+| Cutting inside a turn happened six times out of six                                                              | Summarizing the first half of a split turn is required                                                                                                                 |
+| Compaction costs 14 to 23 seconds                                                                                | Compact after the answer is returned, not before the next question                                                                                                     |
+| Reasoning content                                                                                                | Removed from the context when a turn ends; no problem was seen                                                                                                         |
 
 Adoption test met: after repeated compaction the model still answered what was decided before.
 

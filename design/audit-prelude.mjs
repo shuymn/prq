@@ -15,7 +15,11 @@ const cells = (line) =>
     .split(/(?<!\\)\|/)
     .slice(1, -1)
     .map((cell) => cell.trim());
-const tableRows = (md) => md.split("\n").filter((line) => line.startsWith("| ") && !line.startsWith("| ---")).map(cells);
+const tableRows = (md) =>
+  md
+    .split("\n")
+    .filter((line) => line.startsWith("| ") && !line.startsWith("| ---"))
+    .map(cells);
 
 const components = read("components.md");
 const inventory = [];
