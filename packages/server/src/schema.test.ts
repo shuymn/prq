@@ -61,6 +61,51 @@ describe("schema", () => {
     });
   });
 
+  it("adds the ledger's columns and outbox kind to a session from before them, keeping its outbox row and failures", async () => {
+    const stub = await prSessionStub(env, { owner: "octo", repo: "schema", number: 4 });
+    await runInDurableObject(stub, (_, { storage }) => {
+      const { sql } = storage;
+      // The database as the version before the ledger left it.
+      const tables = [
+        "prq_schema",
+        "prq_session",
+        "prq_jobs",
+        "prq_outbox",
+        "prq_intake",
+        "prq_claim_attempts",
+        "prq_inbox",
+      ];
+      for (const table of tables) {
+        sql.exec(`DROP TABLE ${table}`);
+      }
+      migrate(
+        storage,
+        PR_SESSION_SCHEMA.slice(
+          0,
+          PR_SESSION_SCHEMA.findIndex((step) => step.includes("latest_event_kind")),
+        ),
+      );
+      sql.exec("INSERT INTO prq_outbox (kind, gen) VALUES ('notify', 7)");
+      sql.exec(`INSERT INTO prq_jobs (job_id, kind, target, state, failure, created_at, updated_at)
+        VALUES ('failed', 'answer', 'q1', 'failed', 'cloud agent not configured', 1, 1),
+               ('pending', 'answer', 'q2', 'pending', NULL, 1, 1)`);
+
+      migrate(storage, PR_SESSION_SCHEMA);
+
+      expect(versions(storage)).toEqual([{ version: PR_SESSION_SCHEMA.length }]);
+      expect(sql.exec("SELECT kind, gen FROM prq_outbox").toArray()).toEqual([{ kind: "notify", gen: 7 }]);
+      sql.exec("INSERT INTO prq_outbox (kind, gen) VALUES ('ledger', 8)");
+      expect(() => sql.exec("INSERT INTO prq_outbox (kind, gen) VALUES ('other', 9)")).toThrow(/CHECK/);
+      expect(sql.exec("SELECT job_id, unresolved_failure FROM prq_jobs ORDER BY job_id").toArray()).toEqual([
+        { job_id: "failed", unresolved_failure: 1 },
+        { job_id: "pending", unresolved_failure: 0 },
+      ]);
+      expect(sql.exec("SELECT latest_event_kind, latest_event_at FROM prq_session").toArray()).toEqual([
+        { latest_event_kind: null, latest_event_at: null },
+      ]);
+    });
+  });
+
   it("applies each step once, in order, and leaves the version where a failed step started", async () => {
     const stub = await prSessionStub(env, { owner: "octo", repo: "schema", number: 2 });
     await runInDurableObject(stub, (_, { storage }) => {
