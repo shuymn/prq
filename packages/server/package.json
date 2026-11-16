@@ -7,6 +7,12 @@
     "typecheck": "tsc",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@prq/protocol": "workspace:*",
+    "hono": "catalog:",
+    "jose": "catalog:",
+    "valibot": "catalog:"
+  },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "catalog:",
     "@cloudflare/workers-types": "catalog:",
