@@ -412,9 +412,9 @@ export class Hub extends Agent<Env, HubView> {
   }
 
   // A page of the present agents after the cursor (an agent ID), by agent ID: each one's last contact, whether it
-  // waits and whether it holds a claim. The candidates come from the pool and the claims, each read from its index
-  // after the cursor under the condition that makes an agent present, and from the waits in memory; their first
-  // AGENT_PAGE_ROWS + 1 are the union's.
+  // waits and whether it holds a claim. They are the union of three sources, each after the cursor under one of the
+  // conditions that make an agent present (isPresent): a recent contact and a claim, read in order from their indexes,
+  // and a wait, from the waits in memory. The union's first AGENT_PAGE_ROWS + 1 are among each source's first as many.
   agentPage(cursor?: string): AgentPage | ErrorResponse {
     const now = this.clock();
     const after = cursor ?? "";
@@ -436,22 +436,20 @@ export class Hub extends Agent<Env, HubView> {
       byCodeUnit,
     );
     const page = fitPage(
-      candidates.slice(0, limit),
+      candidates,
       AGENT_PAGE_ROWS,
       AGENT_PAGE_BYTES,
       MAX_AGENT_ID_CHARS,
-      (agentId) => this.#agentRow(agentId, now),
+      (agentId) => this.#agentRow(agentId),
       (agentId) => agentId,
     );
     return page ?? overflow("agents", candidates[0]);
   }
 
-  // An agent as the pool shows it, or undefined when it is not present at now.
-  #agentRow(agentId: string, now: number): AgentRow | undefined {
-    const presence = this.#presenceOf(agentId);
-    return isPresent(presence, now)
-      ? { agentId, lastSeenAt: presence.lastSeenAt, waiting: presence.waiting, holdsJob: presence.claimedAt.length > 0 }
-      : undefined;
+  // A present agent as the pool shows it.
+  #agentRow(agentId: string): AgentRow {
+    const { lastSeenAt, waiting, claimedAt } = this.#presenceOf(agentId);
+    return { agentId, lastSeenAt, waiting, holdsJob: claimedAt.length > 0 };
   }
 
   // A page of the repositories the ledger has rows of after the cursor (owner/name in any case), by owner/name.
