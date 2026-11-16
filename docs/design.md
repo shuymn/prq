@@ -137,8 +137,9 @@ UI, webhook and CLI input all enter through PrSession.
   none is removed. A client adds questions only: a chat request carries the client's whole list, and PrSession adds
   the user messages whose IDs are not stored, after the stored ones. A new answer or system message in a chat request
   is dropped and logged as `prq.chat.refused`; answers come from the server. A chat request whose messages are not all
-  in the current `UIMessage` form is refused whole. Every history write goes through one queue, so each starts from
-  the history the previous one left.
+  in the current `UIMessage` form is refused whole and answered with a failed response for its ID, which ends the
+  request in the SDK's client. Every history write goes through one queue, so each starts from the history the
+  previous one left.
 - After each write PrSession sends the stored history to every connection, the sender included, and a client replaces
   its list with it. These are the only chat lists the server sends: the Agents SDK's relay of a client's list to the
   other connections before the save is dropped. The history is read within the budget the SDK keeps it in memory
