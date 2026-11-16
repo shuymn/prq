@@ -424,16 +424,17 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (row === undefined) {
       return this.#reject(submission, { error: "unknown_job" });
     }
+    const wanted = target.kind === "answer" ? target.messageId : target.headSha;
+    if (target.kind !== row.kind || wanted !== row.target) {
+      return this.#reject(submission, { error: "target_mismatch" });
+    }
+    // A done job answers the submit that finished it, by the claim and the agent that held it, with its result again.
     if (row.state === "done") {
-      if (row.done_claim_id === claimId && row.result_message_id !== null) {
+      if (row.done_claim_id === claimId && row.agent_id === agentId && row.result_message_id !== null) {
         log("prq.job.duplicate", { ...this.#jobFields(row), agentId });
         return { status: "duplicate", messageId: row.result_message_id };
       }
       return this.#reject(submission, { error: "stale_claim", detail: "the job is done under another claim" });
-    }
-    const wanted = target.kind === "answer" ? target.messageId : target.headSha;
-    if (target.kind !== row.kind || wanted !== row.target) {
-      return this.#reject(submission, { error: "target_mismatch" });
     }
     // The reservation is the claim check: only the job's current claim, held by this agent, moves it.
     const reserved = reserve(this.#sql, jobId, claimId, agentId, Date.now());

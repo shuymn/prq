@@ -146,6 +146,24 @@ describe("submit", () => {
     expect(await answers(session)).toEqual([]);
   });
 
+  it("answers a repeat of the submit that finished a job as a duplicate, and refuses another agent or target", async () => {
+    captureLogs();
+    const session = await localSession(Q1, Q2);
+    const { stub } = session;
+    const good = submission(await stub.claim("agent-a", "fresh"), "agent-a");
+    const accepted = await stub.submit(good);
+    expect(accepted).toMatchObject({ status: "accepted" });
+    const done = await jobRows(stub);
+
+    expect(await stub.submit({ ...good, agentId: "agent-b" })).toMatchObject({ error: "stale_claim" });
+    expect(await stub.submit({ ...good, target: { kind: "answer", messageId: "q2" } })).toEqual({
+      error: "target_mismatch",
+    });
+    expect(await stub.submit(good)).toEqual({ ...accepted, status: "duplicate" });
+    expect(await jobRows(stub)).toEqual(done);
+    expect(await answers(session)).toHaveLength(1);
+  });
+
   it("keeps the first answer of a resubmit, sequential or queued behind the first with other text", async () => {
     captureLogs();
     const session = await localSession(Q1, Q2);
