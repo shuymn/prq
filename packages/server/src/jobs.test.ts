@@ -1,4 +1,3 @@
-import { AIChatAgent } from "@cloudflare/ai-chat";
 import type { ClaimResponse } from "@prq/protocol";
 import type { UIMessage } from "ai";
 import { abortAllDurableObjects, runInDurableObject } from "cloudflare:test";
@@ -10,6 +9,7 @@ import { captureLogs, type LogEntry } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import {
   gate,
+  holdInsert,
   jobOf,
   jobRows,
   newSession,
@@ -210,15 +210,7 @@ describe("submit", () => {
     const claimA = await stub.claim("agent-a", "fresh");
     const claimB = await stub.claim("agent-b", "fresh");
     // A's write is held inside the SDK's save, with its list already built.
-    const held = await gate(stub);
-    await runInDurableObject(stub, (instance) => {
-      const base: AIChatAgent<Env> = Object.getPrototypeOf(Object.getPrototypeOf(instance));
-      const save = base.persistMessages.bind(instance);
-      vi.spyOn(base, "persistMessages").mockImplementationOnce(async (...args) => {
-        await held.wait();
-        return save(...args);
-      });
-    });
+    const held = await holdInsert(stub, "before");
     const a = tracked(stub.submit(submission(claimA, "agent-a", "answer A")));
     await held.reached();
     const b = tracked(stub.submit(submission(claimB, "agent-b", "answer B")));

@@ -1,4 +1,3 @@
-import type { AIChatAgent } from "@cloudflare/ai-chat";
 import { abortAllDurableObjects, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,9 +9,11 @@ import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import {
   cancelWakes,
   gate,
+  holdInsert,
   jobRows,
   newSession,
   prSessionSeams,
+  type Session,
   setPool,
   submission,
   tracked,
@@ -82,27 +83,8 @@ async function intakeRows(stub: DurableObjectStub<PrSession>): Promise<string[]>
   );
 }
 
-// Holds the SDK's insert of the next write, before it stores anything or after it has stored the messages.
-async function holdInsert(stub: DurableObjectStub<PrSession>, where: "before" | "after") {
-  const held = await gate(stub);
-  await runInDurableObject(stub, (instance) => {
-    const base: AIChatAgent<Env> = Object.getPrototypeOf(Object.getPrototypeOf(instance));
-    const save = base.persistMessages.bind(instance);
-    vi.spyOn(base, "persistMessages").mockImplementationOnce(async (...args) => {
-      if (where === "after") {
-        await save(...args);
-      }
-      await held.wait();
-      if (where === "before") {
-        await save(...args);
-      }
-    });
-  });
-  return held;
-}
-
 // The session's write of a question is lost at the hold, and a new instance starts on the same storage.
-async function loseWrite(session: Awaited<ReturnType<typeof newSession>>, where: "before" | "after") {
+async function loseWrite(session: Session, where: "before" | "after") {
   const held = await holdInsert(session.stub, where);
   const write = session.stub.persistMessages([Q2]).catch((error: unknown) => error);
   await held.reached();
