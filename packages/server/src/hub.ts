@@ -64,13 +64,12 @@ type StoredRow = { session: string; sort_at: number; entry: string };
 // A place in the list's order: a row's sort_at (its latest event's time, -1 without one) and its session.
 type LedgerCursor = { at: number; session: string };
 
-// The ledger's filters as a query applies them: open rows only, one repository (canonical owner/name), and the rows
-// that need attention with a local agent present or without one (the column that says so).
-export type LedgerFilter = {
-  open: boolean;
-  repo: string | null;
-  attention: "attention_present" | "attention_absent" | null;
-};
+// The ledger's filters as a query applies them: the list (open rows only or all, of one repository (canonical
+// owner/name) or of every one), or the rows that need attention with a local agent present or without one (the column
+// that says so).
+export type LedgerFilter =
+  | { open: boolean; repo: string | null }
+  | { attention: "attention_present" | "attention_absent" };
 
 type Page<R> = { rows: R[]; nextCursor: string | null };
 
@@ -383,11 +382,10 @@ export class Hub extends Agent<Env, HubView> {
       return BAD_LEDGER_CURSOR;
     }
     const present = this.#localPresent(this.clock());
-    const filter: LedgerFilter = {
-      open: query.state !== "all",
-      repo: query.repo?.toLowerCase() ?? null,
-      attention: query.attention === undefined ? null : present ? "attention_present" : "attention_absent",
-    };
+    const filter: LedgerFilter =
+      query.attention === undefined
+        ? { open: query.state !== "all", repo: query.repo?.toLowerCase() ?? null }
+        : { attention: present ? "attention_present" : "attention_absent" };
     const select = ledgerSelect(filter, after, LEDGER_PAGE_ROWS + 1);
     const stored = this.#sql.exec<StoredRow>(select.query, ...select.bindings).toArray();
     const page = fitPage(
@@ -714,34 +712,42 @@ function byCodeUnit(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-// The query for up to `limit` rows of the list after a place in its order, under the filters. Each filter is a literal
-// condition, so the planner walks the index made for it (a partial index needs its condition in the query), and the
-// place is a row value, so a page is one range of that index read backwards.
+// The query for up to `limit` rows of the list after a place in its order, under the filter. Each filter has an index
+// that holds the rows it keeps, and only those, in the list's order (schema.ts), so a page is one range of that index
+// read backwards and reads no row it leaves out. The query names that index (INDEXED BY), so no planner, whatever its
+// version or statistics, trades it for one that leaves rows to skip; it carries a partial index's condition as a
+// literal, which the index needs to apply, and the place as a row value.
 export function ledgerSelect(
   filter: LedgerFilter,
   after: LedgerCursor | undefined,
   limit: number,
 ): { query: string; bindings: unknown[] } {
-  const where: string[] = [];
-  const bindings: unknown[] = [];
-  if (filter.open) {
-    where.push("open = 1");
-  }
-  if (filter.repo !== null) {
-    where.push("repo = ?");
-    bindings.push(filter.repo);
-  }
-  if (filter.attention !== null) {
-    where.push(`${filter.attention} = 1`);
-  }
+  const { index, where, bindings } = ledgerIndex(filter);
   if (after !== undefined) {
     where.push("(sort_at, session) < (?, ?)");
     bindings.push(after.at, after.session);
   }
   const conditions = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
   return {
-    query: `SELECT session, sort_at, entry FROM prq_ledger ${conditions} ORDER BY sort_at DESC, session DESC LIMIT ?`,
+    query: `SELECT session, sort_at, entry FROM prq_ledger INDEXED BY ${index} ${conditions}
+      ORDER BY sort_at DESC, session DESC LIMIT ?`,
     bindings: [...bindings, limit],
+  };
+}
+
+// A filter's index and the conditions that keep its rows.
+function ledgerIndex(filter: LedgerFilter): { index: string; where: string[]; bindings: unknown[] } {
+  if ("attention" in filter) {
+    return { index: `prq_ledger_${filter.attention}`, where: [`${filter.attention} = 1`], bindings: [] };
+  }
+  const open = filter.open ? ["open = 1"] : [];
+  if (filter.repo === null) {
+    return { index: filter.open ? "prq_ledger_open" : "prq_ledger_order", where: open, bindings: [] };
+  }
+  return {
+    index: filter.open ? "prq_ledger_repo_open" : "prq_ledger_repo",
+    where: [...open, "repo = ?"],
+    bindings: [filter.repo],
   };
 }
 

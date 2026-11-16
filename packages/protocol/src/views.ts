@@ -122,15 +122,27 @@ export const LEDGER_PAGE_BYTES = 256 * 1024;
 export const LEDGER_PAGE_ROWS = 500;
 export const MAX_LEDGER_CURSOR_CHARS = 512;
 
+const LedgerCursor = v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(MAX_LEDGER_CURSOR_CHARS)));
+
 // GET /api/ledger: the rows after the cursor (from the first when there is none), in the list's order, that pass the
-// filters: open pull requests (and those whose state is not known yet) unless state is all, one repository (owner/name
-// in any case), and with attention=1 only the rows whose problem needs attention as presence is now.
-export const LedgerQuery = v.object({
-  cursor: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(MAX_LEDGER_CURSOR_CHARS))),
-  state: v.optional(v.picklist(["open", "all"]), "open"),
-  repo: v.optional(RepoName),
-  attention: v.optional(v.literal("1")),
-});
+// filters: open pull requests (and those whose state is not known yet) unless state is all, and one repository
+// (owner/name in any case) with repo. attention=1 lists instead the rows whose problem needs attention as presence is
+// now, in every state and repository: the rows HubView.needsAttention counts. It takes neither state nor repo, and a
+// query with either is refused.
+export const LedgerQuery = v.union([
+  v.object({
+    cursor: LedgerCursor,
+    state: v.optional(v.picklist(["open", "all"]), "open"),
+    repo: v.optional(RepoName),
+    attention: v.optional(v.never()),
+  }),
+  v.object({
+    cursor: LedgerCursor,
+    state: v.optional(v.never()),
+    repo: v.optional(v.never()),
+    attention: v.literal("1"),
+  }),
+]);
 export type LedgerQuery = v.InferOutput<typeof LedgerQuery>;
 
 // A page of rows by latest event, newest first and rows without one last, then by session name, descending.

@@ -98,8 +98,10 @@ describe("schema", () => {
       owners: 1,
       ledgerVersion: 1,
     });
-    const page = v.parse(LedgerPage, await stub.ledgerPage({ state: "open", attention: "1" }));
-    expect(page.rows.map((row) => [sessionName(row.pr), row.problem])).toEqual([["octo~schema~9", "answer_failed"]]);
+    for (const query of [{ attention: "1" }, { state: "open", repo: "octo/schema" }] as const) {
+      const page = v.parse(LedgerPage, await stub.ledgerPage(query));
+      expect(page.rows.map((row) => [sessionName(row.pr), row.problem])).toEqual([["octo~schema~9", "answer_failed"]]);
+    }
     expect(await stub.repoPage()).toEqual({ rows: [{ fullName: "octo/schema" }], nextCursor: null });
   });
 

@@ -415,10 +415,16 @@ alarm set at the claim). The Hub adds only what it owns itself: whether a local 
   ahead of the cursor is left out of the pass under way, which the changed version tells: the UI reads the pages again
   when the version or presence changes (a row's problem depends on presence).
 - **Filters:** the list's filters are the page's: `state=open` (the default: open PRs, and those whose state no webhook
-  has given yet) or `all`, `repo=owner/name` (any case), and `attention=1`, which keeps the rows whose problem needs
-  attention as presence is when the page is read, by the rule the count follows. They combine, and the cursor keeps
-  its meaning under them. Each filter has an index in the list's order, so its page is one range of that index; a
-  combination reads the index of one of them and checks the others on the way.
+  has given yet) or `all`, combined with `repo=owner/name` (any case) or not. "Needs attention" is its own list,
+  `attention=1`: the rows whose problem needs attention as presence is when the page is read, in every state and
+  repository, which are the rows the count counts. It takes neither `state` nor `repo`, and a query with either is
+  refused (400) rather than read without a bound: a narrower list would no longer be the one the count counts. The
+  cursor keeps its meaning under each filter. Each of the six lists (`open` and `all`, each with `repo` and without;
+  attention with a local agent present and without one) has an index that holds only its rows, in the list's order, and
+  the query names it (`INDEXED BY`), so a page is one range of that index and reads no row it leaves out, whatever plan
+  the runtime's SQLite would choose. One index a list is the fewest, since an index serves a list only by holding its
+  rows alone in the list's order, and no two lists keep the same rows. Four are partial, so a row is in two of them (the
+  whole list, its repository) and in two more while open and one or two more while it needs attention.
 - **Repositories:** the menu reads the repositories with rows a page at a time from `GET /api/repos` (by owner/name,
   at most 200 and 64 KiB a page), in GitHub's display case once an entry has given it. A page rather than the view: the
   repositories have no bound, the menu needs every one of them, and it is read only when it opens, so the view stays

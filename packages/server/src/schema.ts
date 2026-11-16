@@ -24,7 +24,8 @@ export const HUB_SCHEMA: SchemaSteps = [
     attention_present INTEGER NOT NULL CHECK (attention_present IN (0, 1)),
     attention_absent INTEGER NOT NULL CHECK (attention_absent IN (0, 1)),
     jobs_waiting INTEGER NOT NULL, jobs_running INTEGER NOT NULL, jobs_failed INTEGER NOT NULL)`,
-  // The list's order, walked backwards, without a filter and under each one: every page is a range of one index.
+  // The list's order, walked backwards, under each filter the ledger's pages take (prq_ledger_repo_open below is the
+  // last): every page is a range of one index that holds only the rows the filter keeps.
   "CREATE INDEX prq_ledger_order ON prq_ledger (sort_at, session)",
   "CREATE INDEX prq_ledger_open ON prq_ledger (sort_at, session) WHERE open = 1",
   "CREATE INDEX prq_ledger_repo ON prq_ledger (repo, sort_at, session)",
@@ -48,6 +49,8 @@ export const HUB_SCHEMA: SchemaSteps = [
     jobs_waiting INTEGER NOT NULL DEFAULT 0, jobs_running INTEGER NOT NULL DEFAULT 0,
     jobs_failed INTEGER NOT NULL DEFAULT 0, owners INTEGER NOT NULL DEFAULT 0)`,
   "INSERT INTO prq_ledger_totals (id) VALUES (1)",
+  // One repository's open rows in the list's order, for the list under both of its filters (state=open with repo).
+  "CREATE INDEX prq_ledger_repo_open ON prq_ledger (repo, sort_at, session) WHERE open = 1",
 ];
 
 export const PR_SESSION_SCHEMA: SchemaSteps = [

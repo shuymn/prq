@@ -304,21 +304,31 @@ describe("the Hub's pages", () => {
     const everything = await walk({ state: "all" });
     expect(everything.pages).toBeGreaterThan(1);
     expect(everything.walked).toEqual(all);
-    // The filters reach the Hub: one repository in any case, and the rows that need attention, which with no agent
-    // present are those whose work waits; another repository's such row is left out.
-    await (
-      await hub()
-    ).upsertLedger("octo~other~1", 1, {
-      ...(await stored(sessionName(ref))),
+    // The filters reach the Hub: one repository in any case, its closed row left out by the default state, and the
+    // rows that need attention in every repository, which with no agent present are those whose work waits.
+    const entry = await stored(sessionName(ref));
+    const stub = await hub();
+    await stub.upsertLedger("octo~other~1", 1, {
+      ...entry,
       latestEvent: { kind: "question", at: Number.MAX_SAFE_INTEGER },
     });
+    const closed = {
+      fullName: `${ref.owner}/${ref.repo}`,
+      title: "t",
+      state: "closed",
+      url: `https://github.com/${ref.owner}/${ref.repo}/pull/9`,
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+    } as const;
+    await stub.upsertLedger(`${ref.owner}~${ref.repo}~9`, 1, { ...entry, details: closed });
     await setPool([]);
-    const needing = (await ledgerRows()).filter(
-      (row) => row.pr.repo === ref.repo && row.problem === "waiting_for_local_agent",
-    );
-    expect(needing.length).toBeGreaterThan(0);
-    const repo = await walk({ repo: `${ref.owner.toUpperCase()}/${ref.repo}`, attention: "1" });
-    expect(repo.walked).toEqual(needing);
+    const rows = await ledgerRows();
+    const repo = await walk({ repo: `${ref.owner.toUpperCase()}/${ref.repo}` });
+    expect(repo.walked).toEqual(rows.filter((row) => row.pr.repo === ref.repo && row.details?.state !== "closed"));
+    expect(repo.walked).toHaveLength(all.length);
+    const needing = await walk({ attention: "1" });
+    expect(needing.walked).toEqual(rows.filter((row) => row.problem === "waiting_for_local_agent"));
+    expect(new Set(needing.walked.map((row) => row.pr.repo))).toEqual(new Set([ref.repo, "other"]));
   });
 
   it("pages the present agents and the repositories", async () => {
@@ -353,6 +363,10 @@ describe("the Hub's pages", () => {
       ["/api/ledger", { repo: "octo" }],
       ["/api/ledger", { repo: "octo/.." }],
       ["/api/ledger", { attention: "0" }],
+      // Needs attention is its own list, of every state and repository.
+      ["/api/ledger", { attention: "1", state: "open" }],
+      ["/api/ledger", { attention: "1", state: "all" }],
+      ["/api/ledger", { attention: "1", repo: "octo/api" }],
       ["/api/agents", { cursor: "" }],
       ["/api/agents", { cursor: "two words" }],
       ["/api/repos", { cursor: "octo" }],

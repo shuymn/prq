@@ -23,7 +23,9 @@ import {
   sessionName,
   SubmitResponse,
 } from "@prq/protocol";
+import { getAgentByName } from "agents";
 import { abortAllDurableObjects, runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import * as v from "valibot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -736,15 +738,12 @@ async function storeFilterRows(): Promise<void> {
 }
 
 // Every row a filtered walk of the ledger lists, page by page.
-async function filteredWalk(query: Omit<LedgerQuery, "cursor">): Promise<string[]> {
+async function filteredWalk(query: LedgerQuery): Promise<string[]> {
   return filteredWalkFrom(query, undefined);
 }
 
 // The rows a filtered walk lists from a cursor on.
-async function filteredWalkFrom(
-  query: Omit<LedgerQuery, "cursor">,
-  from: string | null | undefined,
-): Promise<string[]> {
+async function filteredWalkFrom(query: LedgerQuery, from: string | null | undefined): Promise<string[]> {
   if (from === null) {
     return [];
   }
@@ -770,6 +769,68 @@ function needingAttention(present: boolean): (row: Stored) => boolean {
   return ({ entry }) => needsAttention(problemOf(entry, present));
 }
 
+// Each filter a page reads its rows under, as the Hub applies it.
+const FILTERS: { name: string; filter: LedgerFilter }[] = [
+  { name: "all", filter: { open: false, repo: null } },
+  { name: "open", filter: { open: true, repo: null } },
+  { name: "repo", filter: { open: false, repo: "octo/bulk" } },
+  { name: "open repo", filter: { open: true, repo: "octo/bulk" } },
+  { name: "attention present", filter: { attention: "attention_present" } },
+  { name: "attention absent", filter: { attention: "attention_absent" } },
+];
+
+// Rows of octo/bulk's list that a filter leaves out, each passing the filter's other conditions: closed, in another
+// repository, with nothing that needs attention, and with work that waits, which needs attention only without a local
+// agent.
+const CLOSED = {
+  repo: "bulk",
+  entry: quiet({ details: { ...largeDetails("octo/bulk"), title: "t", state: "closed" } }),
+};
+const ELSEWHERE = { repo: "other", entry: quiet() };
+const QUIET = { repo: "bulk", entry: quiet() };
+const WAITING = { repo: "bulk", entry: quiet({ waitingWork: true }) };
+const SKIPPED_BLOCK = 1500;
+
+// Each query a page takes, with the presence it is read with and the rows its filter leaves out (none for the whole
+// list).
+const BOUNDED_SCANS: { query: LedgerQuery; present: boolean; skipped: { repo: string; entry: LedgerEntry }[] }[] = [
+  { query: { state: "all" }, present: false, skipped: [] },
+  { query: { state: "open" }, present: false, skipped: [CLOSED] },
+  { query: { state: "all", repo: "octo/bulk" }, present: false, skipped: [ELSEWHERE] },
+  { query: { state: "open", repo: "octo/bulk" }, present: false, skipped: [CLOSED, ELSEWHERE] },
+  { query: { attention: "1" }, present: true, skipped: [QUIET, WAITING] },
+  { query: { attention: "1" }, present: false, skipped: [QUIET] },
+];
+
+// A filter's plans from the first page and after a cursor: one range of its index, under the equality it starts with,
+// walked backwards with no sort.
+function rangePlans(index: string, equality: string): string[] {
+  const first =
+    equality === "" ? `SCAN prq_ledger USING INDEX ${index}` : `SEARCH prq_ledger USING INDEX ${index} (${equality})`;
+  const after = [equality, "(sort_at,session)<(?,?)"].filter((term) => term !== "").join(" AND ");
+  return [first, `SEARCH prq_ledger USING INDEX ${index} (${after})`];
+}
+
+// An open pull request of octo/bulk whose failed answer needs attention, which every filter keeps.
+function keptEverywhere(at: number): LedgerEntry {
+  return quiet({ answerFailed: true, latestEvent: { kind: "question", at } });
+}
+
+// What a page of the ledger lists, and the rows all its queries read.
+function pageReads(instance: Hub, sql: SqlStorage, query: LedgerQuery): { listed: string[]; read: number } {
+  const exec = vi.spyOn(sql, "exec");
+  try {
+    const page = v.parse(LedgerPage, instance.ledgerPage(query));
+    const read = exec.mock.results.reduce(
+      (sum, result) => sum + (result.type === "return" ? result.value.rowsRead : 0),
+      0,
+    );
+    return { listed: sessionsOf(page.rows), read };
+  } finally {
+    exec.mockRestore();
+  }
+}
+
 describe("ledger filters", () => {
   it("lists under each filter exactly the rows it keeps, in the list's order, across pages", async () => {
     captureLogs();
@@ -783,15 +844,13 @@ describe("ledger filters", () => {
     for (const present of [false, true]) {
       await setPool(present ? ["desk"] : []);
       const attention = needingAttention(present);
-      const cases: { query: Omit<LedgerQuery, "cursor">; keep: (row: Stored) => boolean }[] = [
+      const cases: { query: LedgerQuery; keep: (row: Stored) => boolean }[] = [
         { query: { state: "all" }, keep: () => true },
         { query: { state: "open" }, keep: isOpen },
         { query: { state: "all", repo: "FILO/One" }, keep: inRepo("filo/one") },
-        { query: { state: "all", attention: "1" }, keep: attention },
-        {
-          query: { state: "open", repo: "acme/one", attention: "1" },
-          keep: (row) => isOpen(row) && inRepo("acme/one")(row) && attention(row),
-        },
+        { query: { state: "open", repo: "acme/one" }, keep: (row) => isOpen(row) && inRepo("acme/one")(row) },
+        // Needs attention, in every state and repository.
+        { query: { attention: "1" }, keep: attention },
       ];
       for (const { query, keep } of cases) {
         const expected = await listOrder(keep);
@@ -800,9 +859,9 @@ describe("ledger filters", () => {
     }
     // Rows that need attention only without a local agent are kept only then.
     await setPool(["desk"]);
-    const withAgent = await filteredWalk({ state: "all", attention: "1" });
+    const withAgent = await filteredWalk({ attention: "1" });
     await setPool([]);
-    const without = await filteredWalk({ state: "all", attention: "1" });
+    const without = await filteredWalk({ attention: "1" });
     expect(without.filter((session) => !withAgent.includes(session))).not.toEqual([]);
   });
 
@@ -830,32 +889,89 @@ describe("ledger filters", () => {
     expect((await filteredWalk(query)).slice(0, 2)).toEqual(["keyf~one~999", "keyf~one~5"]);
   });
 
-  it("reads each filter's page as one range of the index made for it", async () => {
+  it("reads each filter's page as one range of the index made for it, where another index could serve it", async () => {
     const plans = await runInDurableObject(await hub(), (_, state) => {
-      const plan = (filter: LedgerFilter) => {
-        const { query, bindings } = ledgerSelect(filter, { at: 1000, session: "octo~a~1" }, 10);
-        return state.storage.sql
+      const { sql } = state.storage;
+      // Indexes on the filters' conditions alone, which a planner (of another version, or with other statistics) could
+      // prefer to the filter's own and then sort what they give.
+      const decoys = ["open", "repo, open", "attention_present", "attention_absent"];
+      for (const [n, columns] of decoys.entries()) {
+        sql.exec(`CREATE INDEX decoy_${n} ON prq_ledger (${columns})`);
+      }
+      const plan = (filter: LedgerFilter, after?: { at: number; session: string }) => {
+        const { query, bindings } = ledgerSelect(filter, after, 10);
+        return sql
           .exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...bindings)
           .toArray()
           .map((row) => row.detail)
           .join("; ");
       };
-      const none = { open: false, repo: null, attention: null } as const;
-      return {
-        all: plan(none),
-        open: plan({ ...none, open: true }),
-        repo: plan({ ...none, repo: "octo/a" }),
-        present: plan({ ...none, attention: "attention_present" }),
-        absent: plan({ ...none, attention: "attention_absent" }),
-      };
+      try {
+        return Object.fromEntries(
+          FILTERS.map(({ name, filter }) => [name, [plan(filter), plan(filter, { at: 1000, session: "octo~a~1" })]]),
+        );
+      } finally {
+        for (const n of decoys.keys()) {
+          sql.exec(`DROP INDEX decoy_${n}`);
+        }
+      }
     });
     expect(plans).toEqual({
-      all: "SEARCH prq_ledger USING INDEX prq_ledger_order ((sort_at,session)<(?,?))",
-      open: "SEARCH prq_ledger USING INDEX prq_ledger_open ((sort_at,session)<(?,?))",
-      repo: "SEARCH prq_ledger USING INDEX prq_ledger_repo (repo=? AND (sort_at,session)<(?,?))",
-      present: "SEARCH prq_ledger USING INDEX prq_ledger_attention_present ((sort_at,session)<(?,?))",
-      absent: "SEARCH prq_ledger USING INDEX prq_ledger_attention_absent ((sort_at,session)<(?,?))",
+      all: rangePlans("prq_ledger_order", ""),
+      open: rangePlans("prq_ledger_open", ""),
+      repo: rangePlans("prq_ledger_repo", "repo=?"),
+      "open repo": rangePlans("prq_ledger_repo_open", "repo=?"),
+      "attention present": rangePlans("prq_ledger_attention_present", ""),
+      "attention absent": rangePlans("prq_ledger_attention_absent", ""),
     });
+  });
+
+  it("reads only the rows a page lists under each filter, with thousands it leaves out between and after them", async () => {
+    captureLogs();
+    const top = "octo~bulk~9001";
+    const middle = "octo~bulk~9002";
+    for (const [scan, { query, present, skipped }] of BOUNDED_SCANS.entries()) {
+      // A Hub of its own, whose ledger holds only the rows below.
+      const stub = await getAgentByName(env.Hub, `ledger-scan-${scan}`);
+      if (present) {
+        await stub.touch("desk");
+      }
+      const pages = await runInDurableObject(stub, async (instance, state) => {
+        const { sql } = state.storage;
+        // What the page's other queries (presence) read, with no row to list.
+        const others = pageReads(instance, sql, query).read;
+        // Two rows every filter keeps, then blocks of rows it leaves out: between them and after the second.
+        await instance.upsertLedger(top, 1, keptEverywhere(3_000_000));
+        await instance.upsertLedger(middle, 1, keptEverywhere(2_000_000));
+        for (const [n, kind] of skipped.entries()) {
+          await instance.upsertLedger(`octo~${kind.repo}~${n + 1}`, 1, kind.entry);
+        }
+        for (let n = 0; n < 2 * SKIPPED_BLOCK && skipped.length > 0; n += 1) {
+          const template = n % skipped.length;
+          sql.exec(
+            `INSERT INTO prq_ledger (session, rev, entry, sort_at, repo, open, attention_present, attention_absent,
+               jobs_waiting, jobs_running, jobs_failed)
+             SELECT ?, rev, entry, ?, repo, open, attention_present, attention_absent, jobs_waiting, jobs_running,
+               jobs_failed FROM prq_ledger WHERE session = ?`,
+            `octo~${skipped[template]?.repo}~${n + 100}`,
+            (n < SKIPPED_BLOCK ? 2_500_000 : 1_000_000) + n,
+            `octo~${skipped[template]?.repo}~${template + 1}`,
+          );
+        }
+        return [undefined, `3000000.${top}`, `2000000.${middle}`].map((cursor) => {
+          const { listed, read } = pageReads(instance, sql, { ...query, cursor });
+          return { listed, read: read - others };
+        });
+      });
+      expect({ query, present, listed: pages.map((page) => page.listed) }).toEqual({
+        query,
+        present,
+        listed: [[top, middle], [middle], []],
+      });
+      // A page reads the rows it lists, and at most the one its cursor names.
+      const over = pages.filter((page) => page.read > page.listed.length + 1);
+      expect({ query, present, over }).toEqual({ query, present, over: [] });
+    }
   });
 });
 
