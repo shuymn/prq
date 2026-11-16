@@ -5,7 +5,8 @@ visible. A frame named here is a root frame of [prq.pen](prq.pen), below the com
 in the order of the sections below, with the frames in table order. Desktop frames are 1440 wide and at least 900 tall,
 panel frames `size.panel` (360) wide and at least 800 tall. To the right of each frame a `Note` instance named
 `Note / <frame>` lists the state IDs the frame shows and the guides it relies on. Some frames show several states at once
-(the list shows every problem label); the table says which.
+(the list shows every problem label); the table says which. The `Brand` frame, which holds the product mark, is a
+component section ([components.md](components.md#brand)), not a screen.
 
 The state ID is stable: code (#7) uses it for the gallery and for tests that pick a state.
 

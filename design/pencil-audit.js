@@ -9,7 +9,9 @@
 //   only while `space-*` variables are defined, and then both are reported);
 // - every fixed width or height is the value of the size token recorded in the node's context
 //   (`context: "tokens width=size.icon height=size.icon"`), or at most its value when the size fits the content up to a
-//   maximum (`width<=size.column.repo`), because Pencil drops variable bindings on sizes; the
+//   maximum (`width<=size.column.repo`), because Pencil drops variable bindings on sizes; an asset drawn on a pixel grid
+//   (the BrandMark) records the grid instead (`context: "asset grid=16"`, or `asset grid=12x8` for a width and a height)
+//   and may take any whole multiple of it; the
 //   exceptions are the screen frames themselves, whose sizes are canvas sizes rather than tokens: a desktop frame is
 //   1440 wide and at least 900 tall, a panel frame `size.panel` wide (recorded in its context) and at least 800 tall,
 //   and every screen frame clips its content;
@@ -62,6 +64,12 @@ function size(at, n, prop) {
   const v = n[prop];
   if (typeof v !== "number" || v === 0) return;
   if (n.type === "text" && (n.textGrowth ?? "auto") === "auto") return;
+  const [, gridW, gridH] = String(n.context ?? "").match(/^asset grid=(\d+)(?:x(\d+))?\b/) ?? [];
+  if (gridW) {
+    const grid = Number(prop === "height" ? (gridH ?? gridW) : gridW);
+    if (v % grid !== 0) violations.push(`${prop} ${v} is not a multiple of the asset grid ${grid}: ${at}`);
+    return;
+  }
   const [, max, token] = String(n.context ?? "").match(new RegExp(`^tokens\\b.*\\b${prop}(<?)=([\\w.-]+)`)) ?? [];
   if (!token) {
     violations.push(`fixed ${prop} ${v} without a size token in context: ${at}`);
