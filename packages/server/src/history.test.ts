@@ -1,5 +1,6 @@
 import type { AIChatAgent } from "@cloudflare/ai-chat";
 import { HistoryChangedMessage } from "@prq/protocol";
+import { WebSocketChatTransport } from "agents/chat/transport";
 import type { UIMessage } from "ai";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -7,7 +8,7 @@ import * as v from "valibot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { prSessionStub } from "./names.ts";
-import { WriteQueue, WriteWaitTimeout } from "./pr-session/history.ts";
+import { CHAT_REQUEST_REFUSED, WriteQueue, WriteWaitTimeout } from "./pr-session/history.ts";
 import type { PrSession } from "./pr-session/index.ts";
 import { captureLogs, type LogEntry } from "./test/access.ts";
 import { type AgentSocket, answer, connect, hostToken, question, storedMessages } from "./test/chat.ts";
@@ -46,6 +47,21 @@ async function session() {
 async function serverAppend(stub: DurableObjectStub<PrSession>, message: UIMessage): Promise<void> {
   await runInDurableObject(stub, (instance) => instance.persistMessages([message]));
 }
+
+// The promise's outcome, or a rejection when it is still pending after WAIT_MS.
+async function settled<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const pending = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`still pending after ${WAIT_MS} ms`)), WAIT_MS);
+  });
+  try {
+    return await Promise.race([promise, pending]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const WAIT_MS = 2000;
 
 function refusals(logs: LogEntry[]): unknown[] {
   return logs.filter((log) => log.entry["event"] === "prq.chat.refused").map((log) => log.entry["type"]);
@@ -338,6 +354,26 @@ describe("clients only add", () => {
         .flat()
         .map((message) => message.id),
     ).not.toContain("forged");
+  });
+
+  it("fails a refused chat request in the SDK's client, which would otherwise wait for it", async () => {
+    captureLogs();
+    const { path, token, open } = await session();
+    const client = await open();
+    await client.chat([Q1]);
+    // The SDK's own client transport, as useAgentChat sends with it, on this connection.
+    const transport = new WebSocketChatTransport({ agent: client.transportConnection() });
+
+    const stream = await transport.sendMessages({
+      chatId: "chat",
+      // An empty ID: not a message a chat request may carry.
+      messages: [Q1, { ...Q2, id: "" }],
+      trigger: "submit-message",
+      abortSignal: undefined,
+    });
+
+    await expect(settled(stream.getReader().read())).rejects.toThrow(CHAT_REQUEST_REFUSED);
+    expect(await storedMessages(path, token)).toEqual([Q1]);
   });
 
   it("keeps the answer a regenerate request leaves out", async () => {

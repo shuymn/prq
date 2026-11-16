@@ -40,12 +40,12 @@ const ChatRequestBody = v.looseObject({
 
 // A client's chat request with the messages a client may not add taken out: a client adds questions (role user) only,
 // so another message passes only when its ID is stored, as an echo of the history the client loaded. Returns the frame
-// to hand on and how many messages were taken out, or null when a chat request does not have that shape and is
-// refused whole; any other frame passes unchanged.
+// to hand on and how many messages were taken out, or, for a chat request not in that shape, that it is refused whole
+// (with its ID, when it has one, to answer); any other frame passes unchanged.
 export function questionsOnly(
   message: WSMessage,
   isStored: (id: string) => boolean,
-): { message: WSMessage; removed: number } | null {
+): { message: WSMessage; removed: number } | { refusedId: string | null } {
   const parsed = typeof message === "string" ? parseJson(message) : undefined;
   if (frameType(parsed) !== MessageType.CF_AGENT_USE_CHAT_REQUEST) {
     return { message, removed: 0 };
@@ -53,7 +53,8 @@ export function questionsOnly(
   const frame = v.safeParse(ChatRequest, parsed);
   const body = frame.success ? v.safeParse(ChatRequestBody, parseJson(frame.output.init.body)) : undefined;
   if (!frame.success || body?.success !== true) {
-    return null;
+    const id: unknown = typeof parsed === "object" && parsed !== null ? Reflect.get(parsed, "id") : undefined;
+    return { refusedId: typeof id === "string" ? id : null };
   }
   const messages = body.output.messages.filter((item) => item.role === "user" || isStored(item.id));
   const removed = body.output.messages.length - messages.length;
@@ -62,6 +63,20 @@ export function questionsOnly(
   }
   const init = { ...frame.output.init, body: JSON.stringify({ ...body.output, messages }) };
   return { message: JSON.stringify({ ...frame.output, init }), removed };
+}
+
+export const CHAT_REQUEST_REFUSED = "Chat request refused: every message must be a UIMessage with an ID and parts.";
+
+// The answer to a refused chat request. The SDK client ends a request on a response for its ID that is done and marked
+// as an error, failing it with the body as the message; without one, its send would wait until the socket closes.
+export function refusedChatResponse(id: string): string {
+  return JSON.stringify({
+    type: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
+    id,
+    body: CHAT_REQUEST_REFUSED,
+    done: true,
+    error: true,
+  });
 }
 
 // Whether an outgoing message is a chat list (cf_agent_chat_messages).

@@ -7,7 +7,7 @@ import type { UIMessage } from "ai";
 import { refuseSubAgent, sendServerVersion } from "../agents.ts";
 import { log } from "../log.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
-import { addedMessages, isChatList, questionsOnly, refusedFrame, WriteQueue } from "./history.ts";
+import { addedMessages, isChatList, questionsOnly, refusedChatResponse, refusedFrame, WriteQueue } from "./history.ts";
 
 // One pull request's conversation (named by sessionName). Its stored history is append-only.
 export class PrSession extends AIChatAgent<Env> {
@@ -17,8 +17,9 @@ export class PrSession extends AIChatAgent<Env> {
     super(ctx, env);
     migrate(ctx.storage, PR_SESSION_SCHEMA);
     // AIChatAgent installs its frame handler in its constructor. This wrapper is where a client's input enters: it
-    // refuses the frames that write history other than through a chat request, refuses a chat request not in the
-    // expected shape, takes the messages a client may not add out of a chat request, and passes the rest through.
+    // refuses the frames that write history other than through a chat request (the SDK client waits for no answer to
+    // them), refuses a chat request not in the expected shape with a failed response, takes the messages a client may
+    // not add out of a chat request, and passes the rest through.
     // Whether a message is stored is read from this.messages, synchronously, so frames keep their order; a stored
     // non-question outside it (a history over hydrationByteBudget) is only left out of the request, as it is stored.
     const handle = this.onMessage.bind(this);
@@ -34,8 +35,11 @@ export class PrSession extends AIChatAgent<Env> {
         return cached.has(id);
       });
       const type = MessageType.CF_AGENT_USE_CHAT_REQUEST;
-      if (request === null) {
+      if ("refusedId" in request) {
         log("prq.chat.refused", { pr: this.name, type, malformed: true }, "warn");
+        if (request.refusedId !== null) {
+          connection.send(refusedChatResponse(request.refusedId));
+        }
         return;
       }
       if (request.removed > 0) {

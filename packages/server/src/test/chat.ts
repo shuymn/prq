@@ -1,6 +1,7 @@
 // A client for the Agents routes as a browser uses them: WebSocket frames of the AIChatAgent protocol and the
 // get-messages endpoint, through the Worker entry with a valid Access token.
 
+import type { WebSocketChatTransportOptions } from "agents/chat/transport";
 import type { UIMessage } from "ai";
 import { env, exports } from "cloudflare:workers";
 
@@ -48,6 +49,27 @@ export class AgentSocket {
         }
       }
     });
+  }
+
+  // This connection as the SDK's chat transport drives it (agents/chat/transport): it sends on the socket and hears
+  // the socket's messages and its close.
+  transportConnection(): WebSocketChatTransportOptions["agent"] {
+    const socket = this.#socket;
+    return {
+      send: (data) => socket.send(data),
+      addEventListener: (type, listener, options) => {
+        if (type === "message") {
+          socket.addEventListener("message", listener, options);
+        } else if (type === "close") {
+          socket.addEventListener("close", () => listener(new MessageEvent("close")), options);
+        }
+      },
+      removeEventListener: (type, listener) => {
+        if (type === "message") {
+          socket.removeEventListener("message", listener);
+        }
+      },
+    };
   }
 
   send(frame: Frame): void {
