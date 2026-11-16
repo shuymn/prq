@@ -12,8 +12,10 @@ export function prSessionStub(env: Env, ref: PrRef) {
   return getAgentByName(env.PrSession, sessionName(ref));
 }
 
+type AgentRoute = { className: string; name: string };
+
 // Whether an Agents route (its binding and the literal name segment) names an instance prq uses.
-export function isRoutedAgent(route: { className: string; name: string }): boolean {
+export function isRoutedAgent(route: AgentRoute): boolean {
   switch (route.className) {
     case "Hub":
       return route.name === HUB_NAME;
@@ -22,4 +24,28 @@ export function isRoutedAgent(route: { className: string; name: string }): boole
     default:
       return false;
   }
+}
+
+// The Agents SDK's binding segments (kebab-case binding names) for the classes prq serves.
+const CLASS_NAMES = new Map([
+  ["hub", "Hub"],
+  ["pr-session", "PrSession"],
+]);
+
+// The instance an /agents/* request addresses, when it is a request prq serves: a WebSocket to the Hub or a PrSession,
+// or a GET of a session's stored history (get-messages). Null for anything else. The path is split as the SDK router
+// splits it, on "/" with empty segments dropped and nothing percent-decoded.
+export function servedAgentRoute(request: Request): AgentRoute | null {
+  const [prefix, binding, name, ...rest] = new URL(request.url).pathname.split("/").filter(Boolean);
+  const className = binding === undefined ? undefined : CLASS_NAMES.get(binding);
+  if (prefix !== "agents" || className === undefined || name === undefined) {
+    return null;
+  }
+  const route = { className, name };
+  const upgrade = request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+  const served =
+    rest.length === 0
+      ? upgrade
+      : className === "PrSession" && rest.join("/") === "get-messages" && request.method === "GET" && !upgrade;
+  return served && isRoutedAgent(route) ? route : null;
 }

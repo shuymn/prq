@@ -50,6 +50,9 @@ describe("routes only canonical names", () => {
     "/agents/pr-session/octo~..~1",
     "/agents/Hub/hub",
     "/agents/unknown/hub",
+    "/agents/constructor/hub",
+    "/agents/__proto__/hub",
+    "/agents/toString/hub",
     "/agents/hub",
   ];
 
@@ -82,30 +85,72 @@ describe("routes only canonical names", () => {
   });
 });
 
+describe("serves only a WebSocket to an instance and a session's stored history", () => {
+  // Each on a session that does not exist yet: the refusal must come before the SDK router creates it.
+  const refusedBoth = [
+    "/agents/pr-session/octo~fresh~1/sub/hub/typo",
+    "/agents/pr-session/octo~fresh~2/extra",
+    "/agents/pr-session/octo~fresh~3/get-messages/extra",
+    "/agents/hub/hub/sub/pr-session/typo",
+  ];
+
+  it.for(refusedBoth)("refuses %s over HTTP and WebSocket, creating no instance", async (path) => {
+    captureLogs();
+    const token = await hostToken();
+    const before = await instances();
+
+    const res = await exports.default.fetch(request(path, token));
+    const socket = await upgrade(path, token);
+    socket.webSocket?.accept();
+    socket.webSocket?.close();
+
+    expect(await instances()).toEqual(before);
+    expect({ http: res.status, webSocket: socket.status }).toEqual({ http: 404, webSocket: 404 });
+    expect(v.parse(ErrorResponse, await res.json()).error).toBe("not_found");
+    expect(v.parse(ErrorResponse, await socket.json()).error).toBe("not_found");
+  });
+
+  const refusedRequests = [
+    { name: "a plain GET of a session", path: "/agents/pr-session/octo~fresh~4", init: {} },
+    { name: "a plain GET of the Hub", path: "/agents/hub/hub", init: {} },
+    { name: "a POST of get-messages", path: "/agents/pr-session/octo~fresh~5/get-messages", init: { method: "POST" } },
+    {
+      name: "a WebSocket to get-messages",
+      path: "/agents/pr-session/octo~fresh~6/get-messages",
+      init: { headers: { Upgrade: "websocket" } },
+    },
+  ];
+
+  it.for(refusedRequests)("refuses $name, creating no instance", async ({ path, init }) => {
+    captureLogs();
+    const token = await hostToken();
+    const before = await instances();
+
+    const res = await exports.default.fetch(request(path, token, init));
+
+    expect(await instances()).toEqual(before);
+    expect(res.status).toBe(404);
+    expect(v.parse(ErrorResponse, await res.json()).error).toBe("not_found");
+  });
+});
+
 describe("no sub-agents", () => {
+  // The Worker never routes a sub-agent path; an instance still refuses one that reaches it directly.
   const routes = [
     { path: "/agents/hub/hub/sub/pr-session/evil", stub: () => hubStub(env), child: "PrSession" },
     { path: "/agents/pr-session/octo~demo~1/sub/hub/evil", stub: () => prSessionStub(env, OCTO_DEMO_1), child: "Hub" },
   ];
 
-  it.for(routes)("refuses $path and creates no child", async ({ path, stub, child }) => {
+  it.for(routes)("an instance refuses $path and creates no child", async ({ path, stub, child }) => {
     captureLogs();
-    const token = await hostToken();
-
     const instance = await stub();
     const children = () =>
       runInDurableObject(instance, (agent) => ({ all: agent.listSubAgents(), evil: agent.hasSubAgent(child, "evil") }));
 
-    const res = await exports.default.fetch(request(path, token));
+    const res = await instance.fetch(`https://prq.example${path}`);
     expect(await children()).toEqual({ all: [], evil: false });
     expect(res.status).toBe(404);
     expect(v.parse(ErrorResponse, await res.json()).error).toBe("not_found");
-
-    // The SDK upgrades a refused sub-agent socket only to close it.
-    const socket = await connect(path, token);
-    sockets.push(socket);
-    expect(await socket.closed()).not.toBe(1000);
-    expect(await children()).toEqual({ all: [], evil: false });
   });
 
   it("ignores a client's sub-agent URL header, which would skip the refusal", async () => {
@@ -143,19 +188,21 @@ describe("internal headers", () => {
     "x-cf-agents-subagent-url": "https://prq.example/agents/hub/hub/sub/pr-session/evil",
   };
 
-  it.for([{ upgrade: false }, { upgrade: true }])(
-    "strips the SDK's internal headers before an instance sees them (upgrade: $upgrade)",
-    async ({ upgrade: isUpgrade }) => {
+  const served = [
+    { path: "/agents/pr-session/octo~demo~1/get-messages", headers: {} },
+    { path: "/agents/hub/hub", headers: { Upgrade: "websocket" } },
+  ];
+
+  it.for(served)(
+    "strips the SDK's internal headers before an instance sees them ($path)",
+    async ({ path, headers: routeHeaders }) => {
       captureLogs();
       const token = await hostToken();
       const seen: Request[] = [];
       const namespace = recordingNamespace(seen);
-      const headers: Record<string, string> = { ...internal, "x-other": "kept" };
-      if (isUpgrade) {
-        headers["Upgrade"] = "websocket";
-      }
+      const headers = { ...internal, ...routeHeaders, "x-other": "kept" };
 
-      await app.fetch(request("/agents/hub/hub", token, { headers }), { ...env, Hub: namespace, PrSession: namespace });
+      await app.fetch(request(path, token, { headers }), { ...env, Hub: namespace, PrSession: namespace });
 
       expect(seen).toHaveLength(1);
       expect(Object.fromEntries(seen[0]?.headers ?? [])).toMatchObject({ "x-other": "kept" });
