@@ -125,15 +125,18 @@ stands in for.
 
 ConnectionBanner and the new version notice sit first in the page content (the main column on desktop, above the
 PrHeader in the panel) and fill its width. While the WebSocket reconnects the banner is `reconnecting`: "Reconnecting…
-Showing the last known content." When reconnecting keeps failing (an expired Access session fails every attempt, and a
-WebSocket cannot follow the sign-in redirect; see [Caching](../docs/design.md#caching)) it becomes `failed`: "Can't
-reconnect. Reload to sign in again." with Button secondary sm "Reload", which reloads the page; the last known content
-stays, and reconnecting goes on in the background. A reload reconnects too, so there is no separate retry. The
-Composer's disabled reason follows the banner ("Reconnecting. You can send once the connection is back." / "Can't
-reconnect. You can send after a reload."). After a deploy, a tab whose build version differs from the server's, or
-that failed to load a lazily loaded asset, shows Notice info: "A new version is available", "This tab still runs the
-previous version. Reload to update it." and Button secondary sm "Reload". It is inline rather than a toast, has no
-dismiss, blocks nothing, and looks the same on every page.
+Showing the last known content." When reconnecting keeps failing it becomes `failed`: "Can't reconnect. Try reloading
+the page." with Button secondary sm "Reload", which reloads the page; the last known content stays, and reconnecting
+goes on in the background. The UI cannot tell why the attempts fail (an expired Access session, which a WebSocket
+cannot follow to the sign-in redirect, see [Caching](../docs/design.md#caching); or the network or the server being
+down), so the copy names no cause and promises no recovery. A reload reconnects too, so there is no separate retry.
+The Composer's disabled reason follows the banner ("Reconnecting. You can send once the connection is back." /
+"Disconnected. You can send once the connection is back."). After a deploy, a tab whose build version differs from the
+server's shows Notice info: "A new version is available", "This tab still runs the previous version. Reload to update
+it." and Button secondary sm "Reload". A lazily loaded asset that fails to load does not prove a newer version exists,
+so without a confirmed version mismatch the same Notice says "Couldn't load part of this page." and "Try reloading."
+with the same "Reload". It is inline rather than a toast, has no dismiss, blocks nothing, and looks the same on every
+page.
 
 ## Layout and navigation
 

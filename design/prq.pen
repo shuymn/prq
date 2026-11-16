@@ -5374,7 +5374,7 @@
                           "fill": "$color-fg-default",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Can't reconnect. Reload to sign in again.",
+                          "content": "Can't reconnect. Try reloading the page.",
                           "lineHeight": "$text-body-line-height",
                           "fontFamily": "$text-body-font-family",
                           "fontSize": "$text-body-font-size",
@@ -28149,7 +28149,7 @@
                       "enabled": false
                     },
                     "AL3Ja": {
-                      "content": "Can't reconnect. You can send after a reload."
+                      "content": "Disconnected. You can send once the connection is back."
                     }
                   }
                 }
@@ -28556,7 +28556,7 @@
               "enabled": false
             },
             "AL3Ja": {
-              "content": "Can't reconnect. You can send after a reload."
+              "content": "Disconnected. You can send once the connection is back."
             }
           }
         }
