@@ -159,6 +159,33 @@ describe("context", () => {
     expect(await accepted(submit.promise)).toMatchObject({ status: "accepted" });
   });
 
+  it("refuses a claim that a resume ended while the page was read", async () => {
+    captureLogs();
+    const { ref, token, stub } = await localSession("context", sockets, question("q1"));
+    const claim = holding(await claimOver(token, "laptop"));
+    // The context is held in the session after it read the conversation's IDs.
+    const held = await gate(stub);
+    await runInDurableObject(stub, (instance) => {
+      const session = instance.sessions.session();
+      const read = session.getHistoryRowStats.bind(session);
+      vi.spyOn(session, "getHistoryRowStats").mockImplementationOnce(async (...args) => {
+        const stats = await read(...args);
+        await held.wait();
+        return stats;
+      });
+    });
+    const res = tracked(post("/cli/context", token, contextBody(ref, claim, "laptop")));
+    await held.reached();
+
+    // Meanwhile the agent claims again: a resume, under a new claim.
+    const resumed = await within(claimOver(token, "laptop"), 3000);
+    expect(resumed).toMatchObject({ resumed: true, job: { jobId: claim.job.jobId } });
+    expect(res.settled()).toBe(false);
+    await held.open();
+
+    expect(await refused(res.promise)).toEqual({ status: 409, error: "stale_claim", version: SERVER_VERSION });
+  });
+
   it("refuses any other claim with 409, and an unknown job with 404", async () => {
     captureLogs();
     const { ref, token } = await localSession("context", sockets, question("q1"));
