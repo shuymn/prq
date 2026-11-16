@@ -6,6 +6,7 @@ import {
   LedgerPage,
   type LedgerRow,
   MAX_LEDGER_CURSOR_CHARS,
+  MAX_ROW_CLAIMS,
   MAX_TITLE_CHARS,
   MAX_VIEW_AGENTS,
   sessionName,
@@ -775,6 +776,20 @@ describe("bounded view and ledger pages", () => {
     await stub.upsertLedger("octo~count~3", 2, quiet({ summaryFailed: true }));
     await stub.upsertLedger("octo~count~4", 1, quiet());
     await check();
+  });
+
+  it("lists the first MAX_ROW_CLAIMS of a row's claims", async () => {
+    captureLogs();
+    const claims = Array.from({ length: MAX_ROW_CLAIMS + 2 }, (_, n) => ({
+      agentId: `holder-${n}`,
+      jobId: `job-${n}`,
+      since: n,
+      ageMs: 0,
+    }));
+    await (await hub()).upsertLedger("octo~claims~1", 1, quiet({ claims }));
+    expect((await ledgerRowOf("octo~claims~1"))?.claims).toEqual(
+      claims.slice(0, MAX_ROW_CLAIMS).map(({ agentId, jobId, since }) => ({ agentId, jobId, since })),
+    );
   });
 
   it("lists the first MAX_VIEW_AGENTS present agents by ID, and counts every one", async () => {
