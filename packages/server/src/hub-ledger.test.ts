@@ -155,13 +155,17 @@ function hubClock() {
   };
 }
 
-// Runs presenceEnded as its row would when it falls due: with the Hub's clock at the row's second.
+// Runs the one presenceEnded row as the scheduler does when it falls due, with the Hub's clock at the row's second: the
+// row goes, then its callback runs.
 async function runPresenceEnded(clock: { set(at: number): void }): Promise<void> {
-  const [due, ...rest] = await presenceAlarms();
-  expect(due).toBeDefined();
-  expect(rest).toEqual([]);
-  clock.set((due ?? 0) * 1000);
-  await runInDurableObject(await hub(), (instance) => instance.presenceEnded());
+  await runInDurableObject(await hub(), async (instance) => {
+    const rows = (await instance.listSchedules()).filter((schedule) => schedule.callback === "presenceEnded");
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
+    clock.set((row?.time ?? 0) * 1000);
+    await instance.cancelSchedule(row?.id ?? "");
+    await instance.presenceEnded();
+  });
 }
 
 async function cancelHubSchedules(): Promise<void> {
@@ -629,6 +633,8 @@ describe("waiting label", () => {
     expect((await ledgerRowOf(name))?.problem).toBeNull();
 
     await runPresenceEnded(clock);
+    // No agent is present: nothing is left to end.
+    expect(await presenceAlarms()).toEqual([]);
     const lapsed = await published();
     expect(lapsed?.localAgentPresent).toBe(false);
     expect((await ledgerRowOf(name))?.problem).toBe("waiting_for_local_agent");
@@ -1151,6 +1157,7 @@ describe("failure paths", () => {
     expect(await presenceAlarms()).toEqual([Math.ceil(end / 1000)]);
     expect((await ledgerRowOf("octo~alarm~1"))?.problem).toBeNull();
     await runPresenceEnded(clock);
+    expect(await presenceAlarms()).toEqual([]);
     expect((await published())?.localAgentPresent).toBe(false);
     expect((await ledgerRowOf("octo~alarm~1"))?.problem).toBe("waiting_for_local_agent");
   });
