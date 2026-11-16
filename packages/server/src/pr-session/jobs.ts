@@ -165,10 +165,11 @@ export function ingestHeadJobs(
 const NEXT_PENDING = `SELECT job_id FROM prq_jobs WHERE state = 'pending'
   ORDER BY CASE kind WHEN 'answer' THEN 0 ELSE 1 END, seq LIMIT 1`;
 
-// The commit a claimed job is worked at: an analysis's head; for an answer, the head of the latest completed analysis.
-const WORKSPACE_SHA = `CASE kind WHEN 'analysis' THEN target ELSE (
+// The commit a claimed job is worked at: an analysis's head; for an answer, the head of the latest completed analysis,
+// else the current head (NULL before any push).
+const WORKSPACE_SHA = `CASE kind WHEN 'analysis' THEN target ELSE coalesce((
   SELECT done.target FROM prq_jobs AS done WHERE done.kind = 'analysis' AND done.state = 'done'
-  ORDER BY done.updated_at DESC, done.seq DESC LIMIT 1) END`;
+  ORDER BY done.updated_at DESC, done.seq DESC LIMIT 1), (SELECT head_sha FROM prq_session WHERE id = 1)) END`;
 
 // A claim is one attempt of the Hub's, numbered from its counter. A session takes a claim only from an attempt newer
 // than every attempt the agent has claimed under there (prq_claim_attempts), so a claim that lands late (its caller

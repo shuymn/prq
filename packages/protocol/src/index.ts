@@ -3,6 +3,8 @@
 export {
   ClaimRequest,
   ClaimResponse,
+  ContextRequest,
+  ContextResponse,
   Job,
   JobTarget,
   MAX_ANSWER_CHARS,

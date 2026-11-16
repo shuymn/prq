@@ -2,11 +2,12 @@ import { AIChatAgent } from "@cloudflare/ai-chat";
 import { MessageType } from "@cloudflare/ai-chat/types";
 import {
   type ClaimResponse,
+  type ContextResponse,
   type ErrorResponse,
   type HistoryChangedMessage,
   type Job,
   type JobTarget,
-  type MessageMetadata,
+  MessageMetadata,
   type Owner,
   parseSessionName,
   type PrDetails,
@@ -95,6 +96,18 @@ const TextPart = v.object({ type: v.literal("text"), text: v.string() });
 
 function textOf(message: StoredMessage): string {
   return message.parts.map((part) => (v.is(TextPart, part) ? part.text : "")).join("");
+}
+
+// A stored message as a local agent reads it (none for a role the conversation does not hold).
+function contextMessage(
+  message: StoredMessage & { id: string; role: string; metadata?: unknown },
+): ContextResponse["messages"] {
+  const { id, role, metadata } = message;
+  if (role !== "user" && role !== "assistant") {
+    return [];
+  }
+  const read = { id, role, text: textOf(message) } as const;
+  return [v.is(MessageMetadata, metadata) ? { ...read, metadata } : read];
 }
 
 // One pull request's conversation (named by sessionName), its owner and its jobs. It is the only place job state
@@ -469,6 +482,29 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     this.#publishView();
     const question = row.kind === "answer" ? await this.#message(row.target) : undefined;
     return { job: this.#job(row, question), claimId, resumed: mode === "resume" };
+  }
+
+  // What a local agent works on its claimed job from (/cli/context): the pull request, its details, the job as its claim
+  // fixed it, and the conversation. Only the job's current claim, held by the agent, gets it. The claim is checked
+  // after the conversation is read, in the step that answers, so the answer never carries a claim that had already
+  // ended.
+  async context(agentId: string, jobId: string, claimId: string): Promise<ContextResponse | ErrorResponse> {
+    const history = await this.sessions.session().getHistory();
+    const row = jobById(this.#sql, jobId);
+    if (row === undefined) {
+      return { error: "unknown_job" };
+    }
+    const held = row.state === "claimed" || row.state === "finalizing";
+    if (!held || row.claim_id !== claimId || row.agent_id !== agentId) {
+      return { error: "stale_claim", detail: "the claim is not the job's current one" };
+    }
+    const question = row.kind === "answer" ? history.find((message) => message.id === row.target) : undefined;
+    return {
+      pr: this.#pr(),
+      details: readDetails(this.#sql),
+      job: this.#job(row, question),
+      messages: history.flatMap(contextMessage),
+    };
   }
 
   #job(row: JobRow, question: StoredMessage | undefined): Job {

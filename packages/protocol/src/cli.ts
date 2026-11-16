@@ -1,6 +1,7 @@
 import * as v from "valibot";
 
-import { AgentId, MessageId, PrRef, Sha } from "./pr.ts";
+import { MessageMetadata } from "./messages.ts";
+import { AgentId, MessageId, PrDetails, PrRef, Sha } from "./pr.ts";
 
 // The longest answer a submit carries, in UTF-16 code units. Stored as JSON, each unit takes at most 6 bytes (a
 // `\u00XX` escape), so an answer stays under the Durable Object SQLite value limit (8 MB); it also bounds the history
@@ -22,8 +23,8 @@ export type JobTarget = v.InferOutput<typeof JobTarget>;
 const Run = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
 
 // A job as a local agent receives it. workspaceSha is the commit to work at, fixed when the job was claimed: an
-// analysis's head; for an answer the head of the latest completed analysis, or null when there is none. question is
-// the question's text, for an answer.
+// analysis's head; for an answer the head of the latest completed analysis, else the current head, else null (no push
+// seen yet). question is the question's text, for an answer.
 export const Job = v.object({
   jobId: Uuid,
   pr: PrRef,
@@ -74,3 +75,26 @@ export type SubmitRequest = v.InferOutput<typeof SubmitRequest>;
 // submitted it and nothing was added.
 export const SubmitResponse = v.object({ status: v.picklist(["accepted", "duplicate"]), messageId: MessageId });
 export type SubmitResponse = v.InferOutput<typeof SubmitResponse>;
+
+// /cli/context: what a local agent works on its claimed job from, asked under the claim that holds it. pr is accepted in
+// any case.
+export const ContextRequest = v.object({ agentId: AgentId, pr: PrRef, jobId: Uuid, claimId: Uuid });
+export type ContextRequest = v.InferOutput<typeof ContextRequest>;
+
+// A conversation message as a local agent reads it: its text, and the metadata of a message the server appended.
+const ContextMessage = v.object({
+  id: MessageId,
+  role: v.picklist(["user", "assistant"]),
+  text: v.string(),
+  metadata: v.optional(MessageMetadata),
+});
+
+// The answer to a context request: the canonical pull request, its details (null before its first webhook), the job as
+// its claim fixed it (workspaceSha included), and the conversation, oldest first.
+export const ContextResponse = v.object({
+  pr: PrRef,
+  details: v.nullable(PrDetails),
+  job: Job,
+  messages: v.array(ContextMessage),
+});
+export type ContextResponse = v.InferOutput<typeof ContextResponse>;

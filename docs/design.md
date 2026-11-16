@@ -130,6 +130,11 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   on what the claim returned. A claim that lands after its route answered 503 can replace the `claimId` the agent
   holds (see [Notification and wait](#notification-and-wait-prq-wait)), and this recovers it without accepting an
   answer from before a retry, whichever order the retry and the late claim came in.
+- `context` gives a local agent what it works on its claimed job from: the pull request (canonical), its details
+  (null before its first webhook), the job as its claim fixed it, and the conversation. The job's `workspaceSha` is
+  fixed at the claim: an analysis's head; for an answer, the head of the latest completed analysis, else the current
+  head, else none. Only the job's current claim, held by the same agent ID, gets it; any other claim gets 409
+  `stale_claim`.
 - While no local agent is present, the jobs of a `local` session wait, questions included.
 - A job that was claimed but never submitted (the AI session was closed, for example) is not returned automatically.
   The UI shows which agent ID has been working on it and since when, and starts showing it as possibly stalled after 60
@@ -247,9 +252,9 @@ UI, webhook and CLI input all enter through PrSession.
   another `claimId`; the agent's submit then gets 409 `stale_claim`, and the agent claims again and resubmits under the
   run its answer was produced under, which the server accepts only if no retry came since (see
   [Owner and jobs](#owner-and-jobs)). A late retry applies only if nothing changed the job after the view it came
-  from, and otherwise gets 409 `stale_job`. A `wait` is aborted, which ends it in the Hub. A webhook's intake that
-  lands late is a delivery arriving then: it creates no second job for its head, and by arrival order its head is
-  current until the next push.
+  from, and otherwise gets 409 `stale_job`. A `wait` is aborted, which ends it in the Hub. A late `context` only reads.
+  A webhook's intake that lands late is a delivery arriving then: it creates no second job for its head, and by arrival
+  order its head is current until the next push.
 - An authentication failure (401 or 403) during `wait` is told apart from an ordinary timeout and ends with an error, so
   the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.
