@@ -328,11 +328,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   // view.
   #afterNewWork(cloud: CloudOutcome): void {
     for (const row of cloud.failed) {
-      log("prq.job.failed", { ...this.#jobFields(row), to: "failed", reason: row.failure }, "warn");
+      log("prq.job.failed", { ...this.#jobFields(row), from: "pending", to: "failed", reason: row.failure }, "warn");
     }
     if (cloud.started !== null) {
       const { row, agent } = cloud.started;
-      log("prq.job.started", { ...this.#jobFields(row), to: "running" });
+      log("prq.job.started", { ...this.#jobFields(row), from: "pending", to: "running" });
       agent.start(
         this.#job(
           row,
@@ -422,11 +422,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const { agentId, jobId, claimId, target, text } = submission;
     const row = jobById(this.#sql, jobId);
     if (row === undefined) {
-      return this.#reject(submission, { error: "unknown_job" });
+      return this.#reject(submission, null, { error: "unknown_job" });
     }
     const wanted = target.kind === "answer" ? target.messageId : target.headSha;
     if (target.kind !== row.kind || wanted !== row.target) {
-      return this.#reject(submission, { error: "target_mismatch" });
+      return this.#reject(submission, row, { error: "target_mismatch" });
     }
     // A done job answers the submit that finished it, by the claim and the agent that held it, with its result again.
     if (row.state === "done") {
@@ -434,12 +434,15 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
         log("prq.job.duplicate", { ...this.#jobFields(row), agentId });
         return { status: "duplicate", messageId: row.result_message_id };
       }
-      return this.#reject(submission, { error: "stale_claim", detail: "the job is done under another claim" });
+      return this.#reject(submission, row, { error: "stale_claim", detail: "the job is done under another claim" });
     }
     // The reservation is the claim check: only the job's current claim, held by this agent, moves it.
     const reserved = reserve(this.#sql, jobId, claimId, agentId, Date.now());
     if (reserved === undefined) {
-      return this.#reject(submission, { error: "stale_claim", detail: "the claim is not the job's current claim" });
+      return this.#reject(submission, row, {
+        error: "stale_claim",
+        detail: "the claim is not the job's current claim",
+      });
     }
     this.#publishView();
     const metadata: MessageMetadata = {
@@ -458,12 +461,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return { status: "accepted", messageId };
   }
 
-  #reject(submission: Submission, error: ErrorResponse): ErrorResponse {
-    log(
-      "prq.job.rejected",
-      { pr: this.name, jobId: submission.jobId, agentId: submission.agentId, reason: error.error },
-      "warn",
-    );
+  // A refused submit, logged with the job's kind when the job is known.
+  #reject(submission: Submission, row: JobRow | null, error: ErrorResponse): ErrorResponse {
+    const job = row === null ? { pr: this.name, jobId: submission.jobId } : this.#jobFields(row);
+    log("prq.job.rejected", { ...job, agentId: submission.agentId, reason: error.error }, "warn");
     return error;
   }
 

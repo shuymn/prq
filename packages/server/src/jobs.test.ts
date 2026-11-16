@@ -451,11 +451,8 @@ describe("retry", () => {
   });
 });
 
-function jobEvents(logs: LogEntry[]) {
-  return logs
-    .map((log) => log.entry)
-    .filter((entry) => String(entry["event"]).startsWith("prq.job."))
-    .map(({ event, from, to }) => ({ event, from, to }));
+function jobLogs(logs: LogEntry[]) {
+  return logs.map((log) => log.entry).filter((entry) => String(entry["event"]).startsWith("prq.job."));
 }
 
 describe("logs", () => {
@@ -470,19 +467,20 @@ describe("logs", () => {
     await stub.submit(submission(claimB, "agent-b", "secret answer"));
     await stub.submit(submission(claimA, "agent-a", "secret answer"));
 
-    expect(jobEvents(logs)).toEqual([
-      { event: "prq.job.created", from: undefined, to: "pending" },
-      { event: "prq.job.claimed", from: "pending", to: "claimed" },
-      { event: "prq.job.resumed", from: "claimed", to: "claimed" },
-      { event: "prq.job.retried", from: "claimed", to: "pending" },
-      { event: "prq.job.claimed", from: "pending", to: "claimed" },
-      { event: "prq.job.submitted", from: "finalizing", to: "done" },
-      { event: "prq.job.duplicate", from: undefined, to: undefined },
-      { event: "prq.job.rejected", from: undefined, to: undefined },
+    const entries = jobLogs(logs);
+    expect(entries.map(({ event, from, to, agentId, reason }) => ({ event, from, to, agentId, reason }))).toEqual([
+      { event: "prq.job.created", from: undefined, to: "pending", agentId: undefined, reason: undefined },
+      { event: "prq.job.claimed", from: "pending", to: "claimed", agentId: "agent-a", reason: undefined },
+      { event: "prq.job.resumed", from: "claimed", to: "claimed", agentId: "agent-a", reason: undefined },
+      { event: "prq.job.retried", from: "claimed", to: "pending", agentId: undefined, reason: undefined },
+      { event: "prq.job.claimed", from: "pending", to: "claimed", agentId: "agent-b", reason: undefined },
+      { event: "prq.job.submitted", from: "finalizing", to: "done", agentId: "agent-b", reason: undefined },
+      { event: "prq.job.duplicate", from: undefined, to: undefined, agentId: "agent-b", reason: undefined },
+      { event: "prq.job.rejected", from: undefined, to: undefined, agentId: "agent-a", reason: "stale_claim" },
     ]);
-    const jobId = claimA.job?.jobId;
-    for (const entry of logs.map((log) => log.entry).filter((e) => String(e["event"]).startsWith("prq.job."))) {
-      expect(entry).toMatchObject({ pr: name, jobId });
+    // Every entry names the session, the job and its kind.
+    for (const entry of entries) {
+      expect(entry).toMatchObject({ pr: name, jobId: claimA.job?.jobId, kind: "answer" });
     }
     expect(JSON.stringify(logs)).not.toMatch(/secret/);
   });

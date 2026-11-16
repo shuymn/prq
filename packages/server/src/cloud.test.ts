@@ -42,7 +42,11 @@ describe("no cloud agent configured", () => {
     expect(views.flatMap((view) => view.jobs.map((viewed) => viewed.state))).not.toContain("pending");
     const jobLogs = logs.map((log) => log.entry).filter((entry) => String(entry["event"]).startsWith("prq.job."));
     expect(jobLogs.map((entry) => entry["to"])).not.toContain("pending");
-    expect(jobLogs.filter((entry) => entry["event"] === "prq.job.failed")).toHaveLength(2);
+    const failed = jobLogs.filter((entry) => entry["event"] === "prq.job.failed");
+    expect(failed).toHaveLength(2);
+    for (const entry of failed) {
+      expect(entry).toMatchObject({ jobId: job.job_id, kind: "answer", from: "pending", to: "failed" });
+    }
     // Nothing was streamed and nothing but the question was stored.
     expect(client.frames.some((frame) => JSON.stringify(frame).includes("text-delta"))).toBe(false);
     expect(await storedMessages(path, token)).toEqual([Q1]);
@@ -51,7 +55,7 @@ describe("no cloud agent configured", () => {
 
 describe("with a cloud agent", () => {
   it("hands over the oldest waiting job, once per job, and nothing while one is running", async () => {
-    captureLogs();
+    const logs = captureLogs();
     await setPool([]);
     const { stub, open } = await newSession("cloud", sockets);
     const started: string[] = [];
@@ -80,5 +84,10 @@ describe("with a cloud agent", () => {
     await sessionSql(stub, "UPDATE prq_jobs SET state = 'done' WHERE target = 'q2'");
     await stub.settle();
     expect(started).toEqual(["q1", "q2", "q3"]);
+    const startedLogs = logs.map((log) => log.entry).filter((entry) => entry["event"] === "prq.job.started");
+    expect(startedLogs).toHaveLength(3);
+    for (const entry of startedLogs) {
+      expect(entry).toMatchObject({ kind: "answer", from: "pending", to: "running" });
+    }
   });
 });
