@@ -8,6 +8,8 @@
     "lint:fix": "oxlint --type-aware --fix",
     "fmt": "oxfmt --check",
     "fmt:fix": "oxfmt",
+    "typecheck": "pnpm -r --no-bail run typecheck",
+    "test": "pnpm -r --no-bail run test",
     "prepare": "lefthook install"
   },
   "devDependencies": {
