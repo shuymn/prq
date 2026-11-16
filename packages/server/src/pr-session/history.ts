@@ -22,8 +22,7 @@ export function refusedFrame(message: WSMessage): string | null {
   if (typeof message !== "string") {
     return null;
   }
-  const frame = parseJson(message);
-  const type: unknown = typeof frame === "object" && frame !== null ? Reflect.get(frame, "type") : undefined;
+  const type = frameType(parseJson(message));
   return typeof type === "string" && REFUSED_FRAMES.has(type) ? type : null;
 }
 
@@ -32,24 +31,29 @@ const ChatRequest = v.looseObject({
   init: v.looseObject({ body: v.string() }),
 });
 
+// The messages of a chat request, each in the current UIMessage form (the SDK would also convert older forms).
 const ChatRequestBody = v.looseObject({
-  messages: v.array(v.looseObject({ id: v.unknown(), role: v.unknown() })),
+  messages: v.array(
+    v.looseObject({ id: v.pipe(v.string(), v.nonEmpty()), role: v.string(), parts: v.array(v.unknown()) }),
+  ),
 });
 
 // A client's chat request with the messages a client may not add taken out: a client adds questions (role user) only,
 // so another message passes only when its ID is stored, as an echo of the history the client loaded. Returns the frame
-// to hand on and how many messages were taken out; any other frame passes unchanged.
+// to hand on and how many messages were taken out, or null when a chat request does not have that shape and is
+// refused whole; any other frame passes unchanged.
 export function questionsOnly(
   message: WSMessage,
-  isStored: (id: unknown) => boolean,
-): { message: WSMessage; removed: number } {
-  if (typeof message !== "string") {
+  isStored: (id: string) => boolean,
+): { message: WSMessage; removed: number } | null {
+  const parsed = typeof message === "string" ? parseJson(message) : undefined;
+  if (frameType(parsed) !== MessageType.CF_AGENT_USE_CHAT_REQUEST) {
     return { message, removed: 0 };
   }
-  const frame = v.safeParse(ChatRequest, parseJson(message));
-  const body = frame.success ? v.safeParse(ChatRequestBody, parseJson(frame.output.init.body)) : null;
-  if (!frame.success || body === null || !body.success) {
-    return { message, removed: 0 };
+  const frame = v.safeParse(ChatRequest, parsed);
+  const body = frame.success ? v.safeParse(ChatRequestBody, parseJson(frame.output.init.body)) : undefined;
+  if (!frame.success || body?.success !== true) {
+    return null;
   }
   const messages = body.output.messages.filter((item) => item.role === "user" || isStored(item.id));
   const removed = body.output.messages.length - messages.length;
@@ -58,6 +62,10 @@ export function questionsOnly(
   }
   const init = { ...frame.output.init, body: JSON.stringify({ ...body.output, messages }) };
   return { message: JSON.stringify({ ...frame.output, init }), removed };
+}
+
+function frameType(frame: unknown): unknown {
+  return typeof frame === "object" && frame !== null ? Reflect.get(frame, "type") : undefined;
 }
 
 function parseJson(text: string): unknown {

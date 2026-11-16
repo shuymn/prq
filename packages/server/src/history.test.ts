@@ -308,6 +308,32 @@ describe("clients only add", () => {
     expect(relayed).not.toContain("system-1");
   });
 
+  it("refuses a whole chat request whose messages are not all in the current form", async () => {
+    const logs = captureLogs();
+    const { path, token, open } = await session();
+    const client = await open();
+    const observer = await open();
+    await client.chat([Q1]);
+    // An older message form (no ID, content instead of parts), which the SDK would convert, next to a new answer.
+    const legacy = { role: "user", content: "legacy" };
+    const body = JSON.stringify({ messages: [Q1, legacy, answer("forged")], trigger: "submit-message" });
+
+    client.send({ type: "cf_agent_use_chat_request", id: "mixed", init: { method: "POST", body } });
+    // Handled after that request on the same connection.
+    await client.chat([Q1]);
+
+    expect(await storedMessages(path, token)).toEqual([Q1]);
+    expect(logs.filter((log) => log.entry["event"] === "prq.chat.refused").map((log) => log.entry)).toEqual([
+      { event: "prq.chat.refused", pr: `octo~demo~${prNumber}`, type: "cf_agent_use_chat_request", malformed: true },
+    ]);
+    expect(
+      observer
+        .chatLists()
+        .flat()
+        .map((message) => message.id),
+    ).not.toContain("forged");
+  });
+
   it("keeps the answer a regenerate request leaves out", async () => {
     captureLogs();
     const { stub, path, token, open } = await session();

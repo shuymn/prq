@@ -16,8 +16,8 @@ export class PrSession extends AIChatAgent<Env> {
     super(ctx, env);
     migrate(ctx.storage, PR_SESSION_SCHEMA);
     // AIChatAgent installs its frame handler in its constructor. This wrapper is where a client's input enters: it
-    // refuses the frames that write history other than through a chat request, takes the messages a client may not add
-    // out of a chat request (whose list the SDK also relays to the other connections), and passes the rest through.
+    // refuses the frames that write history other than through a chat request, refuses a chat request not in the
+    // expected shape, takes the messages a client may not add out of a chat request, and passes the rest through.
     // Whether a message is stored is read from this.messages, synchronously, so frames keep their order; a stored
     // non-question outside it (a history over hydrationByteBudget) is only left out of the request, as it is stored.
     const handle = this.onMessage.bind(this);
@@ -27,13 +27,17 @@ export class PrSession extends AIChatAgent<Env> {
         log("prq.chat.refused", { pr: this.name, type: refused }, "warn");
         return;
       }
-      let cached: ReadonlySet<unknown> | undefined;
+      let cached: ReadonlySet<string> | undefined;
       const request = questionsOnly(message, (id) => {
         cached ??= new Set(this.messages.map((stored) => stored.id));
         return cached.has(id);
       });
+      const type = MessageType.CF_AGENT_USE_CHAT_REQUEST;
+      if (request === null) {
+        log("prq.chat.refused", { pr: this.name, type, malformed: true }, "warn");
+        return;
+      }
       if (request.removed > 0) {
-        const type = MessageType.CF_AGENT_USE_CHAT_REQUEST;
         log("prq.chat.refused", { pr: this.name, type, messages: request.removed }, "warn");
       }
       return handle(connection, request.message);
