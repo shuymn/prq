@@ -1029,9 +1029,14 @@ describe("bounded view and ledger pages", () => {
     const ids = Array.from({ length: AGENT_PAGE_ROWS + 20 }, (_, n) => `agent-${String(n).padStart(3, "0")}`);
     await setPool(ids.toReversed());
     const stub = await hub();
-    // One agent present only by its claim, and one whose presence has ended.
-    const claim = { agentId: "zz-holder", jobId: "job-1", since: 0, ageMs: 60_000 };
-    await stub.upsertLedger("octo~agents~1", 1, quiet({ claims: [claim] }));
+    // An agent present only by its claim, one whose claim no longer makes it present, the agent at the first page's end
+    // holding a claim too, and one whose presence has ended.
+    const claims = [
+      { agentId: "zz-holder", jobId: "job-1", since: 0, ageMs: 60_000 },
+      { agentId: "zz-old", jobId: "job-2", since: 0, ageMs: STALL_MS + PRESENCE_MS },
+      { agentId: "agent-100", jobId: "job-3", since: 0, ageMs: 60_000 },
+    ];
+    await stub.upsertLedger("octo~agents~1", 1, quiet({ claims }));
     await setLastSeen("agent-000", Date.now() - PRESENCE_MS);
     const pages = await agentPages();
     expect(pages).toHaveLength(2);
@@ -1043,6 +1048,7 @@ describe("bounded view and ledger pages", () => {
     expect(rows.map((row) => row.agentId)).toEqual([...ids.slice(1), "zz-holder"]);
     expect(rows[0]).toEqual({ agentId: "agent-001", lastSeenAt: expect.any(Number), waiting: false, holdsJob: false });
     expect(rows.at(-1)).toEqual({ agentId: "zz-holder", lastSeenAt: null, waiting: false, holdsJob: true });
+    expect(pages[0]?.rows.at(-1)).toMatchObject({ agentId: "agent-100", holdsJob: true });
     expect((await stub.view()).presentAgents).toBe(rows.length);
   });
 
