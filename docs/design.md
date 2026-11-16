@@ -151,10 +151,13 @@ CLI exit codes: 0 ready, 2 timeout, 3 authentication failure, 4 claim mismatch, 
 - The Worker and the web UI it serves are deployed together and share one version, `vX.Y.Z`; the UI shows it next to
   the product name. The CLI carries the version it was built with. How releases set the version is decided with the
   deploy setup.
-- Every `/cli/*` response carries the server's version in a `Prq-Version` header. When it differs from the CLI's own,
-  the CLI adds a `notice` to its output naming both versions (for example "prq v0.3.0 talks to a v0.4.0 server; update
-  prq if a command fails"). It is not an error: the exit code and the rest of the output stay the same. Setting
-  `PRQ_VERSION_NOTICE=0` turns the notice off.
+- Every `/cli/*` response, including errors and `wait` timeouts, carries the server's version in a `Prq-Version`
+  header (named in `@prq/protocol`); response bodies do not change. Every `prq` command that calls `/cli/*` compares
+  it with its own version as plain strings, so a pre-release or build differs from the release. On a mismatch it
+  writes one line to stderr, once per invocation however often `wait` reconnects, naming both versions (for example
+  "prq v0.3.0 talks to a v0.4.0 server; update prq if a command fails"). It is a notice, not an error: stdout and the
+  exit code stay the same. A response without the header (a failure before the Worker, such as at Access) is not
+  compared. Setting `PRQ_VERSION_NOTICE=0` turns the notice off.
 
 ### Presence
 
