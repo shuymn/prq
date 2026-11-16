@@ -211,12 +211,16 @@ export function prSessionSeams(instance: object): PrSessionSeams {
 }
 
 export type HubSeams = {
+  sessionStub(session: string): Promise<DurableObjectStub<PrSession>>;
+  sessionCallMs(): number;
   peekSession(session: string, agentId: string): Promise<{ resume: boolean; fresh: boolean; open: boolean }>;
   claimSession(session: string, agentId: string, mode: "resume" | "fresh"): Promise<unknown>;
 };
 
+const HUB_SEAMS = ["sessionStub", "sessionCallMs", "peekSession", "claimSession"] as const;
+
 function hasHubSeams(instance: object): instance is HubSeams {
-  return ["peekSession", "claimSession"].every((name) => typeof Reflect.get(instance, name) === "function");
+  return HUB_SEAMS.every((name) => typeof Reflect.get(instance, name) === "function");
 }
 
 export function hubSeams(instance: object): HubSeams {

@@ -195,7 +195,8 @@ UI, webhook and CLI input all enter through PrSession.
   deleted and written again during a slow call is kept.
 - The Hub keeps the sessions it was notified of in a queue. A check asks each queued session (`peek`) whether it has
   the agent's own claimed job or a waiting one, and drops a session that has no open job. A `claim` asks the queued
-  sessions for the agent's own claimed job first, then for a waiting one.
+  sessions for the agent's own claimed job first, then for a waiting one. Each call to a session is bounded as a whole,
+  the session's start included, and a session that does not answer in time is skipped and stays queued.
 - Each time `wait` reconnects it re-checks for pending jobs and returns at once if there are any. An authentication
   failure (401 or 403) is told apart from an ordinary timeout and ends with an error, so the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.

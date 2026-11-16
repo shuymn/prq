@@ -4,7 +4,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PRESENCE_MS } from "./hub.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
-import { clearQueue, gate, hub, hubSeams, newSession, queued, sessionSql, setPool, tracked } from "./test/session.ts";
+import {
+  clearQueue,
+  gate,
+  hub,
+  hubSeams,
+  jobRows,
+  newSession,
+  queued,
+  sessionSql,
+  setPool,
+  tracked,
+} from "./test/session.ts";
 
 const sockets: AgentSocket[] = [];
 
@@ -142,6 +153,40 @@ describe("claim fan-out", () => {
     expect(await (await hub()).claim("laptop")).toMatchObject({ job: { jobId: reachable.jobId } });
     expect(await queued()).toContain(unreachableSession.name);
     expect(logs.some((log) => log.entry["event"] === "prq.hub.session_failed")).toBe(true);
+  });
+});
+
+describe("a session that is slow to start", () => {
+  it("bounds a call to it, its start included, and keeps it queued", async () => {
+    const logs = captureLogs();
+    const { name, stub } = await localSessionWithJob();
+    const held = await gate(await hub());
+    await runInDurableObject(await hub(), (instance) => {
+      const seams = hubSeams(instance);
+      const start = seams.sessionStub.bind(instance);
+      vi.spyOn(seams, "sessionStub").mockImplementation(async (session) => {
+        await held.wait();
+        return start(session);
+      });
+      vi.spyOn(seams, "sessionCallMs").mockReturnValue(1);
+    });
+
+    // Both calls end while the session's start is still held.
+    expect(await (await hub()).claim("laptop")).toEqual({ job: null });
+    expect(await (await hub()).hasWork("laptop")).toBe(false);
+    expect(held.isReached()).toBe(true);
+    expect(await (await hub()).isLocalPresent()).toBe(true);
+    expect(await queued()).toContain(name);
+    const failed = logs.map((log) => log.entry).filter((entry) => entry["event"] === "prq.hub.session_failed");
+    expect(failed.map((entry) => [entry["call"], entry["error"]])).toEqual([
+      ["claim", "WaitTimeout"],
+      ["claim", "WaitTimeout"],
+      ["peek", "WaitTimeout"],
+    ]);
+
+    // Let go, the claim the Hub stopped waiting for still lands: the job is the agent's to resume.
+    await held.open();
+    await vi.waitFor(async () => expect((await jobRows(stub))[0]?.agent_id).toBe("laptop"), { timeout: 3000 });
   });
 });
 

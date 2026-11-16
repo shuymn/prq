@@ -4,13 +4,14 @@ import { Agent, type Connection } from "agents";
 import { refuseSubAgent, sendServerVersion } from "./agents.ts";
 import { errorName, log } from "./log.ts";
 import { prSessionStub } from "./names.ts";
+import type { PrSession } from "./pr-session/index.ts";
 import type { Peek } from "./pr-session/jobs.ts";
 import { HUB_SCHEMA, migrate } from "./schema.ts";
 import { withTimeout } from "./wait.ts";
 
 // An agent ID counts as present until this long after its last contact (docs/design.md, Presence).
 export const PRESENCE_MS = 10 * 60_000;
-// How long a call to a PrSession may take.
+// How long a call to a PrSession may take, the session's start included.
 const SESSION_CALL_MS = 10_000;
 
 type Notification = { session: string; gen: number };
@@ -122,17 +123,34 @@ export class Hub extends Agent<Env> {
     return { job: null };
   }
 
+  // A session's stub, once the session has started (spied on in tests).
+  protected async sessionStub(session: string): Promise<DurableObjectStub<PrSession>> {
+    return prSessionStub(this.env, sessionRef(session));
+  }
+
+  // The bound on a call to a session, its start included (spied on in tests).
+  protected sessionCallMs(): number {
+    return SESSION_CALL_MS;
+  }
+
   // A session's peek (spied on in tests).
   protected async peekSession(session: string, agentId: string): Promise<Peek> {
-    const stub = await prSessionStub(this.env, sessionRef(session));
-    return withTimeout(stub.peek(agentId), SESSION_CALL_MS, "a session's peek");
+    return this.#callSession<Peek>(session, "a session's peek", (stub) => stub.peek(agentId));
   }
 
   // A session's claim. One that times out may still have claimed: the job is then the agent's own claimed job, which
   // its next claim resumes under a new claimId.
   protected async claimSession(session: string, agentId: string, mode: "resume" | "fresh"): Promise<ClaimResponse> {
-    const stub = await prSessionStub(this.env, sessionRef(session));
-    return withTimeout<ClaimResponse>(stub.claim(agentId, mode), SESSION_CALL_MS, "a session's claim");
+    return this.#callSession<ClaimResponse>(session, "a session's claim", (stub) => stub.claim(agentId, mode));
+  }
+
+  // A call to a session, bounded as a whole: getting the stub waits for the session's start.
+  async #callSession<T>(
+    session: string,
+    what: string,
+    call: (stub: DurableObjectStub<PrSession>) => PromiseLike<T>,
+  ): Promise<T> {
+    return withTimeout(this.sessionStub(session).then(call), this.sessionCallMs(), what);
   }
 }
 
