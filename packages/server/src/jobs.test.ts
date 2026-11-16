@@ -5,6 +5,17 @@ import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { prSessionStub } from "./names.ts";
+import {
+  endFinalizing,
+  failPending,
+  freshClaim,
+  jobById,
+  type JobRow,
+  reserve,
+  resumeClaim,
+  retry,
+  startNext,
+} from "./pr-session/jobs.ts";
 import { captureLogs, type LogEntry } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import {
@@ -15,6 +26,7 @@ import {
   jobRows,
   newSession,
   prSessionSeams,
+  retryIn,
   type Session,
   sessionSql,
   setPool,
@@ -49,7 +61,8 @@ function claimed(claim: ClaimResponse) {
   if (claim.job === null) {
     throw new Error("nothing was claimed");
   }
-  return { jobId: claim.job.jobId, claimId: claim.claimId, target: claim.job.target, resumed: claim.resumed };
+  const { jobId, run, target } = claim.job;
+  return { jobId, claimId: claim.claimId, run, target, resumed: claim.resumed };
 }
 
 async function answers(session: Session): Promise<UIMessage[]> {
@@ -297,7 +310,7 @@ describe("submit against retry and resume", () => {
     });
     const a = tracked(stub.submit(submission(claimA, "agent-a", "answer A")));
     await held.reached();
-    expect(await stub.retryJob(claimA.job?.jobId ?? "")).toEqual({ status: "retried" });
+    expect(await retryIn(stub, claimA.job?.jobId ?? "")).toEqual({ status: "retried" });
     const claimB = await claimIn(stub, "agent-b", "fresh");
     expect(a.settled()).toBe(false);
     await held.open();
@@ -324,7 +337,7 @@ describe("submit against retry and resume", () => {
     });
     const a = tracked(stub.submit(submission(claimA, "agent-a", "answer A")));
     await held.reached();
-    expect(await stub.retryJob(jobId)).toMatchObject({ error: "not_retryable" });
+    expect(await retryIn(stub, jobId)).toMatchObject({ error: "not_retryable" });
     expect(await claimIn(stub, "agent-a", "resume")).toEqual({ job: null });
     const settling = tracked(stub.settle());
     expect((await stub.view()).jobs).toMatchObject([{ jobId, state: "running" }]);
@@ -385,7 +398,7 @@ describe("retry", () => {
     const { stub } = session;
     // The same agent claims again after a retry: only the new claimId is its claim.
     const firstA = await claimIn(stub, "agent-a", "fresh");
-    expect(await stub.retryJob(claimed(firstA).jobId)).toEqual({ status: "retried" });
+    expect(await retryIn(stub, claimed(firstA).jobId)).toEqual({ status: "retried" });
     const againA = await claimIn(stub, "agent-a", "fresh");
     expect(claimed(againA).jobId).toBe(claimed(firstA).jobId);
     expect(await stub.submit(submission(firstA, "agent-a"))).toMatchObject({ error: "stale_claim" });
@@ -395,7 +408,7 @@ describe("retry", () => {
     // Another agent claims after a retry.
     const claimA = await claimIn(stub, "agent-a", "fresh");
     const jobId = claimA.job?.jobId ?? "";
-    expect(await stub.retryJob(jobId)).toEqual({ status: "retried" });
+    expect(await retryIn(stub, jobId)).toEqual({ status: "retried" });
     expect((await jobOf(stub, "q2")).state).toBe("pending");
     const claimB = await claimIn(stub, "agent-b", "fresh");
     expect(claimed(claimB)).toMatchObject({ jobId, resumed: false });
@@ -406,7 +419,7 @@ describe("retry", () => {
     expect(await answers(session)).toHaveLength(2);
   });
 
-  it("refuses a retry whose job changed while its wake was being armed", async () => {
+  it("refuses a retry whose job changed after its view, while its wake was being armed", async () => {
     captureLogs();
     const { stub } = await localSession(Q1);
     const jobId = (await jobOf(stub, "q1")).job_id;
@@ -419,12 +432,15 @@ describe("retry", () => {
         return schedule(...args);
       });
     });
-    const first = tracked(stub.retryJob(jobId));
+    const first = tracked(retryIn(stub, jobId));
     await held.reached();
-    expect(await stub.retryJob(jobId)).toEqual({ status: "retried" });
+    expect(await retryIn(stub, jobId)).toEqual({ status: "retried" });
     expect(first.settled()).toBe(false);
     await held.open();
-    expect(await first.promise).toEqual({ error: "not_retryable", detail: "the job changed state" });
+    expect(await first.promise).toEqual({
+      error: "stale_job",
+      detail: "the job changed since the view the retry was made from",
+    });
     expect((await jobOf(stub, "q1")).state).toBe("pending");
   });
 
@@ -432,15 +448,96 @@ describe("retry", () => {
     captureLogs();
     const { stub } = await localSession(Q1);
     const jobId = (await jobOf(stub, "q1")).job_id;
-    expect(await stub.retryJob(jobId)).toMatchObject({ error: "not_retryable" });
+    expect(await retryIn(stub, jobId)).toMatchObject({ error: "not_retryable" });
     for (const state of ["finalizing", "running", "done"]) {
       await sessionSql(stub, "UPDATE prq_jobs SET state = ? WHERE job_id = ?", state, jobId);
-      expect(await stub.retryJob(jobId)).toMatchObject({ error: "not_retryable" });
+      expect(await retryIn(stub, jobId)).toMatchObject({ error: "not_retryable" });
     }
     await sessionSql(stub, "UPDATE prq_jobs SET state = 'failed', failure = 'it broke' WHERE job_id = ?", jobId);
-    expect(await stub.retryJob(jobId)).toEqual({ status: "retried" });
+    expect(await retryIn(stub, jobId)).toEqual({ status: "retried" });
     expect(await jobOf(stub, "q1")).toMatchObject({ state: "pending", failure: null });
-    expect(await stub.retryJob(crypto.randomUUID())).toEqual({ error: "unknown_job" });
+    expect(await retryIn(stub, crypto.randomUUID())).toEqual({ error: "unknown_job" });
+  });
+});
+
+describe("revision", () => {
+  it("advances a job's rev with every change, in the statement that makes it", async () => {
+    captureLogs();
+    const { stub } = await localSession(Q1);
+    const jobId = (await jobOf(stub, "q1")).job_id;
+    // Each transition in turn, run inside the session; the steps whose change left the rev as it was.
+    const unchanged = await runInDurableObject(stub, (_, state) => {
+      const { sql } = state.storage;
+      const now = Date.now();
+      const row = (): JobRow => {
+        const found = jobById(sql, jobId);
+        if (found === undefined) {
+          throw new Error("the job is gone");
+        }
+        return found;
+      };
+      const steps: [string, () => unknown][] = [
+        ["fresh claim", () => freshClaim(sql, "agent-a", "claim-1", 1, now)],
+        ["resume", () => resumeClaim(sql, "agent-a", "claim-2", 2, now)],
+        ["reserve", () => reserve(sql, jobId, "claim-2", "agent-a", row().run, now)],
+        ["back to claimed", () => endFinalizing(sql, row(), false, now)],
+        ["retry", () => retry(sql, jobId, row().rev, now)],
+        ["fail", () => failPending(sql, "it broke", now)],
+        ["retry a failure", () => retry(sql, jobId, row().rev, now)],
+        ["start in the cloud", () => startNext(sql, now)],
+        [
+          "done",
+          () => {
+            // Set up outside the transitions, so the rev stays.
+            sql.exec("UPDATE prq_jobs SET state = 'finalizing', claim_id = 'claim-3' WHERE job_id = ?", jobId);
+            return endFinalizing(sql, row(), true, now);
+          },
+        ],
+      ];
+      return steps.flatMap(([step, change]) => {
+        const before = row().rev;
+        change();
+        return row().rev === before + 1 ? [] : [step];
+      });
+    });
+    expect(unchanged).toEqual([]);
+  });
+});
+
+describe("run", () => {
+  it("gives a job run 1 at its first claim, the same run on a resume, and the next one after each retry", async () => {
+    captureLogs();
+    const { stub } = await localSession(Q1);
+    const runs: number[] = [];
+    const claim = async (agentId: string, mode: "resume" | "fresh") => {
+      const claimedJob = claimed(await claimIn(stub, agentId, mode));
+      runs.push(claimedJob.run);
+      return claimedJob;
+    };
+    const first = await claim("agent-a", "fresh");
+    await claim("agent-a", "resume");
+    expect(await retryIn(stub, first.jobId)).toEqual({ status: "retried" });
+    await claim("agent-b", "fresh");
+    await claim("agent-b", "resume");
+    expect(await retryIn(stub, first.jobId)).toEqual({ status: "retried" });
+    await claim("agent-a", "fresh");
+    expect(runs).toEqual([1, 1, 2, 2, 3]);
+  });
+
+  it("rejects an answer from before a retry under the job's current claim, and accepts one from its current run", async () => {
+    captureLogs();
+    const session = await localSession(Q1);
+    const { stub } = session;
+    const before = await claimIn(stub, "agent-a", "fresh");
+    expect(await retryIn(stub, claimed(before).jobId)).toEqual({ status: "retried" });
+    const now = await claimIn(stub, "agent-a", "fresh");
+    const answer = submission(now, "agent-a");
+    expect(await stub.submit({ ...answer, run: claimed(before).run })).toMatchObject({ error: "stale_claim" });
+    expect((await jobOf(stub, "q1")).state).toBe("claimed");
+    expect(await stub.submit(answer)).toMatchObject({ status: "accepted" });
+    // Once done, only the submit that finished it is a duplicate; the answer from before the retry stays refused.
+    expect(await stub.submit({ ...answer, run: claimed(before).run })).toMatchObject({ error: "stale_claim" });
+    expect(await answers(session)).toHaveLength(1);
   });
 });
 
@@ -454,7 +551,7 @@ describe("logs", () => {
     const { stub, name } = await localSession(question("q1", "secret question"));
     const claimA = await claimIn(stub, "agent-a", "fresh");
     await claimIn(stub, "agent-a", "resume");
-    await stub.retryJob(claimA.job?.jobId ?? "");
+    await retryIn(stub, claimA.job?.jobId ?? "");
     const claimB = await claimIn(stub, "agent-b", "fresh");
     await stub.submit(submission(claimB, "agent-b", "secret answer"));
     await stub.submit(submission(claimB, "agent-b", "secret answer"));

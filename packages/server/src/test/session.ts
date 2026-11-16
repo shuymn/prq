@@ -87,6 +87,26 @@ export async function claimIn(
   return stub.claim(agentId, mode, attempt);
 }
 
+// A job as the session's view shows it, which the UI retries from.
+async function viewed(stub: DurableObjectStub<PrSession>, jobId: string) {
+  return (await stub.view()).jobs.find((view) => view.jobId === jobId);
+}
+
+// A job's revision in the session's view.
+export async function revOf(stub: DurableObjectStub<PrSession>, jobId: string): Promise<number> {
+  const job = await viewed(stub, jobId);
+  if (job === undefined) {
+    throw new Error(`no job ${jobId}`);
+  }
+  return job.rev;
+}
+
+// A retry made on a session directly, as the UI makes it: from the job's revision in the view (0 for a job the view
+// does not show).
+export async function retryIn(stub: DurableObjectStub<PrSession>, jobId: string) {
+  return stub.retryJob(jobId, (await viewed(stub, jobId))?.rev ?? 0);
+}
+
 export async function jobRows(stub: DurableObjectStub<PrSession>): Promise<JobRow[]> {
   return runInDurableObject(stub, (_, state) =>
     state.storage.sql.exec<JobRow>("SELECT * FROM prq_jobs ORDER BY seq").toArray(),
@@ -254,9 +274,10 @@ export type HubSeams = {
   sessionCallMs(): number;
   peekSession(session: string, agentId: string): Promise<Peek>;
   claimSession(session: string, agentId: string, mode: "resume" | "fresh", attempt: number): Promise<unknown>;
+  waitTimer(ms: number, end: () => void): () => void;
 };
 
-const HUB_SEAMS = ["sessionStub", "sessionCallMs", "peekSession", "claimSession"] as const;
+const HUB_SEAMS = ["sessionStub", "sessionCallMs", "peekSession", "claimSession", "waitTimer"] as const;
 
 function hasHubSeams(instance: object): instance is HubSeams {
   return HUB_SEAMS.every((name) => typeof Reflect.get(instance, name) === "function");
@@ -274,5 +295,6 @@ export function submission(claim: ClaimResponse, agentId: string, text = "the an
   if (claim.job === null) {
     throw new Error("nothing was claimed");
   }
-  return { agentId, jobId: claim.job.jobId, claimId: claim.claimId, target: claim.job.target, text };
+  const { jobId, run, target } = claim.job;
+  return { agentId, jobId, claimId: claim.claimId, run, target, text };
 }

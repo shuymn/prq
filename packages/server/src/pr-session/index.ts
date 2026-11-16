@@ -66,7 +66,14 @@ const HUB_CALL_MS = 10_000;
 const STABLE_WAIT_MS = 30_000;
 
 // A local agent's answer to its claimed job (/cli/submit).
-export type Submission = { agentId: string; jobId: string; claimId: string; target: JobTarget; text: string };
+export type Submission = {
+  agentId: string;
+  jobId: string;
+  claimId: string;
+  run: number;
+  target: JobTarget;
+  text: string;
+};
 
 // What one step that can make jobs waiting did beyond its own change: cloud jobs failed or handed over.
 type CloudOutcome = { failed: JobRow[]; started: { row: JobRow; agent: CloudAgent } | null };
@@ -411,7 +418,13 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   #job(row: JobRow, question: StoredMessage | undefined): Job {
-    const job: Job = { jobId: row.job_id, pr: this.#pr(), target: jobTarget(row), workspaceSha: row.workspace_sha };
+    const job: Job = {
+      jobId: row.job_id,
+      pr: this.#pr(),
+      run: row.run,
+      target: jobTarget(row),
+      workspaceSha: row.workspace_sha,
+    };
     return question === undefined ? job : { ...job, question: textOf(question) };
   }
 
@@ -440,7 +453,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   async #finalize(submission: Submission): Promise<SubmitResponse | ErrorResponse> {
-    const { agentId, jobId, claimId, target, text } = submission;
+    const { agentId, jobId, claimId, run, target, text } = submission;
     const row = jobById(this.#sql, jobId);
     if (row === undefined) {
       return this.#reject(submission, null, { error: "unknown_job" });
@@ -449,20 +462,22 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (target.kind !== row.kind || wanted !== row.target) {
       return this.#reject(submission, row, { error: "target_mismatch" });
     }
-    // A done job answers the submit that finished it, by the claim and the agent that held it, with its result again.
+    // A done job answers the submit that finished it, by the claim, run and agent that held it, with its result again.
     if (row.state === "done") {
-      if (row.done_claim_id === claimId && row.agent_id === agentId && row.result_message_id !== null) {
+      const same = row.done_claim_id === claimId && row.run === run && row.agent_id === agentId;
+      if (same && row.result_message_id !== null) {
         log("prq.job.duplicate", { ...this.#jobFields(row), agentId });
         return { status: "duplicate", messageId: row.result_message_id };
       }
       return this.#reject(submission, row, { error: "stale_claim", detail: "the job is done under another claim" });
     }
-    // The reservation is the claim check: only the job's current claim, held by this agent, moves it.
-    const reserved = reserve(this.#sql, jobId, claimId, agentId, Date.now());
+    // The reservation is the claim check: only the job's current claim, held by this agent, under the job's current
+    // run, moves it.
+    const reserved = reserve(this.#sql, jobId, claimId, agentId, run, Date.now());
     if (reserved === undefined) {
       return this.#reject(submission, row, {
         error: "stale_claim",
-        detail: "the claim is not the job's current claim",
+        detail: "the claim or the run is not the job's current one",
       });
     }
     this.#publishView();
@@ -500,8 +515,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // The host's retry of a claimed or failed job: back to waiting with the claim cleared, so the earlier claimId is
-  // rejected from now on.
-  async retryJob(jobId: string): Promise<RetryResponse | ErrorResponse> {
+  // rejected from now on. expectedRev: the job's revision in the view the retry was made from. The retry's statement
+  // applies it only while the job is still at it, so a retry never undoes a change made after that view (a claim, another
+  // retry, a new failure) however late it lands. A refused one changes no job state; any wake it armed only settles.
+  async retryJob(jobId: string, expectedRev: number): Promise<RetryResponse | ErrorResponse> {
     const before = jobById(this.#sql, jobId);
     if (before === undefined) {
       return { error: "unknown_job" };
@@ -514,11 +531,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const now = Date.now();
     const change = this.ctx.storage.transactionSync(() => {
       const from = jobById(this.#sql, jobId)?.state;
-      const row = retry(this.#sql, jobId, now);
+      const row = retry(this.#sql, jobId, expectedRev, now);
       return row === undefined ? null : { from, row, cloud: this.#newWork(owner, now) };
     });
     if (change === null) {
-      return { error: "not_retryable", detail: "the job changed state" };
+      return { error: "stale_job", detail: "the job changed since the view the retry was made from" };
     }
     log("prq.job.retried", {
       ...this.#jobFields(change.row),

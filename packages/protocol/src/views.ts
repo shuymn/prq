@@ -18,7 +18,8 @@ export const Owner = v.picklist(["local", "cloud"]);
 export type Owner = v.InferOutput<typeof Owner>;
 
 // A job as the UI shows it. A job being finalized shows as running. since is when its current claim was made (for a
-// claimed or running job), failure the reason a failed job gives.
+// claimed or running job), failure the reason a failed job gives. rev is the job's revision, which every change of the
+// job advances; a retry names the revision it was made from.
 export const JobView = v.object({
   jobId: v.string(),
   target: JobTarget,
@@ -29,6 +30,7 @@ export const JobView = v.object({
   resultMessageId: v.nullable(v.string()),
   createdAt: v.number(),
   updatedAt: v.number(),
+  rev: v.number(),
 });
 export type JobView = v.InferOutput<typeof JobView>;
 
@@ -36,6 +38,10 @@ export type JobView = v.InferOutput<typeof JobView>;
 // its jobs, oldest first. Only the server sets it.
 export const PrSessionView = v.object({ pr: PrRef, owner: v.nullable(Owner), jobs: v.array(JobView) });
 export type PrSessionView = v.InferOutput<typeof PrSessionView>;
+
+// A retry's body: the job's rev in the view the host retried from.
+export const RetryRequest = v.object({ expectedRev: v.pipe(v.number(), v.safeInteger(), v.minValue(0)) });
+export type RetryRequest = v.InferOutput<typeof RetryRequest>;
 
 // The answer to a retry.
 export const RetryResponse = v.object({ status: v.literal("retried") });

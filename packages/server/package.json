@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@cloudflare/ai-chat": "catalog:",
+    "@hono/valibot-validator": "catalog:",
     "@prq/protocol": "workspace:*",
     "agents": "catalog:",
     "ai": "catalog:",

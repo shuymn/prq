@@ -99,18 +99,22 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
 - `local` is a kind, not a binding to one AI session. Any local agent in the pool may claim a pending job, because the
   conversation and the notes are in PrSession and the worktree can be rebuilt.
 - A job has a `jobId` and a target. An analysis is identified by the PR and its head SHA; an answer by the message ID of
-  the question. Every `claim` issues a new `claimId` and records the agent ID that made it.
+  the question. Every `claim` issues a new `claimId` and records the agent ID that made it. A job also has a run
+  (`run`), 1 at first, which only a retry advances, in its own statement; a claim returns it, and a submit names the
+  run its answer was produced under.
 - A job is `pending` (waiting), `claimed` by a local agent, `finalizing` while its submit appends the result, `running`
   in the cloud agent, `done`, `failed` or `superseded`. Each change is one SQL statement guarded by the state it
-  expects (and the claim), so a state is never read in one step and changed in another. The next job is the oldest
-  waiting answer, then the waiting analysis, for both owners.
+  expects (and the claim), so a state is never read in one step and changed in another, and the same statement
+  advances the job's revision (`rev`), which the session view shows. The next job is the oldest waiting answer, then
+  the waiting analysis, for both owners.
 - When an agent calls `wait` or `claim`, the system shall return that agent ID's own claimed, unfinished job before any
   new job, with a new `claimId`. A process that was killed and restarted can therefore continue at once, and an answer
   that arrives late from the old process is rejected. A resume is a claim: it also sets the claim time again.
 - A job claimed by one agent ID shall not be returned to another agent ID.
-- When a `submit` arrives, the system shall accept it only if `jobId`, `claimId`, the agent ID and the target (head SHA
-  or question message ID) match the current state. When the submit that completed a job arrives again (the same
-  `claimId`, agent ID and target), the system shall return the result already recorded and shall not add it to the
+- When a `submit` arrives, the system shall accept it only if `jobId`, `claimId`, the agent ID, the target (head SHA
+  or question message ID) and the run match the current state, so an answer produced before a retry is never accepted.
+  When the submit that completed a job arrives again (the same `claimId`, run, agent ID and target), the system shall
+  return the result already recorded and shall not add it to the
   conversation a second time; any other submit to a completed job is rejected.
 - A submit waits for the conversation to settle (`waitUntilStable`) before it enters the history write queue: the SDK
   counts a client's save as pending until the save returns, so waiting inside the queue could wait on a save queued
@@ -119,13 +123,26 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   before that point makes the submit fail as a stale claim; a retry while the job is `finalizing` is refused, and a
   resume does not return it. A submit that fails on the way leaves the job `claimed` for the agent to submit again. A
   local agent cannot report a failure: an unfinished job stays claimed until the host retries it.
+- When a submit gets 409 `stale_claim`, `prq` shall claim again once and, if that claim returns the same `jobId`,
+  resubmit the answer under the new `claimId` with the run the answer was produced under. The server accepts it only if
+  no retry came since; otherwise (another job, no job, or 409 `stale_claim` again) `prq` shall drop the answer and work
+  on what the claim returned. A claim that lands after its route answered 503 can replace the `claimId` the agent
+  holds (see [Notification and wait](#notification-and-wait-prq-wait)), and this recovers it without accepting an
+  answer from before a retry, whichever order the retry and the late claim came in.
 - While no local agent is present, the jobs of a `local` session wait, questions included.
 - A job that was claimed but never submitted (the AI session was closed, for example) is not returned automatically.
   The UI shows which agent ID has been working on it and since when, and starts showing it as possibly stalled after 60
   minutes. "Retry" is available on any claimed or failed job at any time, because the host may know the session is gone
   before that mark appears. A retry puts the job back to pending and changes the `claimId`, so an answer that arrives
   late from the earlier claim is rejected.
-- A failed job is kept as `failed` with its reason and can be retried from the UI.
+- A failed job is kept as `failed` with its reason and can be retried from the UI. The UI retries a job through
+  `POST /api/pr/:owner/:repo/:number/jobs/:jobId/retry`; owner and repository are accepted in any case and address the
+  one session of the pull request.
+- A retry carries the job's `rev` from the view the UI shows (`expectedRev`). The session applies it only while the job
+  is still at that revision, checked in the statement that changes it, and otherwise answers 409 `stale_job`, after
+  which the UI reads the view again. A retry sent again, or one that lands late, therefore never undoes a change made
+  after the view it came from (a claim, another retry, a new failure), even when the job is back in the state the view
+  showed. A refused retry changes no job state; any wake it armed only runs `settle`.
 - A cloud session hands its next waiting job to the cloud agent in the same step that made the job waiting, one job
   at a time (the job is `running` until the agent ends it). While no cloud agent is configured, that step instead marks
   the job `failed` with "cloud agent not configured"; no model is called and nothing is streamed.
@@ -201,11 +218,29 @@ UI, webhook and CLI input all enter through PrSession.
   the session's start included, and a session that does not answer in time is skipped and stays queued.
 - A call the Hub stopped waiting for keeps running and can still land. So each `claim` is one attempt, numbered from the
   Hub's counter, and a session takes a claim only from an attempt newer than every attempt that agent has claimed
-  under there: a late claim changes nothing once a newer one has claimed, and the `claimId` an agent received stays its
-  claim. The session keeps each agent's newest claiming attempt apart from the jobs and advances it in the claim's
-  transaction, so a retry, which clears a job's claim, does not lower it.
-- Each time `wait` reconnects it re-checks for pending jobs and returns at once if there are any. An authentication
-  failure (401 or 403) is told apart from an ordinary timeout and ends with an error, so the AI notices it.
+  under there: a session call from an older attempt changes nothing once a newer one has claimed. The session keeps
+  each agent's newest claiming attempt apart from the jobs and advances it in the claim's transaction, so a retry,
+  which clears a job's claim, does not lower it.
+- `wait` checks the queued sessions when it starts and returns `ready` at once if the agent has its own claimed job or
+  a waiting one. Otherwise it sleeps until a `notify` wakes it and checks again, and returns `timeout` after
+  `min(timeoutMs, 25 s)`. A notify that lands during a check advances the Hub's counter; the wait reads the counter
+  before each check and compares it after, so it checks again rather than sleep past that notify. While an agent ID is
+  in `wait` it counts as present, and the start and the end of a `wait` count as contacts, as `claim` and `submit` do.
+- The Worker passes `wait` to the Hub as an HTTP request rather than an RPC call: the request's signal fires when the
+  agent's request goes away (the `enable_request_signal` compatibility flag), and the Hub then ends that wait at once.
+  An RPC callee never learns that its caller has gone. The waits in flight live only in the Hub's memory.
+- Each route bounds its calls to the Hub and the sessions as a whole, their start included: 30 s, and for `wait` its own
+  bound plus 30 s, so 55 s at most. These are the application's budgets, not a platform limit: a Worker may take any
+  time to answer a client that is still connected. When the bound passes, the route answers 503 `unavailable`, which
+  `prq` and the UI take as a reason to try again, and the call keeps running; nothing orders where it lands against
+  what the client does after the 503. A late submit stores its answer once, and the agent's resend gets `duplicate`. A
+  claim that reaches the Hub after the 503 is a newer attempt than the agent's resend, so it can take the job under
+  another `claimId`; the agent's submit then gets 409 `stale_claim`, and the agent claims again and resubmits under the
+  run its answer was produced under, which the server accepts only if no retry came since (see
+  [Owner and jobs](#owner-and-jobs)). A late retry applies only if nothing changed the job after the view it came
+  from, and otherwise gets 409 `stale_job`. A `wait` is aborted, which ends it in the Hub.
+- An authentication failure (401 or 403) during `wait` is told apart from an ordinary timeout and ends with an error, so
+  the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.
 - The local AI's procedure (a skill or an `AGENTS.md`) is one round of: `wait` → `claim` → work → `submit` → start
   `wait` again in the background. The last step is mandatory, because it is what wakes the AI for the next job.
@@ -471,10 +506,11 @@ prq/
 │  │       ├─ pr.ts              pull request references, the canonical session name, the Hub's name
 │  │       ├─ cli.ts             jobs and what a local agent sends and receives
 │  │       ├─ messages.ts        the metadata of messages the server appends
-│  │       └─ views.ts           what the UI reads from the server (the version message, the session view)
+│  │       └─ views.ts           what the UI reads from the server (the version message, the session view, the retry answer)
 │  ├─ server/              @prq/server: the Worker (Hono + Agents SDK) and the UI
 │  │   ├─ src/
-│  │   │   ├─ index.ts           entry (Hono, routeAgentRequest)
+│  │   │   ├─ index.ts           entry: the app and the Durable Object classes
+│  │   │   ├─ app.ts             the routes and their middleware, with the bound on their calls to Durable Objects
 │  │   │   ├─ env.d.ts
 │  │   │   ├─ config.ts          the secrets, checked once per isolate (fail closed)
 │  │   │   ├─ access.ts          Access JWT verification (jose)
@@ -487,8 +523,8 @@ prq/
 │  │   │   ├─ wait.ts            bounded waits: timeouts and the one-at-a-time queue
 │  │   │   ├─ webhook.ts         GitHub webhook (signature, own PRs only)
 │  │   │   ├─ cli-routes.ts      /cli/* (wait / claim / context / submit)
-│  │   │   ├─ api-routes.ts      /api/* (PR list and the like)
-│  │   │   ├─ hub.ts             Hub (ledger, pool, notifications)
+│  │   │   ├─ api-routes.ts      /api/* (job retry; the PR list later)
+│  │   │   ├─ hub.ts             Hub (ledger, pool, notifications, wait)
 │  │   │   ├─ pr-session/        PrSession (intake, jobs, context assembly, tools)
 │  │   │   │   ├─ index.ts       the class: intake, jobs, the wake and the outbox, its chat hooks
 │  │   │   │   ├─ history.ts     append-only history: refused client frames, insert-only writes

@@ -47,6 +47,12 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
   // Per agent ID, the newest of the Hub's claim attempts that claimed a job here. Kept apart from the jobs: a retry,
   // which clears a job's claim, does not lower it.
   "CREATE TABLE prq_claim_attempts (agent_id TEXT PRIMARY KEY, attempt INTEGER NOT NULL)",
+  // rev: the job's revision, advanced by every change of the job in the statement that makes it. A retry names the
+  // revision it was made from.
+  "ALTER TABLE prq_jobs ADD COLUMN rev INTEGER NOT NULL DEFAULT 0",
+  // run: the job's run, 1 at first, advanced only by a retry in its statement. A submit names the run its answer was
+  // produced under.
+  "ALTER TABLE prq_jobs ADD COLUMN run INTEGER NOT NULL DEFAULT 1",
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {
