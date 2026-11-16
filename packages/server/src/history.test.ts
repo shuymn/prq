@@ -1,7 +1,9 @@
 import type { AIChatAgent } from "@cloudflare/ai-chat";
+import { HistoryChangedMessage } from "@prq/protocol";
 import type { UIMessage } from "ai";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import * as v from "valibot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { prSessionStub } from "./names.ts";
@@ -266,13 +268,17 @@ describe("clients only add", () => {
     captureLogs();
     const { stub, path, token, open } = await session();
     const client = await open();
+    const observer = await open();
     await client.chat([Q1, Q2]);
     await serverAppend(stub, A1);
 
     await client.chat([question("q1", "edited"), Q3]);
+    await observer.received(Q3.id);
 
     expect(await storedMessages(path, token)).toEqual([Q1, Q2, A1, Q3]);
     expect(client.chatLists().at(-1)).toEqual([Q1, Q2, A1, Q3]);
+    // The other connections receive stored lists only, never the client's list the SDK would relay before saving.
+    expect(observer.chatLists().flat()).not.toContainEqual(question("q1", "edited"));
   });
 
   it("adds only questions: drops a new answer or system message from a chat request", async () => {
@@ -383,19 +389,46 @@ describe("history outside the cache", () => {
     expect(observer.chatLists().at(-1)).toEqual(stored);
   });
 
-  it("sends no list when the stored history is over the budget, rather than its most recent part", async () => {
-    const logs = captureLogs();
+  it("announces a change, not a partial list, after a server append over the budget", async () => {
+    captureLogs();
+    const { stub, path, token, open } = await session();
+    const clients = [await open(), await open()];
+    await clients[0]?.chat([long("q1"), long("q2")]);
+    await runInDurableObject(stub, (instance) => {
+      instance.hydrationByteBudget = 1;
+    });
+    const from = clients.map((client) => client.frames.length);
+
+    await serverAppend(stub, A1);
+
+    expect(await storedMessages(path, token)).toEqual([long("q1"), long("q2"), A1]);
+    for (const [index, client] of clients.entries()) {
+      const changed = await client.next((frame) => frame["type"] === "prq:history-changed", from[index]);
+      expect(v.parse(HistoryChangedMessage, changed)).toEqual({ type: "prq:history-changed" });
+      expect(client.chatLists(from[index])).toEqual([]);
+    }
+  });
+
+  it("relays no list, the client's or a partial one, for a chat request over the budget", async () => {
+    captureLogs();
     const { stub, path, token, open } = await session();
     const sender = await open();
+    const observer = await open();
     await sender.chat([long("q1"), long("q2")]);
-    expect(await hydrateRecent(stub, 1)).toEqual(["q2"]);
-    const from = sender.frames.length;
+    await runInDurableObject(stub, (instance) => {
+      instance.hydrationByteBudget = 1;
+    });
+    const from = { sender: sender.frames.length, observer: observer.frames.length };
 
     await sender.chat([long("q1"), long("q2"), Q3]);
+    await observer.next((frame) => frame["type"] === "prq:history-changed", from.observer);
 
     expect(await storedMessages(path, token)).toEqual([long("q1"), long("q2"), Q3]);
-    expect(sender.chatLists(from)).toEqual([]);
-    expect(logs.map((log) => log.entry["event"])).toContain("prq.chat.history_not_sent");
+    expect({ sender: sender.chatLists(from.sender), observer: observer.chatLists(from.observer) }).toEqual({
+      sender: [],
+      observer: [],
+    });
+    expect(sender.frames.slice(from.sender).map((frame) => frame["type"])).toContain("prq:history-changed");
   });
 });
 

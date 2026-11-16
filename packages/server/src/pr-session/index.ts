@@ -1,12 +1,13 @@
 import { AIChatAgent } from "@cloudflare/ai-chat";
 import { MessageType } from "@cloudflare/ai-chat/types";
+import type { HistoryChangedMessage } from "@prq/protocol";
 import type { Connection } from "agents";
 import type { UIMessage } from "ai";
 
 import { refuseSubAgent, sendServerVersion } from "../agents.ts";
 import { log } from "../log.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
-import { addedMessages, questionsOnly, refusedFrame, WriteQueue } from "./history.ts";
+import { addedMessages, isChatList, questionsOnly, refusedFrame, WriteQueue } from "./history.ts";
 
 // One pull request's conversation (named by sessionName). Its stored history is append-only.
 export class PrSession extends AIChatAgent<Env> {
@@ -48,6 +49,14 @@ export class PrSession extends AIChatAgent<Env> {
     sendServerVersion(connection);
   }
 
+  // Every chat list a connection receives comes from #sendHistory, after a save. The SDK's own lists are not sent: the
+  // client's list it relays to the other connections before saving, and its cached list after a save.
+  override broadcast(message: string | ArrayBuffer | ArrayBufferView, without?: string[]): void {
+    if (!isChatList(message)) {
+      super.broadcast(message, without);
+    }
+  }
+
   override async onBeforeSubAgent(): Promise<Response> {
     return refuseSubAgent();
   }
@@ -60,8 +69,7 @@ export class PrSession extends AIChatAgent<Env> {
   // The history writes of a chat request and of the server come here (the SDK's streaming paths write around it, and
   // stay unused while onChatMessage returns undefined). A chat request passes the client's whole list (asking for
   // stored messages it lacks to be deleted); only messages with new IDs are added, after the stored ones, and the
-  // stored history then goes to every connection, the sender included, since the SDK has already relayed the
-  // client's list to the others.
+  // stored history then goes to every connection, the sender included.
   override persistMessages(messages: UIMessage[]): Promise<void> {
     return this.#writes.run(() => this.#insertMessages(messages));
   }
@@ -76,22 +84,21 @@ export class PrSession extends AIChatAgent<Env> {
       messages,
       async (id) => cached.has(id) || (await session.getMessage(id)) !== null,
     );
-    // The SDK would send this.messages to the connections; every one is left out, and #sendHistory sends the stored
-    // history instead.
-    const everyone = Array.from(this.getConnections(), (connection) => connection.id);
-    await super.persistMessages([...this.messages, ...added], everyone);
+    await super.persistMessages([...this.messages, ...added]);
     await this.#sendHistory();
   }
 
-  // Sends the stored history to every connection, as the list a client replaces its own with. It is read within the
-  // budget the SDK keeps history in memory under; a longer history is not sent, since its most recent part would
-  // replace the whole list a client loaded through get-messages.
+  // Sends every connection the stored history, as the list a client replaces its own with. It is read within the
+  // budget the SDK keeps history in memory under. A longer history goes as a HistoryChangedMessage instead, since its
+  // most recent part would replace the whole list a client has; the client reloads it through get-messages.
   async #sendHistory(): Promise<void> {
     const history = await this.sessions.session().getRecentHistory(this.hydrationByteBudget);
     if (history.truncated) {
-      log("prq.chat.history_not_sent", { pr: this.name, bytes: history.totalContentBytes }, "warn");
+      log("prq.chat.history_over_budget", { pr: this.name, bytes: history.totalContentBytes });
+      const changed: HistoryChangedMessage = { type: "prq:history-changed" };
+      super.broadcast(JSON.stringify(changed));
       return;
     }
-    this.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history.messages }));
+    super.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history.messages }));
   }
 }

@@ -3,4 +3,4 @@
 export { ErrorCode, ErrorResponse } from "./errors.ts";
 export { canonicalPrRef, HUB_NAME, parseSessionName, PrRef, sessionName } from "./pr.ts";
 export { PRQ_VERSION_HEADER } from "./version.ts";
-export { ServerVersionMessage } from "./views.ts";
+export { HistoryChangedMessage, ServerVersionMessage } from "./views.ts";

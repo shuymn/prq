@@ -64,6 +64,15 @@ export function questionsOnly(
   return { message: JSON.stringify({ ...frame.output, init }), removed };
 }
 
+// Whether an outgoing message is a chat list (cf_agent_chat_messages).
+export function isChatList(message: string | ArrayBuffer | ArrayBufferView): boolean {
+  return (
+    typeof message === "string" &&
+    message.includes(MessageType.CF_AGENT_CHAT_MESSAGES) &&
+    frameType(parseJson(message)) === MessageType.CF_AGENT_CHAT_MESSAGES
+  );
+}
+
 function frameType(frame: unknown): unknown {
   return typeof frame === "object" && frame !== null ? Reflect.get(frame, "type") : undefined;
 }
