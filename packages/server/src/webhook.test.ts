@@ -326,6 +326,37 @@ describe("inbox", () => {
     expect(await jobRows(await prSessionStub(env, pr))).toEqual(after);
   });
 
+  it("takes a delivery in once when two settles reach it at the same time", async () => {
+    const logs = captureLogs();
+    await setPool([]);
+    const pr = newPr();
+    const stub = await prSessionStub(env, pr);
+    await deliver({ body: JSON.stringify(pullRequestEvent(pr, { head: sha("A") })) });
+    // The first settle has read the inbox and is held deciding the owner, before it takes the delivery in.
+    const held = await gate(stub);
+    await runInDurableObject(stub, (instance) => {
+      const seams = prSessionSeams(instance);
+      const read = seams.readPool.bind(instance);
+      vi.spyOn(seams, "readPool").mockImplementationOnce(async () => {
+        const present = await read();
+        await held.wait();
+        return present;
+      });
+    });
+    const first = tracked(takeIn(pr));
+    await held.reached();
+
+    // The second takes it in meanwhile.
+    await within(takeIn(pr), 3000);
+    expect(first.settled()).toBe(false);
+    expect(await inbox(pr)).toMatchObject([{ processed: 1 }]);
+
+    await held.open();
+    await first.promise;
+    expect(events(logs, "prq.inbox.taken")).toHaveLength(1);
+    expect(await jobRows(stub)).toHaveLength(1);
+  });
+
   it("answers 503 when the session does not store the delivery in time; the delivery stored before is taken in once", async () => {
     captureLogs();
     await setPool(["laptop"]);

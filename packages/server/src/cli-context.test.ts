@@ -220,6 +220,8 @@ async function allPages(
     expect(new TextEncoder().encode(text).length).toBeLessThan(CONTEXT_PAGE_BYTES + 64 * 1024);
     const page = v.parse(ContextResponse, JSON.parse(text));
     pages.push(page);
+    // A cursor that does not move on would page forever.
+    expect(pages.length).toBeLessThan(64);
     cursor = page.nextCursor;
     if (pages.length === 1) {
       await between?.();
@@ -269,6 +271,8 @@ describe("context pages", () => {
     let joined = "";
     for (const part of parts) {
       expect(part.part).toEqual({ offset: joined.length, length: text.length });
+      // No part ends or starts inside a surrogate pair.
+      expect(part.text.isWellFormed()).toBe(true);
       joined += part.text;
     }
     expect(joined === text).toBe(true);
