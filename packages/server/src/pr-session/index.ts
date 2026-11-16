@@ -22,7 +22,7 @@ import { refuseSubAgent, sendServerVersion } from "../agents.ts";
 import { errorName, log } from "../log.ts";
 import { hubStub } from "../names.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
-import { SerialQueue, WaitTimeout, withTimeout } from "../wait.ts";
+import { pastDeadline, SerialQueue, WaitTimeout, withTimeout } from "../wait.ts";
 import { CLOUD_NOT_CONFIGURED, type CloudAgent } from "./cloud.ts";
 import { addedMessages, isChatList, questionsOnly, refusedChatResponse, refusedFrame } from "./history.ts";
 import {
@@ -368,6 +368,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   // --- Local jobs ---
 
+  // The time a route's deadline is checked against (spied on in tests, which move it past a deadline).
+  protected clock(): number {
+    return Date.now();
+  }
+
   // What the Hub needs for wait: the agent's own claimed job, a pending job, any open job. A cloud session has none.
   peek(agentId: string): Peek {
     if (readOwner(this.#sql) !== "local") {
@@ -378,10 +383,19 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   // resume: the agent's own claimed job, under a new claimId (the old one stops working). fresh: the next pending job.
   // A job claimed by one agent ID is never returned to another. attempt: the Hub's number for this claim call; an
-  // attempt older than one the agent has claimed under here claims nothing.
-  async claim(agentId: string, mode: "resume" | "fresh", attempt: number): Promise<ClaimResponse> {
+  // attempt older than one the agent has claimed under here claims nothing. deadline: the route's (pastDeadline),
+  // checked with no await between it and the claim.
+  async claim(
+    agentId: string,
+    mode: "resume" | "fresh",
+    attempt: number,
+    deadline: number,
+  ): Promise<ClaimResponse | ErrorResponse> {
     if ((await this.ownerOf()) !== "local") {
       return { job: null };
+    }
+    if (this.clock() > deadline) {
+      return pastDeadline("claim", { pr: this.name, agentId });
     }
     const claimId = crypto.randomUUID();
     const now = Date.now();
@@ -500,8 +514,8 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // The host's retry of a claimed or failed job: back to waiting with the claim cleared, so the earlier claimId is
-  // rejected from now on.
-  async retryJob(jobId: string): Promise<RetryResponse | ErrorResponse> {
+  // rejected from now on. deadline: the route's (pastDeadline), checked with no await between it and the change.
+  async retryJob(jobId: string, deadline: number): Promise<RetryResponse | ErrorResponse> {
     const before = jobById(this.#sql, jobId);
     if (before === undefined) {
       return { error: "unknown_job" };
@@ -510,6 +524,9 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       return { error: "not_retryable", detail: `the job is ${jobView(before).state}` };
     }
     await this.#armWake();
+    if (this.clock() > deadline) {
+      return pastDeadline("retry", { pr: this.name, jobId });
+    }
     const owner = this.#storedOwner();
     const now = Date.now();
     const change = this.ctx.storage.transactionSync(() => {

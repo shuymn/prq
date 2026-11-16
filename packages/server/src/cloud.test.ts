@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CLOUD_NOT_CONFIGURED } from "./pr-session/cloud.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
-import { jobOf, newSession, prSessionSeams, sessionSql, setPool } from "./test/session.ts";
+import { jobOf, newSession, NO_DEADLINE, prSessionSeams, sessionSql, setPool } from "./test/session.ts";
 
 const sockets: AgentSocket[] = [];
 
@@ -31,7 +31,7 @@ describe("no cloud agent configured", () => {
     await client.chat([Q1]);
     const job = await jobOf(stub, "q1");
     expect(job).toMatchObject({ state: "failed", failure: CLOUD_NOT_CONFIGURED });
-    expect(await stub.retryJob(job.job_id)).toEqual({ status: "retried" });
+    expect(await stub.retryJob(job.job_id, NO_DEADLINE)).toEqual({ status: "retried" });
     expect(await jobOf(stub, "q1")).toMatchObject({ state: "failed", failure: CLOUD_NOT_CONFIGURED });
 
     // No view and no log showed the job waiting.

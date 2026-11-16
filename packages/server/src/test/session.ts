@@ -2,7 +2,7 @@
 // tests of one file (and not across files), so each test takes a pull request of its own and sets the pool it needs.
 
 import type { AIChatAgent } from "@cloudflare/ai-chat";
-import type { ClaimResponse, Owner, PrRef } from "@prq/protocol";
+import type { ClaimResponse, ErrorResponse, Owner, PrRef } from "@prq/protocol";
 import type { UIMessage } from "ai";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -68,6 +68,22 @@ export async function queued(): Promise<string[]> {
   );
 }
 
+// The deadline of a call a test makes on a Durable Object directly, outside any route: none.
+export const NO_DEADLINE = Number.POSITIVE_INFINITY;
+
+// A claim's answer; one refused (past its deadline) fails the test.
+function claimed(response: ClaimResponse | ErrorResponse): ClaimResponse {
+  if ("error" in response) {
+    throw new Error(`the claim was refused: ${response.error}`);
+  }
+  return response;
+}
+
+// A claim made on the Hub directly, outside any route.
+export async function hubClaim(agentId: string): Promise<ClaimResponse> {
+  return claimed(await (await hub()).claim(agentId, NO_DEADLINE));
+}
+
 // The next attempt number from the Hub's counter, for a claim made on a session directly.
 async function nextAttempt(): Promise<number> {
   return runInDurableObject(
@@ -84,7 +100,7 @@ export async function claimIn(
   mode: "resume" | "fresh",
 ): Promise<ClaimResponse> {
   const attempt = await nextAttempt();
-  return stub.claim(agentId, mode, attempt);
+  return claimed(await stub.claim(agentId, mode, attempt, NO_DEADLINE));
 }
 
 export async function jobRows(stub: DurableObjectStub<PrSession>): Promise<JobRow[]> {
@@ -224,6 +240,7 @@ export type PrSessionSeams = {
   insertMessages(messages: UIMessage[]): Promise<void>;
   deliver(): Promise<void>;
   cloudAgent(): CloudAgent | undefined;
+  clock(): number;
   // AIChatAgent's own.
   waitUntilStable(options?: { timeout?: number }): Promise<boolean>;
 };
@@ -235,6 +252,7 @@ const PR_SESSION_SEAMS = [
   "insertMessages",
   "deliver",
   "cloudAgent",
+  "clock",
   "waitUntilStable",
 ] as const;
 
@@ -249,15 +267,41 @@ export function prSessionSeams(instance: object): PrSessionSeams {
   return instance;
 }
 
+// Holds the session's claim calls in the session, before they choose a job: the first `pass` calls go on, the next one
+// is held.
+export async function holdClaim(stub: DurableObjectStub<PrSession>, pass = 0) {
+  const held = await gate(stub);
+  await runInDurableObject(stub, (instance) => {
+    const seams = prSessionSeams(instance);
+    const owner = seams.ownerOf.bind(instance);
+    const spy = vi.spyOn(seams, "ownerOf");
+    for (let call = 0; call < pass; call += 1) {
+      spy.mockImplementationOnce(owner);
+    }
+    spy.mockImplementationOnce(async () => {
+      await held.wait();
+      return owner();
+    });
+  });
+  return held;
+}
+
 export type HubSeams = {
   sessionStub(session: string): Promise<DurableObjectStub<PrSession>>;
   sessionCallMs(): number;
   peekSession(session: string, agentId: string): Promise<Peek>;
-  claimSession(session: string, agentId: string, mode: "resume" | "fresh", attempt: number): Promise<unknown>;
+  claimSession(
+    session: string,
+    agentId: string,
+    mode: "resume" | "fresh",
+    attempt: number,
+    deadline: number,
+  ): Promise<unknown>;
   waitTimer(ms: number, end: () => void): () => void;
+  clock(): number;
 };
 
-const HUB_SEAMS = ["sessionStub", "sessionCallMs", "peekSession", "claimSession", "waitTimer"] as const;
+const HUB_SEAMS = ["sessionStub", "sessionCallMs", "peekSession", "claimSession", "waitTimer", "clock"] as const;
 
 function hasHubSeams(instance: object): instance is HubSeams {
   return HUB_SEAMS.every((name) => typeof Reflect.get(instance, name) === "function");

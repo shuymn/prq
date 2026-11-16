@@ -1,4 +1,11 @@
-import { type ClaimResponse, parseSessionName, type PrRef, WaitRequest, type WaitResponse } from "@prq/protocol";
+import {
+  type ClaimResponse,
+  type ErrorResponse,
+  parseSessionName,
+  type PrRef,
+  WaitRequest,
+  type WaitResponse,
+} from "@prq/protocol";
 import { Agent, type Connection } from "agents";
 import * as v from "valibot";
 
@@ -8,7 +15,7 @@ import { prSessionStub } from "./names.ts";
 import type { PrSession } from "./pr-session/index.ts";
 import type { Peek } from "./pr-session/jobs.ts";
 import { HUB_SCHEMA, migrate } from "./schema.ts";
-import { withTimeout } from "./wait.ts";
+import { pastDeadline, withTimeout } from "./wait.ts";
 
 // An agent ID counts as present until this long after its last contact (docs/design.md, Presence).
 export const PRESENCE_MS = 10 * 60_000;
@@ -181,25 +188,34 @@ export class Hub extends Agent<Env> {
 
   // The agent's own claimed job first, from any queued session (a resume, under a new claimId), then the next pending
   // job, session by session. The call is one attempt, numbered from the Hub's counter: a session lets no older attempt
-  // of the agent replace what a newer one claimed.
-  async claim(agentId: string): Promise<ClaimResponse> {
+  // of the agent replace what a newer one claimed. A call past the route's deadline is refused before it is numbered,
+  // and each session checks the deadline again before it claims, so a claim never lands after the route's 503.
+  async claim(agentId: string, deadline: number): Promise<ClaimResponse | ErrorResponse> {
+    if (this.clock() > deadline) {
+      return pastDeadline("claim", { agentId });
+    }
     this.touch(agentId);
     const attempt = this.#next();
     for (const mode of ["resume", "fresh"] as const) {
       for (const { session } of this.#queue()) {
-        let response: ClaimResponse;
+        let response: ClaimResponse | ErrorResponse;
         try {
-          response = await this.claimSession(session, agentId, mode, attempt);
+          response = await this.claimSession(session, agentId, mode, attempt, deadline);
         } catch (error) {
           log("prq.hub.session_failed", { pr: session, call: "claim", error: errorName(error) }, "error");
           continue;
         }
-        if (response.job !== null) {
+        if ("error" in response || response.job !== null) {
           return response;
         }
       }
     }
     return { job: null };
+  }
+
+  // The time a route's deadline is checked against (spied on in tests, which move it past a deadline).
+  protected clock(): number {
+    return Date.now();
   }
 
   // A session's stub, once the session has started (spied on in tests).
@@ -218,15 +234,18 @@ export class Hub extends Agent<Env> {
   }
 
   // A session's claim. One that times out keeps running and can still land: it claims nothing once a newer attempt of
-  // the agent has claimed in the session, and otherwise its job is the agent's own claimed job, which the agent's next
-  // claim resumes under a new claimId.
+  // the agent has claimed in the session or once the deadline has passed, and otherwise its job is the agent's own
+  // claimed job, which the agent's next claim resumes under a new claimId.
   protected async claimSession(
     session: string,
     agentId: string,
     mode: "resume" | "fresh",
     attempt: number,
-  ): Promise<ClaimResponse> {
-    return this.#callSession<ClaimResponse>(session, "a session's claim", (stub) => stub.claim(agentId, mode, attempt));
+    deadline: number,
+  ): Promise<ClaimResponse | ErrorResponse> {
+    return this.#callSession<ClaimResponse | ErrorResponse>(session, "a session's claim", (stub) =>
+      stub.claim(agentId, mode, attempt, deadline),
+    );
   }
 
   // A call to a session, bounded as a whole: getting the stub waits for the session's start.

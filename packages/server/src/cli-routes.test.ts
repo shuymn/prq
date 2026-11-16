@@ -5,7 +5,7 @@ import * as v from "valibot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROUTE_CALL_MS } from "./http.ts";
-import { WAIT_MAX_MS } from "./hub.ts";
+import { Hub, WAIT_MAX_MS } from "./hub.ts";
 import app from "./index.ts";
 import {
   accessToken,
@@ -25,6 +25,7 @@ import {
   fetchBounded,
   heldBound,
   localSession,
+  passDeadline,
   post,
   postRequest,
   retryOver,
@@ -36,9 +37,11 @@ import {
 import {
   clearQueue,
   gate,
+  holdClaim,
   holdInsert,
   hub,
   hubSeams,
+  jobRows,
   prSessionSeams,
   type Session,
   setPool,
@@ -404,15 +407,39 @@ describe("contacts", () => {
 });
 
 describe("route time limits", () => {
-  it("answers 503 when the Hub's claim does not answer in time; the late claim is the agent's to resume", async () => {
+  it("answers 503 when the Hub's claim does not answer in time; the late claim claims nothing", async () => {
     captureLogs();
     const session = await localSession("cli", sockets, Q1);
-    // The Hub's first call into the session (its resume pass) is held.
+    // The Hub's resume pass goes on (there is nothing to resume); its fresh claim is held in the session, before the
+    // session checks the deadline.
+    const held = await holdClaim(session.stub, 1);
+    const limit = heldBound();
+    const res = tracked(fetchBounded(limit.bound, postRequest("/cli/claim", session.token, { agentId: "laptop" })));
+    await held.reached();
+    // A sentinel read of the session goes through while the claim is held there.
+    expect((await session.stub.view()).jobs.map((job) => job.state)).toEqual(["pending"]);
+    expect(res.settled()).toBe(false);
+
+    limit.expire();
+    expect(await failure(within(res.promise, 3000))).toEqual(failed(503, "unavailable"));
+    expect(limit.bounds()).toEqual([{ ms: ROUTE_CALL_MS, what: "the Hub's claim" }]);
+    // The session's clock has passed the claim's deadline when the claim goes on.
+    await runInDurableObject(session.stub, (instance) => passDeadline(prSessionSeams(instance), limit.deadline()));
+    await held.open();
+    expect(await limit.late()).toMatchObject({ error: "unavailable" });
+    expect((await jobRows(session.stub)).map((job) => [job.state, job.claim_id])).toEqual([["pending", null]]);
+    expect(await claimOver(session.token, "laptop")).toMatchObject({ resumed: false });
+  });
+
+  it("lets no claim that reaches the Hub after its deadline replace the claim the agent's resend got", async () => {
+    captureLogs();
+    const session = await localSession("cli", sockets, Q1);
+    // The route's claim is held as it reaches the Hub, before the Hub checks the deadline. RPC calls a method from the
+    // class, so the spy is on the prototype.
     const held = await gate(await hub());
     await runInDurableObject(await hub(), (instance) => {
-      const seams = hubSeams(instance);
-      const claim = seams.claimSession.bind(instance);
-      vi.spyOn(seams, "claimSession").mockImplementationOnce(async (...args) => {
+      const claim = instance.claim.bind(instance);
+      vi.spyOn(Hub.prototype, "claim").mockImplementationOnce(async (...args) => {
         await held.wait();
         return claim(...args);
       });
@@ -420,16 +447,29 @@ describe("route time limits", () => {
     const limit = heldBound();
     const res = tracked(fetchBounded(limit.bound, postRequest("/cli/claim", session.token, { agentId: "laptop" })));
     await held.reached();
-    // A sentinel call to the Hub goes through while the claim is held there.
-    expect(await (await hub()).isLocalPresent()).toBe(true);
-    expect(res.settled()).toBe(false);
-
     limit.expire();
     expect(await failure(within(res.promise, 3000))).toEqual(failed(503, "unavailable"));
-    expect(limit.bounds).toEqual([{ ms: ROUTE_CALL_MS, what: "the Hub's claim" }]);
+
+    // The agent claims again and gets the job. The Hub's clock then passes the first claim's deadline; the session's
+    // is left as it is, so only the Hub's check stands between the late claim and the job.
+    const resend = holding(await claimOver(session.token, "laptop"));
+    await runInDurableObject(await hub(), (instance) => passDeadline(hubSeams(instance), limit.deadline()));
     await held.open();
-    await vi.waitFor(async () => expect((await session.stub.view()).jobs[0]?.state).toBe("claimed"), { timeout: 3000 });
-    expect(await claimOver(session.token, "laptop")).toMatchObject({ resumed: true });
+    expect(await limit.late()).toMatchObject({ error: "unavailable" });
+    expect((await jobRows(session.stub)).map((job) => [job.state, job.claim_id])).toEqual([
+      ["claimed", resend.claimId],
+    ]);
+    expect(await accepted(submitOver(session.token, session.ref, resend, "laptop"))).toMatchObject({
+      status: "accepted",
+    });
+  });
+
+  it("answers 503 for a claim the Hub refuses as past its deadline", async () => {
+    captureLogs();
+    const session = await localSession("cli", sockets, Q1);
+    await runInDurableObject(await hub(), (instance) => passDeadline(hubSeams(instance), Number.MAX_SAFE_INTEGER));
+    expect(await failure(post("/cli/claim", session.token, { agentId: "laptop" }))).toEqual(failed(503, "unavailable"));
+    expect((await session.stub.view()).jobs.map((job) => job.state)).toEqual(["pending"]);
   });
 
   it("answers 503 when a submit does not answer in time; the late submit stores the answer once", async () => {
@@ -447,7 +487,7 @@ describe("route time limits", () => {
 
     limit.expire();
     expect(await failure(within(res.promise, 3000))).toEqual(failed(503, "unavailable"));
-    expect(limit.bounds).toEqual([{ ms: ROUTE_CALL_MS, what: "the submit" }]);
+    expect(limit.bounds()).toEqual([{ ms: ROUTE_CALL_MS, what: "the submit" }]);
     await held.open();
     // The agent sends it again: it waits for the late submit and gets its result.
     expect(await accepted(submitOver(session.token, session.ref, claim, "laptop"))).toEqual({
@@ -479,7 +519,7 @@ describe("route time limits", () => {
 
     limit.expire();
     expect(await failure(within(res.promise, 3000))).toEqual(failed(503, "unavailable"));
-    expect(limit.bounds).toEqual([{ ms: 1000 + ROUTE_CALL_MS, what: "the Hub's wait" }]);
+    expect(limit.bounds()).toEqual([{ ms: 1000 + ROUTE_CALL_MS, what: "the Hub's wait" }]);
     await vi.waitFor(() => expect(aborted).toBe(true), { timeout: 3000 });
     await held.open();
   });

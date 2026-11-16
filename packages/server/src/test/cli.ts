@@ -10,7 +10,7 @@ import { expect, vi } from "vitest";
 
 import { createApp } from "../app.ts";
 import type { CallBound } from "../http.ts";
-import { WaitTimeout } from "../wait.ts";
+import { callDeadline, WaitTimeout } from "../wait.ts";
 import { request } from "./access.ts";
 import type { AgentSocket } from "./chat.ts";
 import { latch } from "./latch.ts";
@@ -131,19 +131,40 @@ export async function controlWaitTimers() {
   };
 }
 
-// A bound for the routes' calls (createApp) that the test ends by hand: it records each call's bound, and once
-// expire() is called every call still pending fails with a WaitTimeout.
+// A bound for the routes' calls (createApp) that the test ends by hand. Each call is made with the deadline the route
+// gives it and recorded with its bound; once expire() is called every call still pending fails with a WaitTimeout, as
+// when the route's bound passes, and late() is the outcome that call lands with afterwards.
 export function heldBound() {
-  const bounds: { ms: number; what: string }[] = [];
+  const calls: { ms: number; what: string; deadline: number; outcome: Promise<unknown> }[] = [];
   const expiry = latch();
   const bound: CallBound = (call, ms, what) => {
-    bounds.push({ ms, what });
+    const deadline = callDeadline(ms);
+    const outcome = Promise.resolve(call(deadline));
+    calls.push({ ms, what, deadline, outcome: outcome.catch((error: unknown) => error) });
     const expired = expiry.promise.then((): never => {
       throw new WaitTimeout(`${what} expired`);
     });
-    return Promise.race([Promise.resolve(call), expired]);
+    return Promise.race([outcome, expired]);
   };
-  return { bound, bounds, expire: () => expiry.open() };
+  const first = () => {
+    const call = calls[0];
+    if (call === undefined) {
+      throw new Error("no call was bounded");
+    }
+    return call;
+  };
+  return {
+    bound,
+    bounds: () => calls.map(({ ms, what }) => ({ ms, what })),
+    deadline: () => first().deadline,
+    late: () => first().outcome,
+    expire: () => expiry.open(),
+  };
+}
+
+// Moves a Durable Object's clock (from inside it) past a route call's deadline, as the time the route's bound takes.
+export function passDeadline(seams: { clock(): number }, deadline: number): void {
+  vi.spyOn(seams, "clock").mockReturnValue(deadline + 1);
 }
 
 // A request through the Worker's routes with the given bound on their calls to Durable Objects.
