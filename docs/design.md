@@ -70,7 +70,8 @@ UI:    React + Vite (Workers Static Assets), connected to PrSession with useAgen
   is safe in URLs and cannot appear in a GitHub owner or repository name.
 - **Hub.** One `Agent` instance that holds the PR ledger for the list view, the pool (which agent IDs are present), the
   notification queue for local agents, and the instructions (the two prompts and the skill registry). It does not hold
-  job state; it asks PrSession (`peek`, `claim`).
+  job state; it asks PrSession (`peek`, `claim`). Each ledger entry keeps what a list row shows (see
+  [PR ledger](#pr-ledger)).
 - **prq CLI.** Runs on the host's machine, talks to the Worker over HTTP with a service token, and uses the host's own
   git and `gh`.
 - **Sandbox.** The cloud workspace of a PrSession: a container with a checkout of the PR that the agent searches and
@@ -116,9 +117,10 @@ UI, webhook and CLI input all enter through PrSession.
   the last message.
 - An analysis is made per push, at the pushed head SHA: GitHub sends one `pull_request` event per push, and the commits
   inside a push are not analyzed one by one.
-- When a webhook arrives, it goes to the PrSession, not to the Hub. If an analysis job for the same head SHA already
-  exists (waiting, running or done), the system shall do nothing. A redelivery is therefore harmless and no delivery ID
-  is stored. Analysis jobs that have not started are folded into the latest head: if A is running and B and C arrive,
+- When a webhook arrives, it goes to the PrSession, not to the Hub. The PrSession always records the pushed SHA as the
+  current head. If an analysis job for the same head SHA already exists (waiting, running or done), the system shall
+  create no job; a push back to an already analyzed head (after a force-push, for example) shows that head's stored
+  summary. A redelivery is therefore harmless and no delivery ID is stored. Analysis jobs that have not started are folded into the latest head: if A is running and B and C arrive,
   only C runs after A.
 - A waiting question runs before the next analysis.
 - When the server appends a message to the conversation (an analysis request, for example), it calls
@@ -153,6 +155,30 @@ CLI exit codes: 0 ready, 2 timeout, 3 authentication failure, 4 claim mismatch, 
   new PRs to cloud.
 - When any one agent ID is present, "a local agent is present" is true.
 
+### PR ledger
+
+The Hub's entry per PR is what the list shows without asking each PrSession. PrSession sends the entry's fields to the
+Hub whenever a push arrives, a question is saved, one of its jobs changes state, or a claim reaches 60 minutes (an
+alarm set at the claim). The Hub adds only what it owns itself: whether a local agent is present.
+
+- **Latest event:** a push received, a question sent, a summary completed or an answer completed, with its time. Rows
+  are ordered by it. Claims, heartbeats and streaming are not events.
+- **New:** the times of the latest completed summary and the latest completed answer are kept apart from the latest
+  event, so a later push does not hide an unread answer. The row is new while either time is after the time the host
+  last opened the PR; opening the PR detail records that time.
+- **Problem:** at most one label, the first that applies in this order:
+  1. *Summary failed* — the analysis of the current head failed and it has no completed analysis. Clears when one
+     completes.
+  2. *Answer failed* — a question's latest job failed. Clears when a retry of it completes.
+  3. *Possibly stalled* — a claimed job has no result 60 minutes after its claim. Clears when the job completes, fails
+     or is retried.
+  4. *Waiting for a local agent* — a `local` session has waiting work (sent by PrSession) and no local agent is
+     present (known to the Hub). Clears when an agent is present again.
+  5. *New push not summarized* — the current head has no completed analysis. It is derived from the current head, not
+     from the latest completed summary, so a completed analysis of an older head does not clear it and a push back to
+     an analyzed head does not set it.
+  "Needs attention" counts the PRs whose problem is one of the first four.
+
 ### Instructions and skills
 
 How a summary or an answer should read is the host's decision, written as instructions. The core holds the mechanism
@@ -161,12 +187,16 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
 - **Two free-form prompts**, edited in settings: one for analysis (the summaries) and one for answers. An example is
   "Write in Japanese. Polish the final text with the yomiyasu skill." A prompt is plain text; the core does not parse it.
 - **Skills in the Agent Skills format.** A skill is a directory with a `SKILL.md` (frontmatter with `name` and
-  `description`) and optional `references/` and `scripts/`. The host registers a skill by GitHub URL, path and ref; the
-  system resolves the ref to a commit SHA and pins the skill to it. Registering and updating take two steps: a preview
-  resolves the ref and fetches the skill without saving it, so the host sees what would be pinned (see
-  [ui.md](ui.md#4-settings)), and confirming pins the previewed SHA without resolving the ref again. The Hub stores the
-  registration and the pinned contents. A skill is only re-read from GitHub when the host updates it to a new ref. An example is
-  `skills/yomiyasu` of `nanaism/yomiyasu` (MIT).
+  `description`) and optional `references/` and `scripts/`. The host registers a skill by the GitHub link to its
+  `SKILL.md` (`/blob/<ref>/<path>/SKILL.md`), which names the repository, ref and path. The ref is a commit SHA (a
+  permalink) or a branch or tag, which may contain `/`: the segments after `blob/` are split at the longest prefix that
+  names a branch or tag, or at the first segment when it is a commit SHA (as GitHub does). The preview shows the
+  resolved ref and path, so a wrong split is seen before confirming. The system resolves the ref to a commit SHA and
+  pins the skill to it; a permalink is already pinned, and updating it means pasting a new link.
+  Registering and updating take two steps: a preview resolves the ref and fetches the skill without saving it, so the
+  host sees what would be pinned (see [ui.md](ui.md#4-settings)), and confirming pins the previewed SHA without
+  resolving the ref again. The Hub stores the registration and the pinned contents. A skill is only re-read from GitHub
+  when the host updates it to a new ref. An example is `skills/yomiyasu` of `nanaism/yomiyasu` (MIT).
 - **Context budget.** Only each skill's `name` and `description` stay in the model context. The body and the files it
   refers to are loaded on demand through two tools: `activate_skill(name)` returns the `SKILL.md` body, and
   `read_skill_resource(name, path)` returns a file inside that skill's directory (path-checked, so it cannot leave it).

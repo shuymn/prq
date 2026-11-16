@@ -23,23 +23,31 @@ What the interface has to show and do, as the input for the visual design. The s
 
 ### 1. PR list
 
-Every pull request prq follows, across repositories.
+Every pull request prq follows, across repositories. The list is for getting back to a PR and to what is new in it;
+processing is shown only where the host has to act.
 
 | Element | Data |
 | --- | --- |
-| Row | repository, PR number, title, PR state (open, closed, merged), latest analyzed head SHA (short), analysis status, last activity time |
-| Row badges | number of questions waiting, a failed-job marker, a "possibly stalled" marker for a claimed job with no result after 60 minutes |
-| Header | the pool status (see screen 3), link to settings |
+| Row | one compact line at a fixed height: PR state (open, closed, merged), repository (in its own column, not muted: the host tells PRs apart by it; only the name when every PR has the same owner, `owner/name` otherwise), title (truncated) and PR number, the latest event and its time ("Summary 12 min ago", "Answer 3 min ago", "Push received 2 min ago") |
+| New marker | a dot when a summary or an answer arrived after the host last opened the PR |
+| Status | short text in its own column, only while something is unresolved: "Summary failed", "Answer failed", "Possibly stalled", "Waiting for a local agent"; and "New push not summarized" while the latest summary is for an older head. One label at a time, in the order of the [PR ledger](design.md#pr-ledger). Empty for a healthy row |
+| Header | the pool status (see screen 3), a settings button |
+| Column headings | Repository, Pull request, Status, Last activity: rows are a table |
+
+Rows are in the order of their latest event: a push received, a question sent, a summary or an answer completed.
+Claims, heartbeats and streaming do not move a row. Routine progress (queued, running, done) is not shown in the list.
 
 States:
 
 - **Empty:** no PR yet. Explains that PRs appear when the GitHub App receives a webhook for the host's own pull request.
 - **Loading:** list not yet received.
-- **Waiting for a local agent:** rows whose jobs are waiting while no local agent is present show a waiting marker.
-- **Failed:** rows with a failed job are marked and can be found without opening each one.
+- **Waiting for a local agent:** rows whose work waits while no local agent is present say so.
+- **Failed:** rows with an unresolved failure say what failed and can be found without opening each one.
 
-Scope: open PRs are shown by default; a filter `Open | All` adds closed and merged PRs, whose rows show their state.
-There is no repository filter, because one host follows a few repositories and rows are sorted by last activity.
+Filters: open PRs are shown by default; `Open | All` adds closed and merged PRs, whose rows show their state. A
+repository menu narrows the list to one repository. "Needs attention" with its count appears only when a PR has an
+unresolved problem the host can act on (a failure or a possibly stalled job to retry, work waiting for a local agent to
+start), and keeps those rows. "New push not summarized" does not count, nor does a failure a later retry resolved.
 
 ### 2. PR detail
 
@@ -67,8 +75,10 @@ States:
   interrupt the running one.
 - **Possibly stalled:** a claimed job has no result after 60 minutes, and the UI starts showing it as possibly stalled.
   Shows the agent ID and the elapsed time. "Retry" is available before this point too.
-- **Failed:** shows the reason (error, step limit, token limit, or the provider refusing a call, such as at its spend limit) and "Retry"; the failed job stays in the list.
-  Text the turn had already produced stays in the conversation, marked incomplete.
+- **Failed:** shows the reason (error, step limit, token limit, or the provider refusing a call, such as at its spend
+  limit) and "Retry" next to what failed: at the summary for an analysis, under the incomplete answer for a question.
+  Text the turn had already produced stays in the conversation, marked incomplete. The failed job stays in the jobs
+  list.
 - **Disconnected:** the connection to the server dropped; shows reconnecting and keeps the last known content.
 - **Question about an earlier version:** the user names a SHA in the question; the answer shows that SHA.
 
@@ -77,10 +87,15 @@ Layout:
 - **The summary is pinned above the conversation**, as its own section in the same scroll, not as the first message.
   The version selector changes only the summary, while the conversation is one continuous history; making the summary a
   message would mix versions into that history.
-- **Desktop:** a main column (header, summary, conversation, composer at the bottom) and a right rail with the jobs and
-  the full version history (it scrolls when long).
-- **Panel:** one column: compact header, the pool status line, the version history as a menu, the summary
-  in a disclosure (open by default), the conversation and the composer; jobs are shown inline and compact.
+- **The page is about the summary and the conversation.** The summary heading shows its SHA and time with a version
+  menu, so another version can be picked with the rail collapsed. While a newer push is analyzed, the shown summary
+  stays readable with a line saying a newer head is being summarized. When an earlier version is shown, the composer
+  says that questions are answered at the latest analyzed head. Model and token figures are muted.
+- **Desktop:** a main column (header, summary, conversation, composer at the bottom) and a right rail with the full
+  version history and the jobs (it scrolls when long). A toggle collapses the rail, and the main column widens.
+- **Panel:** one column: compact header, the summary in a disclosure (open by default) whose heading is the version
+  menu, the conversation and the composer. Operational lines (the pool, a job) appear only where they explain content
+  that is blocked or failed.
 - **One version at a time.** Two summaries are not shown side by side: the purpose is understanding the PR as it is
   now, and two columns of Markdown do not fit the panel.
 
@@ -109,9 +124,9 @@ the details above. In the panel it is one status line with no popover.
 | --- | --- |
 | Analysis prompt | a multi-line editor for the free-form prompt used for summaries, with save |
 | Answer prompt | a multi-line editor for the free-form prompt used for answers, with save |
-| Skills list | one row per registered skill: name, description, source (GitHub URL, path), ref, pinned commit SHA, the tools its `allowed-tools` permits |
+| Skills list | one row per registered skill: name, description, source (repository and path), ref, pinned commit SHA, the tools its `allowed-tools` permits |
 | Skill actions | remove; update to a new ref (shows the SHA change before applying) |
-| Register a skill | fields for GitHub URL, path and ref, with a submit |
+| Add a skill | a dialog with one field: the GitHub link to the skill's `SKILL.md` (`https://github.com/<owner>/<repo>/blob/<ref>/<path>/SKILL.md`), which gives the repository, ref and path |
 
 The prompts are plain text, such as "Write in Japanese. Polish the final text with the yomiyasu skill." There is no
 language field.
@@ -121,7 +136,7 @@ States:
 - **Empty prompts:** the editors are empty and say what the prompt is used for.
 - **Empty skills list:** explains what a skill is and how to register one.
 - **Registering:** the ref is being resolved and the skill fetched.
-- **Register failed:** the URL or ref was not found, there is no `SKILL.md`, the frontmatter is invalid, or the name
+- **Register failed:** the link is not a GitHub link to a `SKILL.md`, the repository or ref was not found, there is no `SKILL.md`, the frontmatter is invalid, or the name
   is already registered.
 - **Saving / saved / save failed** for the prompts.
 - **Update available or applied:** after choosing a new ref, shows the old and new SHA.
