@@ -25,6 +25,13 @@ afterEach(() => {
 
 const PATHS = ["/cli/wait", "/api/pr/octo/demo/1", "/agents/hub/hub", "/webhook", "/unknown"];
 
+// A WebSocket upgrade as a route returns it.
+function upgradeResponse(): Response {
+  const [client, server] = Object.values(new WebSocketPair());
+  server?.accept();
+  return new Response(null, { status: 101, webSocket: client ?? null });
+}
+
 // Both headers where they apply: no-store everywhere, the version on /cli/* only.
 function expectHeaders(res: Response, path: string): void {
   expect({
@@ -87,11 +94,8 @@ describe("headers on every response", () => {
     probe.get("/cli/throws", () => {
       throw new Error("ACCESS_AUD is secret-audience-value");
     });
-    probe.get("/agents/socket", () => {
-      const [client, server] = Object.values(new WebSocketPair());
-      server?.accept();
-      return new Response(null, { status: 101, webSocket: client ?? null });
-    });
+    probe.get("/agents/socket", upgradeResponse);
+    probe.get("/cli/socket", upgradeResponse);
     probe.notFound(notFound);
     probe.onError(onError);
 
@@ -124,11 +128,16 @@ describe("headers on every response", () => {
       expect(JSON.stringify(logs)).not.toContain("secret-audience-value");
     });
 
-    it("passes a WebSocket upgrade through with its socket", async () => {
-      const res = await probe.fetch(request("/agents/socket"));
+    // An upgrade passes as it is: copying it would drop its socket. /cli/* never upgrades (only /agents/* does), so
+    // the version is never left off a /cli/* response.
+    it.for(["/agents/socket", "/cli/socket"])("passes a WebSocket upgrade at %s through untouched", async (path) => {
+      const res = await probe.fetch(request(path));
       expect(res.status).toBe(101);
       expect(res.webSocket).not.toBeNull();
-      expect(res.headers.get("Cache-Control")).toBeNull();
+      expect({ cacheControl: res.headers.get("Cache-Control"), version: res.headers.get(PRQ_VERSION_HEADER) }).toEqual({
+        cacheControl: null,
+        version: null,
+      });
       res.webSocket?.accept();
       res.webSocket?.close();
     });

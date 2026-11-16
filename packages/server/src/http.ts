@@ -19,7 +19,8 @@ export function errorResponse(c: Context, error: ErrorCode, detail?: string): Re
 }
 
 // Sets a header on the response a handler produced. A response from fetch or a Durable Object stub has immutable
-// headers, so it is copied first. A WebSocket upgrade passes as it is: a copy would drop its socket.
+// headers, so it is copied first. A WebSocket upgrade passes as it is, without either header: a copy would drop its
+// socket. Only /agents/* upgrades; /cli/* never does, so every /cli/* response carries the version.
 function setResponseHeader(c: Context, name: string, value: string): void {
   if (c.res.status === 101) {
     return;
