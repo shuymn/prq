@@ -15368,10 +15368,10 @@
                           "content": "zenith"
                         },
                         "lfqO6": {
-                          "width": "fill_container"
+                          "width": "fit_content"
                         },
                         "ThKc5": {
-                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the new one is done, and resume from the last offset after a reconnect without sending the partial text twice"
+                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the…"
                         },
                         "ffMUm": {
                           "content": "#87"
@@ -15815,10 +15815,10 @@
                           "content": "zenith"
                         },
                         "lfqO6": {
-                          "width": "fill_container"
+                          "width": "fit_content"
                         },
                         "ThKc5": {
-                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the new one is done, and resume from the last offset after a reconnect without sending the partial text twice"
+                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the…"
                         },
                         "ffMUm": {
                           "content": "#87"
@@ -21582,10 +21582,10 @@
                           "content": "zenith"
                         },
                         "lfqO6": {
-                          "width": "fill_container"
+                          "width": "fit_content"
                         },
                         "ThKc5": {
-                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the new one is done, and resume from the last offset after a reconnect without sending the partial text twice"
+                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the…"
                         },
                         "ffMUm": {
                           "content": "#87"
@@ -22036,10 +22036,10 @@
                           "content": "zenith"
                         },
                         "lfqO6": {
-                          "width": "fill_container"
+                          "width": "fit_content"
                         },
                         "ThKc5": {
-                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the new one is done, and resume from the last offset after a reconnect without sending the partial text twice"
+                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the…"
                         },
                         "ffMUm": {
                           "content": "#87"
@@ -22485,10 +22485,10 @@
                           "content": "zenith"
                         },
                         "lfqO6": {
-                          "width": "fill_container"
+                          "width": "fit_content"
                         },
                         "ThKc5": {
-                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the new one is done, and resume from the last offset after a reconnect without sending the partial text twice"
+                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the…"
                         },
                         "ffMUm": {
                           "content": "#87"
@@ -22923,10 +22923,10 @@
                           "content": "zenith"
                         },
                         "lfqO6": {
-                          "width": "fill_container"
+                          "width": "fit_content"
                         },
                         "ThKc5": {
-                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the new one is done, and resume from the last offset after a reconnect without sending the partial text twice"
+                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the…"
                         },
                         "ffMUm": {
                           "content": "#87"
