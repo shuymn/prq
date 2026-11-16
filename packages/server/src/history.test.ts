@@ -313,6 +313,58 @@ describe("clients only add", () => {
   });
 });
 
+// The cache (this.messages) as after a restart: the SDK's own hydration, under the given budget. Returns the cached IDs.
+async function hydrateRecent(stub: DurableObjectStub<PrSession>, budget: number): Promise<string[]> {
+  return runInDurableObject(stub, async (instance) => {
+    instance.hydrationByteBudget = budget;
+    await Reflect.get(instance, "_hydrateMessages").call(instance);
+    return instance.messages.map((message) => message.id);
+  });
+}
+
+// A question big enough that a 1-byte budget holds only the most recent one.
+function long(id: string): UIMessage {
+  return question(id, id.repeat(512));
+}
+
+describe("history outside the cache", () => {
+  it("keeps a stored message the cache lacks, and sends the whole stored history", async () => {
+    captureLogs();
+    const { stub, path, token, open } = await session();
+    const sender = await open();
+    const observer = await open();
+    await sender.chat([long("q1"), long("q2")]);
+    expect(await hydrateRecent(stub, 1)).toEqual(["q2"]);
+    // The budget back at its default: the stored history fits it, only the cache is partial.
+    await runInDurableObject(stub, (instance) => {
+      instance.hydrationByteBudget = 32 * 1024 * 1024;
+    });
+    const from = sender.frames.length;
+
+    await sender.chat([question("q1", "edited"), long("q2"), Q3]);
+
+    const stored = await storedMessages(path, token);
+    expect(stored).toEqual([long("q1"), long("q2"), Q3]);
+    expect(sender.chatLists(from).at(-1)).toEqual(stored);
+    expect(observer.chatLists().at(-1)).toEqual(stored);
+  });
+
+  it("sends no list when the stored history is over the budget, rather than its most recent part", async () => {
+    const logs = captureLogs();
+    const { stub, path, token, open } = await session();
+    const sender = await open();
+    await sender.chat([long("q1"), long("q2")]);
+    expect(await hydrateRecent(stub, 1)).toEqual(["q2"]);
+    const from = sender.frames.length;
+
+    await sender.chat([long("q1"), long("q2"), Q3]);
+
+    expect(await storedMessages(path, token)).toEqual([long("q1"), long("q2"), Q3]);
+    expect(sender.chatLists(from)).toEqual([]);
+    expect(logs.map((log) => log.entry["event"])).toContain("prq.chat.history_not_sent");
+  });
+});
+
 it("persistence is insert-only", async () => {
   captureLogs();
   const { stub, path, token, open } = await session();

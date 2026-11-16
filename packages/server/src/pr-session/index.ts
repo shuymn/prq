@@ -53,9 +53,11 @@ export class PrSession extends AIChatAgent<Env> {
     return undefined;
   }
 
-  // Every history write the SDK makes comes here. A chat request passes the client's whole list (asking for stored
-  // messages it lacks to be deleted); only messages with new IDs are added, after the stored ones, and the saved list
-  // goes to every connection, the sender included, since the SDK has already relayed the client's list to the others.
+  // The history writes of a chat request and of the server come here (the SDK's streaming paths write around it, and
+  // stay unused while onChatMessage returns undefined). A chat request passes the client's whole list (asking for
+  // stored messages it lacks to be deleted); only messages with new IDs are added, after the stored ones, and the
+  // stored history then goes to every connection, the sender included, since the SDK has already relayed the
+  // client's list to the others.
   override persistMessages(messages: UIMessage[]): Promise<void> {
     return this.#writes.run(() => this.#insertMessages(messages));
   }
@@ -64,12 +66,28 @@ export class PrSession extends AIChatAgent<Env> {
   // requested.
   async #insertMessages(messages: UIMessage[]): Promise<void> {
     const cached = new Set(this.messages.map((message) => message.id));
-    // this.messages holds the most recent history only; an ID outside it is looked up in storage.
+    // this.messages holds the most recent history only (hydrationByteBudget); an ID outside it is looked up in storage.
     const session = this.sessions.session();
     const added = await addedMessages(
       messages,
       async (id) => cached.has(id) || (await session.getMessage(id)) !== null,
     );
-    await super.persistMessages([...this.messages, ...added]);
+    // The SDK would send this.messages to the connections; every one is left out, and #sendHistory sends the stored
+    // history instead.
+    const everyone = Array.from(this.getConnections(), (connection) => connection.id);
+    await super.persistMessages([...this.messages, ...added], everyone);
+    await this.#sendHistory();
+  }
+
+  // Sends the stored history to every connection, as the list a client replaces its own with. It is read within the
+  // budget the SDK keeps history in memory under; a longer history is not sent, since its most recent part would
+  // replace the whole list a client loaded through get-messages.
+  async #sendHistory(): Promise<void> {
+    const history = await this.sessions.session().getRecentHistory(this.hydrationByteBudget);
+    if (history.truncated) {
+      log("prq.chat.history_not_sent", { pr: this.name, bytes: history.totalContentBytes }, "warn");
+      return;
+    }
+    this.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history.messages }));
   }
 }
