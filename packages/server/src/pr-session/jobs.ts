@@ -53,10 +53,25 @@ export function allJobs(sql: SqlStorage): JobRow[] {
   return sql.exec<JobRow>("SELECT * FROM prq_jobs ORDER BY seq").toArray();
 }
 
-export function hasAnswerJob(sql: SqlStorage, questionId: string): boolean {
-  return (
-    sql.exec("SELECT 1 FROM prq_jobs WHERE kind = 'answer' AND target = ? LIMIT 1", questionId).toArray().length > 0
-  );
+// Intake rows: the write that stores questions writes their rows first, so a stored question has its job or its row.
+export function addIntake(sql: SqlStorage, questionIds: readonly string[]): void {
+  for (const id of questionIds) {
+    sql.exec("INSERT INTO prq_intake (question_id) VALUES (?) ON CONFLICT (question_id) DO NOTHING", id);
+  }
+}
+
+// The questions with an intake row, in the order they were written.
+export function intakeIds(sql: SqlStorage): string[] {
+  return sql
+    .exec<{ question_id: string }>("SELECT question_id FROM prq_intake ORDER BY seq")
+    .toArray()
+    .map((row) => row.question_id);
+}
+
+export function removeIntake(sql: SqlStorage, questionIds: readonly string[]): void {
+  for (const id of questionIds) {
+    sql.exec("DELETE FROM prq_intake WHERE question_id = ?", id);
+  }
 }
 
 // A pending answer job per question that has none, in the given order.
