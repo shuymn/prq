@@ -1,6 +1,7 @@
 // Sessions, the Hub's pool and queue, and holds inside a Durable Object, for the job tests. Storage is shared by the
 // tests of one file (and not across files), so each test takes a pull request of its own and sets the pool it needs.
 
+import type { AIChatAgent } from "@cloudflare/ai-chat";
 import type { ClaimResponse, Owner, PrRef } from "@prq/protocol";
 import type { UIMessage } from "ai";
 import { runInDurableObject } from "cloudflare:test";
@@ -169,6 +170,25 @@ export async function gate(stub: DurableObjectStub): Promise<Gate> {
     isReached: () => waiting > 0,
     open: () => runInDurableObject(stub, () => open?.()),
   };
+}
+
+// Holds the SDK's insert of the session's next write, before it stores anything or after it has stored the messages.
+export async function holdInsert(stub: DurableObjectStub<PrSession>, where: "before" | "after") {
+  const held = await gate(stub);
+  await runInDurableObject(stub, (instance) => {
+    const base: AIChatAgent<Env> = Object.getPrototypeOf(Object.getPrototypeOf(instance));
+    const save = base.persistMessages.bind(instance);
+    vi.spyOn(base, "persistMessages").mockImplementationOnce(async (...args) => {
+      if (where === "after") {
+        await save(...args);
+      }
+      await held.wait();
+      if (where === "before") {
+        await save(...args);
+      }
+    });
+  });
+  return held;
 }
 
 // A promise's state, without waiting for it.
