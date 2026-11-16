@@ -1,5 +1,6 @@
 import { type ErrorCode, type ErrorResponse, PRQ_VERSION_HEADER } from "@prq/protocol";
 import type { Context, ErrorHandler, MiddlewareHandler, NotFoundHandler } from "hono";
+import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import * as v from "valibot";
 
@@ -63,8 +64,12 @@ export const prqVersion: MiddlewareHandler = async (c, next) => {
 
 export const notFound: NotFoundHandler = (c) => errorResponse(c, "not_found");
 
-// Logs the error's name only: a message can carry a configuration value or request content.
+// Logs the error's name only: a message can carry a configuration value or request content. Hono's validator throws a
+// 400 HTTPException for a body that is not JSON.
 export const onError: ErrorHandler = (error, c) => {
+  if (error instanceof HTTPException && error.status === 400) {
+    return errorResponse(c, "bad_request", "the body is not JSON");
+  }
   log("prq.request.failed", { method: c.req.method, path: c.req.path, error: error.name }, "error");
   return errorResponse(c, "internal");
 };

@@ -206,8 +206,16 @@ UI, webhook and CLI input all enter through PrSession.
   under there: a late claim changes nothing once a newer one has claimed, and the `claimId` an agent received stays its
   claim. The session keeps each agent's newest claiming attempt apart from the jobs and advances it in the claim's
   transaction, so a retry, which clears a job's claim, does not lower it.
-- Each time `wait` reconnects it re-checks for pending jobs and returns at once if there are any. An authentication
-  failure (401 or 403) is told apart from an ordinary timeout and ends with an error, so the AI notices it.
+- `wait` checks the queued sessions when it starts and returns `ready` at once if the agent has its own claimed job or
+  a waiting one. Otherwise it sleeps until a `notify` wakes it and checks again, and returns `timeout` after
+  `min(timeoutMs, 25 s)`. A notify that lands during a check advances the Hub's counter; the wait reads the counter
+  before each check and compares it after, so it checks again rather than sleep past that notify. While an agent ID is
+  in `wait` it counts as present, and the start and the end of a `wait` count as contacts, as `claim` and `submit` do.
+- The Worker passes `wait` to the Hub as an HTTP request rather than an RPC call: the request's signal fires when the
+  agent's request goes away (the `enable_request_signal` compatibility flag), and the Hub then ends that wait at once.
+  An RPC callee never learns that its caller has gone. The waits in flight live only in the Hub's memory.
+- An authentication failure (401 or 403) during `wait` is told apart from an ordinary timeout and ends with an error, so
+  the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.
 - The local AI's procedure (a skill or an `AGENTS.md`) is one round of: `wait` → `claim` → work → `submit` → start
   `wait` again in the background. The last step is mandatory, because it is what wakes the AI for the next job.
@@ -490,7 +498,7 @@ prq/
 │  │   │   ├─ webhook.ts         GitHub webhook (signature, own PRs only)
 │  │   │   ├─ cli-routes.ts      /cli/* (wait / claim / context / submit)
 │  │   │   ├─ api-routes.ts      /api/* (job retry; the PR list later)
-│  │   │   ├─ hub.ts             Hub (ledger, pool, notifications)
+│  │   │   ├─ hub.ts             Hub (ledger, pool, notifications, wait)
 │  │   │   ├─ pr-session/        PrSession (intake, jobs, context assembly, tools)
 │  │   │   │   ├─ index.ts       the class: intake, jobs, the wake and the outbox, its chat hooks
 │  │   │   │   ├─ history.ts     append-only history: refused client frames, insert-only writes

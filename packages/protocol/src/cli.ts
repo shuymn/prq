@@ -1,6 +1,13 @@
 import * as v from "valibot";
 
-import { MessageId, PrRef, Sha } from "./pr.ts";
+import { AgentId, MessageId, PrRef, Sha } from "./pr.ts";
+
+// The longest answer a submit carries, in UTF-16 code units. Stored as JSON, each unit takes at most 6 bytes (a
+// `\u00XX` escape), so an answer stays under the Durable Object SQLite value limit (8 MB); it also bounds the history
+// frames that carry it.
+export const MAX_ANSWER_CHARS = 1_000_000;
+
+const Uuid = v.pipe(v.string(), v.uuid());
 
 // What a job produces: the analysis of a head, or the answer to a question.
 export const JobTarget = v.variant("kind", [
@@ -13,7 +20,7 @@ export type JobTarget = v.InferOutput<typeof JobTarget>;
 // analysis's head; for an answer the head of the latest completed analysis, or null when there is none. question is
 // the question's text, for an answer.
 export const Job = v.object({
-  jobId: v.pipe(v.string(), v.uuid()),
+  jobId: Uuid,
   pr: PrRef,
   target: JobTarget,
   workspaceSha: v.nullable(Sha),
@@ -21,13 +28,39 @@ export const Job = v.object({
 });
 export type Job = v.InferOutput<typeof Job>;
 
+// /cli/wait: answers ready as soon as the agent may have work (its own claimed job, or a pending one), or timeout after
+// timeoutMs, which the server caps. It never takes a job; claim does.
+export const WaitRequest = v.object({
+  agentId: AgentId,
+  timeoutMs: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(0))),
+});
+export type WaitRequest = v.InferOutput<typeof WaitRequest>;
+
+export const WaitResponse = v.object({ status: v.picklist(["ready", "timeout"]) });
+export type WaitResponse = v.InferOutput<typeof WaitResponse>;
+
+// /cli/claim: the agent's own claimed job first (resumed), then the next pending one.
+export const ClaimRequest = v.object({ agentId: AgentId });
+export type ClaimRequest = v.InferOutput<typeof ClaimRequest>;
+
 // The answer to a claim: a job with the claim's ID, or none. resumed is true when the job was the agent's own claimed
 // job, now under a new claimId.
 export const ClaimResponse = v.union([
-  v.object({ job: Job, claimId: v.pipe(v.string(), v.uuid()), resumed: v.boolean() }),
+  v.object({ job: Job, claimId: Uuid, resumed: v.boolean() }),
   v.object({ job: v.null() }),
 ]);
 export type ClaimResponse = v.InferOutput<typeof ClaimResponse>;
+
+// /cli/submit: the answer to a claimed job, under the claim that holds it. pr is accepted in any case.
+export const SubmitRequest = v.object({
+  agentId: AgentId,
+  pr: PrRef,
+  jobId: Uuid,
+  claimId: Uuid,
+  target: JobTarget,
+  text: v.pipe(v.string(), v.minLength(1), v.maxLength(MAX_ANSWER_CHARS)),
+});
+export type SubmitRequest = v.InferOutput<typeof SubmitRequest>;
 
 // The answer to an accepted submit: accepted when it added the message, duplicate when the same claim had already
 // submitted it and nothing was added.

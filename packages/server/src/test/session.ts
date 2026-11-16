@@ -254,9 +254,10 @@ export type HubSeams = {
   sessionCallMs(): number;
   peekSession(session: string, agentId: string): Promise<Peek>;
   claimSession(session: string, agentId: string, mode: "resume" | "fresh", attempt: number): Promise<unknown>;
+  waitMaxMs(): number;
 };
 
-const HUB_SEAMS = ["sessionStub", "sessionCallMs", "peekSession", "claimSession"] as const;
+const HUB_SEAMS = ["sessionStub", "sessionCallMs", "peekSession", "claimSession", "waitMaxMs"] as const;
 
 function hasHubSeams(instance: object): instance is HubSeams {
   return HUB_SEAMS.every((name) => typeof Reflect.get(instance, name) === "function");

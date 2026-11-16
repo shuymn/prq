@@ -4,8 +4,9 @@
   "main": "src/index.ts",
   // No later than the workerd that @cloudflare/vitest-plugin bundles.
   "compatibility_date": "2026-11-10",
-  // The Agents SDK needs the Node.js APIs.
-  "compatibility_flags": ["nodejs_compat"],
+  // The Agents SDK needs the Node.js APIs. enable_request_signal (the default from 2026-11-17, later than the date
+  // above) fires an incoming request's signal when its client goes away: the Hub ends a wait whose agent left with it.
+  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
   "durable_objects": {
     "bindings": [
       { "name": "Hub", "class_name": "Hub" },
