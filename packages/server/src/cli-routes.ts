@@ -1,37 +1,67 @@
 import { vValidator } from "@hono/valibot-validator";
-import { ClaimRequest, SubmitRequest, WaitRequest, WaitResponse } from "@prq/protocol";
+import {
+  ClaimRequest,
+  type ClaimResponse,
+  type ErrorResponse,
+  SubmitRequest,
+  type SubmitResponse,
+  WaitRequest,
+  WaitResponse,
+} from "@prq/protocol";
 import { Hono } from "hono";
 import * as v from "valibot";
 
-import { errorResponse, invalidRequest } from "./http.ts";
+import { type CallBound, errorResponse, invalidRequest, ROUTE_CALL_MS } from "./http.ts";
+import { waitBoundMs } from "./hub.ts";
 import { hubStub, prSessionStub } from "./names.ts";
 
-// /cli/*: what a local agent calls (docs/design.md, Notification and wait; Owner and jobs).
-export const cliRoutes = new Hono<{ Bindings: Env }>()
-  // Passed to the Hub as a request carrying this request's signal, so the wait ends when the agent goes away.
-  .post("/wait", vValidator("json", WaitRequest, invalidRequest), async (c) => {
-    const hub = await hubStub(c.env);
-    const res = await hub.fetch(
-      new Request(c.req.url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(c.req.valid("json")),
-        signal: c.req.raw.signal,
-      }),
-    );
-    if (!res.ok) {
-      throw new Error(`the Hub's wait answered ${res.status}`);
-    }
-    return c.json(v.parse(WaitResponse, await res.json()));
-  })
-  .post("/claim", vValidator("json", ClaimRequest, invalidRequest), async (c) => {
-    const hub = await hubStub(c.env);
-    return c.json(await hub.claim(c.req.valid("json").agentId));
-  })
-  // A submit is a contact from the agent, whatever the session answers.
-  .post("/submit", vValidator("json", SubmitRequest, invalidRequest), async (c) => {
-    const { pr, ...submission } = c.req.valid("json");
-    await (await hubStub(c.env)).touch(submission.agentId);
-    const result = await (await prSessionStub(c.env, pr)).submit(submission);
-    return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
-  });
+// /cli/*: what a local agent calls (docs/design.md, Notification and wait; Owner and jobs). Each call to a Durable
+// Object, its start included, is bounded; when the bound passes the route answers 503 and the call keeps running.
+export function cliRoutes(bound: CallBound) {
+  return (
+    new Hono<{ Bindings: Env }>()
+      // Passed to the Hub as a request, whose signal ends the wait there: this request's when the agent goes away, or
+      // the route's own when it stops waiting. The Hub answers within the wait's bound; the route allows ROUTE_CALL_MS
+      // on top of it for the Hub's start.
+      .post("/wait", vValidator("json", WaitRequest, invalidRequest), async (c) => {
+        const body = c.req.valid("json");
+        const stop = new AbortController();
+        const request = new Request(c.req.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: AbortSignal.any([c.req.raw.signal, stop.signal]),
+        });
+        const call = hubStub(c.env).then((hub) => hub.fetch(request));
+        let res: Response;
+        try {
+          res = await bound(call, waitBoundMs(body.timeoutMs) + ROUTE_CALL_MS, "the Hub's wait");
+        } catch (error) {
+          stop.abort();
+          throw error;
+        }
+        if (!res.ok) {
+          throw new Error(`the Hub's wait answered ${res.status}`);
+        }
+        return c.json(v.parse(WaitResponse, await res.json()));
+      })
+      // A claim that lands after the route stopped waiting leaves the job claimed by the agent; its next claim resumes
+      // it under a new claimId.
+      .post("/claim", vValidator("json", ClaimRequest, invalidRequest), async (c) => {
+        const { agentId } = c.req.valid("json");
+        const call = (async (): Promise<ClaimResponse> => (await hubStub(c.env)).claim(agentId))();
+        return c.json(await bound(call, ROUTE_CALL_MS, "the Hub's claim"));
+      })
+      // A submit is a contact from the agent, whatever the session answers. One that lands after the route stopped
+      // waiting stores the answer once; the agent's resend gets duplicate.
+      .post("/submit", vValidator("json", SubmitRequest, invalidRequest), async (c) => {
+        const { pr, ...submission } = c.req.valid("json");
+        const call = (async (): Promise<SubmitResponse | ErrorResponse> => {
+          await (await hubStub(c.env)).touch(submission.agentId);
+          return (await prSessionStub(c.env, pr)).submit(submission);
+        })();
+        const result = await bound(call, ROUTE_CALL_MS, "the submit");
+        return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
+      })
+  );
+}

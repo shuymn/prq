@@ -214,6 +214,13 @@ UI, webhook and CLI input all enter through PrSession.
 - The Worker passes `wait` to the Hub as an HTTP request rather than an RPC call: the request's signal fires when the
   agent's request goes away (the `enable_request_signal` compatibility flag), and the Hub then ends that wait at once.
   An RPC callee never learns that its caller has gone. The waits in flight live only in the Hub's memory.
+- Each route bounds its calls to the Hub and the sessions as a whole, their start included: 30 s, and for `wait` its own
+  bound plus 30 s. When the bound passes, the route answers 503 `unavailable`, which `prq` and the UI take as a reason
+  to try again, and the call keeps running. What it does when it lands is safe: a submit stores its answer once, and
+  the agent's resend gets `duplicate`; a claim leaves the job claimed by the agent, whose next claim resumes it under a
+  new `claimId`; a retry applies if the job is still claimed or failed when it runs, and a second retry then gets 409
+  `not_retryable`, so the UI reads the job's state from the session view before retrying; a `wait` is aborted, which
+  ends it in the Hub.
 - An authentication failure (401 or 403) during `wait` is told apart from an ordinary timeout and ends with an error, so
   the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.
@@ -484,7 +491,8 @@ prq/
 │  │       └─ views.ts           what the UI reads from the server (the version message, the session view, the retry answer)
 │  ├─ server/              @prq/server: the Worker (Hono + Agents SDK) and the UI
 │  │   ├─ src/
-│  │   │   ├─ index.ts           entry (Hono, routeAgentRequest)
+│  │   │   ├─ index.ts           entry: the app and the Durable Object classes
+│  │   │   ├─ app.ts             the routes and their middleware, with the bound on their calls to Durable Objects
 │  │   │   ├─ env.d.ts
 │  │   │   ├─ config.ts          the secrets, checked once per isolate (fail closed)
 │  │   │   ├─ access.ts          Access JWT verification (jose)

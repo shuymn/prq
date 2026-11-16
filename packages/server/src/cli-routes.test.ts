@@ -4,6 +4,7 @@ import { runInDurableObject } from "cloudflare:test";
 import * as v from "valibot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ROUTE_CALL_MS } from "./http.ts";
 import { WAIT_MAX_MS } from "./hub.ts";
 import app from "./index.ts";
 import {
@@ -21,15 +22,30 @@ import {
   accepted,
   claimOver,
   controlWaitTimers,
+  fetchBounded,
+  heldBound,
   localSession,
   post,
+  postRequest,
   retryOver,
   submitOver,
   waitOver,
   waitStatus,
   watchChecks,
 } from "./test/cli.ts";
-import { clearQueue, holdInsert, hub, prSessionSeams, type Session, setPool, tracked, within } from "./test/session.ts";
+import {
+  clearQueue,
+  gate,
+  holdInsert,
+  hub,
+  hubSeams,
+  prSessionSeams,
+  type Session,
+  setPool,
+  submission,
+  tracked,
+  within,
+} from "./test/session.ts";
 import { SERVER_VERSION } from "./version.ts";
 
 const sockets: AgentSocket[] = [];
@@ -384,5 +400,87 @@ describe("contacts", () => {
     const stale = { ...claim, claimId: crypto.randomUUID() };
     expect((await submitOver(session.token, session.ref, stale, "laptop")).status).toBe(409);
     expect(await (await hub()).isLocalPresent()).toBe(true);
+  });
+});
+
+describe("route time limits", () => {
+  it("answers 503 when the Hub's claim does not answer in time; the late claim is the agent's to resume", async () => {
+    captureLogs();
+    const session = await localSession("cli", sockets, Q1);
+    // The Hub's first call into the session (its resume pass) is held.
+    const held = await gate(await hub());
+    await runInDurableObject(await hub(), (instance) => {
+      const seams = hubSeams(instance);
+      const claim = seams.claimSession.bind(instance);
+      vi.spyOn(seams, "claimSession").mockImplementationOnce(async (...args) => {
+        await held.wait();
+        return claim(...args);
+      });
+    });
+    const limit = heldBound();
+    const res = tracked(fetchBounded(limit.bound, postRequest("/cli/claim", session.token, { agentId: "laptop" })));
+    await held.reached();
+    // A sentinel call to the Hub goes through while the claim is held there.
+    expect(await (await hub()).isLocalPresent()).toBe(true);
+    expect(res.settled()).toBe(false);
+
+    limit.expire();
+    expect(await failure(within(res.promise, 3000))).toEqual(failed(503, "unavailable"));
+    expect(limit.bounds).toEqual([{ ms: ROUTE_CALL_MS, what: "the Hub's claim" }]);
+    await held.open();
+    await vi.waitFor(async () => expect((await session.stub.view()).jobs[0]?.state).toBe("claimed"), { timeout: 3000 });
+    expect(await claimOver(session.token, "laptop")).toMatchObject({ resumed: true });
+  });
+
+  it("answers 503 when a submit does not answer in time; the late submit stores the answer once", async () => {
+    captureLogs();
+    const session = await localSession("cli", sockets, Q1);
+    const claim = holding(await claimOver(session.token, "laptop"));
+    const held = await holdInsert(session.stub, "before");
+    const limit = heldBound();
+    const body = { ...submission(claim, "laptop"), pr: session.ref };
+    const res = tracked(fetchBounded(limit.bound, postRequest("/cli/submit", session.token, body)));
+    await held.reached();
+    // A sentinel read of the session goes through while the submit is held in its append.
+    expect((await session.stub.view()).jobs.map((job) => job.state)).toEqual(["running"]);
+    expect(res.settled()).toBe(false);
+
+    limit.expire();
+    expect(await failure(within(res.promise, 3000))).toEqual(failed(503, "unavailable"));
+    expect(limit.bounds).toEqual([{ ms: ROUTE_CALL_MS, what: "the submit" }]);
+    await held.open();
+    // The agent sends it again: it waits for the late submit and gets its result.
+    expect(await accepted(submitOver(session.token, session.ref, claim, "laptop"))).toEqual({
+      status: "duplicate",
+      messageId: `answer-${claim.job.jobId}`,
+    });
+    expect(await answers(session)).toHaveLength(1);
+  });
+
+  it("answers 503 when the Hub's wait does not answer in time, and ends that wait in the Hub", async () => {
+    captureLogs();
+    const token = await hostToken();
+    const held = await gate(await hub());
+    let aborted = false;
+    await runInDurableObject(await hub(), (instance) => {
+      vi.spyOn(instance, "onRequest").mockImplementationOnce(async (hubRequest) => {
+        hubRequest.signal.addEventListener("abort", () => {
+          aborted = true;
+        });
+        await held.wait();
+        return Response.json({ status: "timeout" });
+      });
+    });
+    const limit = heldBound();
+    const req = postRequest("/cli/wait", token, { agentId: "laptop", timeoutMs: 1000 });
+    const res = tracked(fetchBounded(limit.bound, req));
+    await held.reached();
+    expect(res.settled()).toBe(false);
+
+    limit.expire();
+    expect(await failure(within(res.promise, 3000))).toEqual(failed(503, "unavailable"));
+    expect(limit.bounds).toEqual([{ ms: 1000 + ROUTE_CALL_MS, what: "the Hub's wait" }]);
+    await vi.waitFor(() => expect(aborted).toBe(true), { timeout: 3000 });
+    await held.open();
   });
 });

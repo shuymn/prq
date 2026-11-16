@@ -17,6 +17,11 @@ const SESSION_CALL_MS = 10_000;
 // The longest a wait lasts; the agent then waits again.
 export const WAIT_MAX_MS = 25_000;
 
+// How long a wait asked for timeoutMs lasts at most.
+export function waitBoundMs(timeoutMs: number | undefined): number {
+  return Math.min(timeoutMs ?? WAIT_MAX_MS, WAIT_MAX_MS);
+}
+
 type Notification = { session: string; gen: number };
 
 // The one Hub (HUB_NAME): the pool of local agents and the queue of sessions that may have work for them. It holds no
@@ -138,7 +143,7 @@ export class Hub extends Agent<Env> {
   // check changes the Hub's counter, which the wait reads before the check and compares after it, so it checks again
   // rather than sleep past the notify.
   async #wait(agentId: string, timeoutMs: number | undefined, signal: AbortSignal): Promise<WaitResponse> {
-    const waitMs = Math.min(timeoutMs ?? WAIT_MAX_MS, WAIT_MAX_MS);
+    const waitMs = waitBoundMs(timeoutMs);
     const end = waitEnd(signal, (ended) => this.waitTimer(waitMs, ended));
     const waiter = { wake: () => {} };
     this.#waiters.add(waiter);

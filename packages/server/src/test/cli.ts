@@ -4,12 +4,16 @@
 import { ClaimResponse, type PrRef, SubmitResponse, WaitResponse } from "@prq/protocol";
 import type { UIMessage } from "ai";
 import { runInDurableObject } from "cloudflare:test";
-import { exports } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import * as v from "valibot";
 import { expect, vi } from "vitest";
 
+import { createApp } from "../app.ts";
+import type { CallBound } from "../http.ts";
+import { WaitTimeout } from "../wait.ts";
 import { request } from "./access.ts";
 import type { AgentSocket } from "./chat.ts";
+import { latch } from "./latch.ts";
 import { gate, hub, hubSeams, newSession, setPool, submission } from "./session.ts";
 
 // A local session (the agent "laptop" present) with the given questions asked over a chat connection.
@@ -23,16 +27,19 @@ export async function localSession(repo: string, sockets: AgentSocket[], ...ques
   return { ...session, client };
 }
 
-// A JSON POST through the Worker; a string body is sent as it is.
+// A JSON POST; a string body is sent as it is.
+export function postRequest(path: string, token: string | undefined, body: unknown, signal?: AbortSignal): Request {
+  return request(path, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: typeof body === "string" ? body : JSON.stringify(body),
+    signal: signal ?? null,
+  });
+}
+
+// A JSON POST through the Worker.
 export function post(path: string, token: string | undefined, body: unknown, signal?: AbortSignal): Promise<Response> {
-  return exports.default.fetch(
-    request(path, token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: typeof body === "string" ? body : JSON.stringify(body),
-      signal: signal ?? null,
-    }),
-  );
+  return exports.default.fetch(postRequest(path, token, body, signal));
 }
 
 export function waitOver(token: string, agentId: string, timeoutMs?: number, signal?: AbortSignal): Promise<Response> {
@@ -61,8 +68,12 @@ export async function accepted(response: Promise<Response>): Promise<SubmitRespo
   return v.parse(SubmitResponse, await res.json());
 }
 
+export function retryPath(pr: PrRef, jobId: string): string {
+  return `/api/pr/${pr.owner}/${pr.repo}/${pr.number}/jobs/${jobId}/retry`;
+}
+
 export function retryOver(token: string, pr: PrRef, jobId: string): Promise<Response> {
-  return post(`/api/pr/${pr.owner}/${pr.repo}/${pr.number}/jobs/${jobId}/retry`, token, {});
+  return post(retryPath(pr, jobId), token, {});
 }
 
 // Watches the checks the Hub's waits make (hasWork, which a wait calls on the instance): counts the ones that have
@@ -118,4 +129,24 @@ export async function controlWaitTimers() {
     // Ends the latest wait as its bound passing would.
     expire: () => runInDurableObject(stub, () => timers.at(-1)?.end()),
   };
+}
+
+// A bound for the routes' calls (createApp) that the test ends by hand: it records each call's bound, and once
+// expire() is called every call still pending fails with a WaitTimeout.
+export function heldBound() {
+  const bounds: { ms: number; what: string }[] = [];
+  const expiry = latch();
+  const bound: CallBound = (call, ms, what) => {
+    bounds.push({ ms, what });
+    const expired = expiry.promise.then((): never => {
+      throw new WaitTimeout(`${what} expired`);
+    });
+    return Promise.race([Promise.resolve(call), expired]);
+  };
+  return { bound, bounds, expire: () => expiry.open() };
+}
+
+// A request through the Worker's routes with the given bound on their calls to Durable Objects.
+export async function fetchBounded(bound: CallBound, req: Request): Promise<Response> {
+  return createApp(bound).fetch(req, env);
 }

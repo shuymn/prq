@@ -1,13 +1,14 @@
 import { ErrorResponse } from "@prq/protocol";
-import { listDurableObjectIds } from "cloudflare:test";
+import { listDurableObjectIds, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import * as v from "valibot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { ROUTE_CALL_MS } from "./http.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
-import { localSession, post, retryOver } from "./test/cli.ts";
-import { claimIn, jobOf, sessionSql } from "./test/session.ts";
+import { fetchBounded, heldBound, localSession, post, postRequest, retryOver, retryPath } from "./test/cli.ts";
+import { claimIn, gate, jobOf, prSessionSeams, sessionSql, tracked, within } from "./test/session.ts";
 
 const sockets: AgentSocket[] = [];
 
@@ -23,7 +24,7 @@ async function outcome(response: Promise<Response>): Promise<{ status: number; b
   return { status: res.status, body: await res.json() };
 }
 
-async function errorOf(response: Promise<Response>): Promise<{ status: number; error: string }> {
+async function errorOf(response: Promise<Response> | Response): Promise<{ status: number; error: string }> {
   const res = await response;
   return { status: res.status, error: v.parse(ErrorResponse, await res.json()).error };
 }
@@ -91,5 +92,40 @@ describe("retry", () => {
       expect({ path, ...(await res) }).toEqual({ path, status: 400, error: "bad_request" });
     }
     expect(await sessionCount()).toBe(before);
+  });
+});
+
+describe("retry time limit", () => {
+  it("answers 503 when the session does not answer in time; the late retry still applies", async () => {
+    captureLogs();
+    const { stub, ref, token } = await localSession("api", sockets, question("q1"));
+    await claimIn(stub, "laptop", "fresh");
+    const job = await jobOf(stub, "q1");
+    // The retry's delivery to the Hub, after its change, is held.
+    const held = await gate(stub);
+    await runInDurableObject(stub, (instance) => {
+      const seams = prSessionSeams(instance);
+      const deliver = seams.deliver.bind(instance);
+      vi.spyOn(seams, "deliver").mockImplementationOnce(async () => {
+        await held.wait();
+        await deliver();
+      });
+    });
+    const limit = heldBound();
+    const req = postRequest(retryPath(ref, job.job_id), token, {});
+    const res = tracked(fetchBounded(limit.bound, req));
+    await held.reached();
+    // A sentinel read of the session goes through while the retry is held.
+    expect((await stub.view()).jobs.map((view) => view.state)).toEqual(["pending"]);
+    expect(res.settled()).toBe(false);
+
+    limit.expire();
+    const timedOut = await within(res.promise, 3000);
+    expect(timedOut.headers.get("Cache-Control")).toBe("no-store");
+    expect(await errorOf(timedOut)).toEqual({ status: 503, error: "unavailable" });
+    expect(limit.bounds).toEqual([{ ms: ROUTE_CALL_MS, what: "a session's retry" }]);
+    await held.open();
+    // The retry the route stopped waiting for has applied: a second retry is refused.
+    expect(await errorOf(retryOver(token, ref, job.job_id))).toEqual({ status: 409, error: "not_retryable" });
   });
 });
