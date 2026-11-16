@@ -67,10 +67,15 @@ UI:    React + Vite (Workers Static Assets), connected to PrSession with useAgen
 - **PrSession.** One `AIChatAgent` per pull request. It holds the conversation, the owner, the jobs, the model context
   and the analysis notes, and it is the only place that decides job state. The instance name is `owner~repo~n`:
   `routeAgentRequest` takes path segments as the name without percent-decoding, so `/` and `#` cannot be used, and `~`
-  is safe in URLs and cannot appear in a GitHub owner or repository name.
-- **Hub.** One `Agent` instance that holds the PR ledger for the list view, the pool (which agent IDs are present), the
-  notification queue for local agents, and the instructions (the two prompts and the skill registry). It does not hold
-  job state; it asks PrSession (`peek`, `claim`). Each ledger entry keeps what a list row shows (see
+  is safe in URLs and cannot appear in a GitHub owner or repository name. The name is canonical (`sessionName` in
+  `@prq/protocol`): owner and repository in lower case, since GitHub treats them case-insensitively, and the number
+  without leading zeros, so one pull request has one instance.
+- **Agents routes.** `/agents/*` reaches only the Hub named `hub` and PrSessions under a canonical name. Any other name
+  (a case variant, a leading zero, an extra segment, a percent-encoded `~`), a binding the Agents SDK does not know, and
+  a sub-agent path below an instance get 404 and create no instance. Only `names.ts` addresses a Durable Object.
+- **Hub.** One `Agent` instance, named `hub`, that holds the PR ledger for the list view, the pool (which agent IDs are
+  present), the notification queue for local agents, and the instructions (the two prompts and the skill registry). It
+  does not hold job state; it asks PrSession (`peek`, `claim`). Each ledger entry keeps what a list row shows (see
   [PR ledger](#pr-ledger)).
 - **prq CLI.** Runs on the host's machine, talks to the Worker over HTTP with a service token, and uses the host's own
   git and `gh`.
@@ -126,6 +131,13 @@ UI, webhook and CLI input all enter through PrSession.
 - When the server appends a message to the conversation (an analysis request, for example), it calls
   `waitUntilStable()` first and then `saveMessages` in its function form, which receives the latest history, and it
   never uses a stale `this.messages`.
+- The stored conversation is append-only: whatever a client sends, a stored message keeps its content and place and
+  none is removed. A chat request carries the client's whole list; PrSession adds only the messages whose IDs are not
+  stored, after the stored ones, and sends the saved list to every connection, the sender included. Every history
+  write goes through one queue, so each starts from the history the previous one left.
+- The client frames that would clear or rewrite stored messages (`cf_agent_chat_clear`, `cf_agent_chat_messages`,
+  `cf_agent_tool_result`, `cf_agent_tool_approval`) are refused and logged as `prq.chat.refused`. prq has no
+  client-side tools.
 - A local answer never replaces the whole conversation. PrSession checks the question's message ID against the latest
   history and appends one answer with `persistMessages`, which runs no turn and still reaches connected clients.
 - History keeps the order in which messages were saved: a question sent during a turn comes before that turn's answer,
@@ -158,9 +170,11 @@ CLI exit codes: 0 ready, 2 timeout, 3 authentication failure, 4 claim mismatch, 
   "prq v0.3.0 talks to a v0.4.0 server; update prq if a command fails"). It is a notice, not an error: stdout and the
   exit code stay the same. A response without the header (a failure before the Worker, such as at Access) is not
   compared. Setting `PRQ_VERSION_NOTICE=0` turns the notice off.
-- The web UI learns the server's version from a message the server sends on every WebSocket connection, since a browser
-  cannot read WebSocket response headers. It compares it with its own build version the same way and shows the reload
-  notice described in [Caching](#caching).
+- The web UI learns the server's version from a message the server sends on every WebSocket connection to the Hub and
+  to a PrSession, since a browser cannot read WebSocket response headers:
+  `{ "type": "prq:version", "version": "vX.Y.Z" }` (`ServerVersionMessage` in `@prq/protocol`). It follows the Agents
+  SDK's own frames, so the UI picks it out by its type. The UI compares it with its own build version the same way and
+  shows the reload notice described in [Caching](#caching).
 
 ### Presence
 
@@ -398,7 +412,9 @@ prq/
 │  │   └─ src/
 │  │       ├─ index.ts           re-exports
 │  │       ├─ version.ts         the Prq-Version header name
-│  │       └─ errors.ts          error codes and the error body
+│  │       ├─ errors.ts          error codes and the error body
+│  │       ├─ pr.ts              pull request references, the canonical session name, the Hub's name
+│  │       └─ views.ts           what the UI reads from the server (the version message)
 │  ├─ server/              @prq/server: the Worker (Hono + Agents SDK) and the UI
 │  │   ├─ src/
 │  │   │   ├─ index.ts           entry (Hono, routeAgentRequest)
@@ -408,11 +424,16 @@ prq/
 │  │   │   ├─ http.ts            no-store and Prq-Version headers, error bodies
 │  │   │   ├─ version.ts         the server version (packages/server/package.json)
 │  │   │   ├─ log.ts             log events
+│  │   │   ├─ names.ts           the only Durable Object stubs; which Agents routes are served
+│  │   │   ├─ agents.ts          /agents/* (routeAgentRequest behind the name check), the version message
+│  │   │   ├─ schema.ts          SQLite schema steps per Durable Object class
 │  │   │   ├─ webhook.ts         GitHub webhook (signature, own PRs only)
 │  │   │   ├─ cli-routes.ts      /cli/* (wait / claim / context / submit)
 │  │   │   ├─ api-routes.ts      /api/* (PR list and the like)
 │  │   │   ├─ hub.ts             Hub (ledger, pool, notifications)
 │  │   │   ├─ pr-session/        PrSession (intake, jobs, context assembly, tools)
+│  │   │   │   ├─ index.ts       the class and its chat hooks
+│  │   │   │   └─ history.ts     append-only history: the write queue, refused client frames
 │  │   │   ├─ github/            App token; attaching the token to outbound git traffic
 │  │   │   ├─ instructions/      prompts, skill registry, activate_skill / read_skill_resource
 │  │   │   ├─ workspace.ts       Sandbox
