@@ -14,9 +14,10 @@ const sources = import.meta.glob(["./**/*.ts", "!./**/*.test.ts", "!./**/*.d.ts"
   eager: true,
 });
 
-// What addresses a Durable Object by name or ID, or reaches for a namespace binding.
+// What addresses a Durable Object by name or ID, or reaches for a namespace binding, as a property (`env.Hub`) or by
+// its name in quotes (`env["Hub"]`, `Reflect.get(env, "Hub")`).
 const STUB_MAKERS =
-  /\b(?:getAgentByName|getServerByName|getByName|idFromName|idFromString|newUniqueId)\b|\benv\.(?:Hub|PrSession)\b/;
+  /\b(?:getAgentByName|getServerByName|getByName|idFromName|idFromString|newUniqueId)\b|\.\s*(?:Hub|PrSession)\b|["'`](?:Hub|PrSession)["'`]/;
 
 function matching(pattern: RegExp): string[] {
   return Object.entries(sources)
