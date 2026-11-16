@@ -136,12 +136,15 @@ UI, webhook and CLI input all enter through PrSession.
 - The stored conversation is append-only: whatever a client sends, a stored message keeps its content and place and
   none is removed. A client adds questions only: a chat request carries the client's whole list, and PrSession adds
   the user messages whose IDs are not stored, after the stored ones. A new answer or system message in a chat request
-  is dropped and logged as `prq.chat.refused`; answers come from the server. Every history write goes through one
-  queue, so each starts from the history the previous one left.
+  is dropped and logged as `prq.chat.refused`; answers come from the server. A chat request whose messages are not all
+  in the current `UIMessage` form is refused whole. Every history write goes through one queue, so each starts from
+  the history the previous one left.
 - After each write PrSession sends the stored history to every connection, the sender included, and a client replaces
-  its list with it. The history is read within the budget the Agents SDK keeps it in memory under
-  (`hydrationByteBudget`, 32 MiB). A longer history is not sent (`prq.chat.history_not_sent`): its most recent part
-  would replace the whole list a client loaded through `get-messages`.
+  its list with it. These are the only chat lists the server sends: the Agents SDK's relay of a client's list to the
+  other connections before the save is dropped. The history is read within the budget the SDK keeps it in memory
+  under (`hydrationByteBudget`, 32 MiB). A longer history goes as `{ "type": "prq:history-changed" }`
+  (`HistoryChangedMessage` in `@prq/protocol`) instead, since its most recent part would replace the whole list a
+  client has; the UI then reloads the history through `get-messages`, which streams all of it.
 - The client frames other than a chat request that write history (`cf_agent_chat_clear`, `cf_agent_chat_messages`,
   `cf_agent_tool_result`, `cf_agent_tool_approval`) are refused and logged as `prq.chat.refused`. prq has no
   client-side tools.
