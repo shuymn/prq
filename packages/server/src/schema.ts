@@ -142,6 +142,21 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
   // The claims whose stall the ledger has been told of: a claim past its deadline is published once, by claimAged or by
   // settle, whichever finds it first. Rows of claims no longer held are dropped with the next mark.
   "CREATE TABLE prq_stalls (claim_id TEXT PRIMARY KEY)",
+  // turn_id: the cloud turn a running job is bound to, NULL in every other state. A turn's end, and settle's restart,
+  // change the job only while it is still that turn's.
+  "ALTER TABLE prq_jobs ADD COLUMN turn_id TEXT",
+  // What each run of a cloud job used, summed over its starts, so a restart after a reset keeps the steps that
+  // finished: the starts, the model calls (steps) and their tokens, and the session's time of the run's first start.
+  `CREATE TABLE prq_job_usage (
+    job_id TEXT NOT NULL,
+    run INTEGER NOT NULL,
+    starts INTEGER NOT NULL DEFAULT 0,
+    steps INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER NOT NULL,
+    PRIMARY KEY (job_id, run))`,
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {

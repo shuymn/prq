@@ -247,7 +247,7 @@ async function store(stub: DurableObjectStub<PrSession>, messages: { id: string;
 async function allPages(
   body: Record<string, unknown>,
   token: string,
-  between?: () => Promise<void>,
+  between?: () => Promise<unknown>,
 ): Promise<ContextResponse[]> {
   const pages: ContextResponse[] = [];
   let cursor: string | null | undefined;

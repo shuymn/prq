@@ -196,9 +196,9 @@ describe("submit", () => {
     await runInDurableObject(stub, (instance) => {
       const seams = prSessionSeams(instance);
       const insert = seams.insertMessages.bind(instance);
-      vi.spyOn(seams, "insertMessages").mockImplementationOnce(async (messages) => {
+      vi.spyOn(seams, "insertMessages").mockImplementationOnce(async (...args) => {
         await held.wait();
-        return insert(messages);
+        return insert(...args);
       });
     });
     const one = tracked(stub.submit(submission(claim2, "agent-a", "first text")));
@@ -330,9 +330,9 @@ describe("submit against retry and resume", () => {
     await runInDurableObject(stub, (instance) => {
       const seams = prSessionSeams(instance);
       const insert = seams.insertMessages.bind(instance);
-      vi.spyOn(seams, "insertMessages").mockImplementationOnce(async (messages) => {
+      vi.spyOn(seams, "insertMessages").mockImplementationOnce(async (...args) => {
         await held.wait();
-        return insert(messages);
+        return insert(...args);
       });
     });
     const a = tracked(stub.submit(submission(claimA, "agent-a", "answer A")));
@@ -360,9 +360,9 @@ async function lostDuringSubmit(where: "after" | "before") {
   await runInDurableObject(stub, (instance) => {
     const seams = prSessionSeams(instance);
     const insert = seams.insertMessages.bind(instance);
-    vi.spyOn(seams, "insertMessages").mockImplementationOnce(async (messages) => {
+    vi.spyOn(seams, "insertMessages").mockImplementationOnce(async (...args) => {
       if (where === "after") {
-        await insert(messages);
+        await insert(...args);
       }
       await held.wait();
     });
@@ -484,7 +484,7 @@ describe("revision", () => {
         ["retry", () => retry(sql, jobId, row().rev, now)],
         ["fail", () => failPending(sql, "it broke", now)],
         ["retry a failure", () => retry(sql, jobId, row().rev, now)],
-        ["start in the cloud", () => startNext(sql, now)],
+        ["start in the cloud", () => startNext(sql, "turn-1", now)],
         [
           "done",
           () => {

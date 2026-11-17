@@ -204,9 +204,9 @@ describe("questions during an append", () => {
     await runInDurableObject(stub, (instance) => {
       const seams = prSessionSeams(instance);
       const insert = seams.insertMessages.bind(instance);
-      vi.spyOn(seams, "insertMessages").mockImplementationOnce(async (messages) => {
+      vi.spyOn(seams, "insertMessages").mockImplementationOnce(async (...args) => {
         await held.wait();
-        return insert(messages);
+        return insert(...args);
       });
     });
     const submit = tracked(stub.submit(submission(claim, "laptop")));

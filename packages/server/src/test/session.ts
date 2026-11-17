@@ -2,7 +2,15 @@
 // tests of one file (and not across files), so each test takes a pull request of its own and sets the pool it needs.
 
 import type { AIChatAgent } from "@cloudflare/ai-chat";
-import { type ClaimResponse, LedgerPage, type LedgerRow, type Owner, type PrRef, sessionName } from "@prq/protocol";
+import {
+  type ClaimResponse,
+  type Job,
+  LedgerPage,
+  type LedgerRow,
+  type Owner,
+  type PrRef,
+  sessionName,
+} from "@prq/protocol";
 import type { UIMessage } from "ai";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -12,9 +20,10 @@ import { expect, vi } from "vitest";
 import type { Hub } from "../hub.ts";
 import type { LedgerEntry } from "../ledger.ts";
 import { hubStub, prSessionStub } from "../names.ts";
-import type { CloudAgent } from "../pr-session/cloud.ts";
+import type { CloudAgent, Workspace } from "../pr-session/cloud.ts";
 import type { PrSession, Submission } from "../pr-session/index.ts";
 import type { JobRow, Peek } from "../pr-session/jobs.ts";
+import type { CloudModel } from "../pr-session/turn.ts";
 import { type AgentSocket, connect, hostToken } from "./chat.ts";
 import { latch } from "./latch.ts";
 
@@ -279,9 +288,11 @@ export type PrSessionSeams = {
   readPool(): Promise<boolean>;
   ownerOf(): Promise<Owner | null>;
   createJobs(): Promise<void>;
-  insertMessages(messages: UIMessage[]): Promise<void>;
+  insertMessages(messages: UIMessage[], adds: "questions" | "results"): Promise<void>;
   deliver(): Promise<void>;
   cloudAgent(): CloudAgent | undefined;
+  cloudModel(): CloudModel | undefined;
+  workspaceFor(job: Job): Workspace | null;
   // AIChatAgent's own.
   waitUntilStable(options?: { timeout?: number }): Promise<boolean>;
 };
@@ -293,6 +304,8 @@ const PR_SESSION_SEAMS = [
   "insertMessages",
   "deliver",
   "cloudAgent",
+  "cloudModel",
+  "workspaceFor",
   "waitUntilStable",
 ] as const;
 

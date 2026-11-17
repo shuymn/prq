@@ -28,6 +28,8 @@ export type JobRow = {
   run: number;
   // 1 from the statement that fails the job to the statement that completes it, through retries.
   unresolved_failure: 0 | 1;
+  // The cloud turn a running job is bound to.
+  turn_id: string | null;
 };
 
 export function jobTarget(row: JobRow): JobTarget {
@@ -452,17 +454,117 @@ export function failPending(sql: SqlStorage, failure: string, now: number): JobR
     .toSorted((a, b) => a.seq - b.seq);
 }
 
-// The next pending job → running, unless a job is running.
-export function startNext(sql: SqlStorage, now: number): JobRow | undefined {
-  return sql
+// The next pending job → running under a new turn, unless a job is running. Its workspace is fixed as a claim fixes
+// it, and its run's usage counts a start.
+export function startNext(sql: SqlStorage, turnId: string, now: number): JobRow | undefined {
+  const row = sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET rev = rev + 1, state = 'running', updated_at = ?
+      `UPDATE prq_jobs SET rev = rev + 1, state = 'running', turn_id = ?, workspace_sha = ${WORKSPACE_SHA},
+         updated_at = ?
        WHERE state = 'pending' AND job_id = (${NEXT_PENDING})
          AND NOT EXISTS (SELECT 1 FROM prq_jobs WHERE state = 'running')
        RETURNING *`,
+      turnId,
       now,
     )
     .toArray()[0];
+  if (row !== undefined) {
+    addStart(sql, row, now);
+  }
+  return row;
+}
+
+// A start of the job's current run; the first one also dates the run.
+function addStart(sql: SqlStorage, row: JobRow, now: number): void {
+  sql.exec(
+    `INSERT INTO prq_job_usage (job_id, run, starts, started_at) VALUES (?, ?, 1, ?)
+     ON CONFLICT (job_id, run) DO UPDATE SET starts = starts + 1`,
+    row.job_id,
+    row.run,
+    now,
+  );
+}
+
+// The running jobs, oldest first.
+export function runningJobs(sql: SqlStorage): JobRow[] {
+  return sql.exec<JobRow>("SELECT * FROM prq_jobs WHERE state = 'running' ORDER BY seq").toArray();
+}
+
+// A running job whose turn ended without a result → running under a new turn (a restart), counting a start. Only while
+// the job is still the ended turn's.
+export function restartTurn(sql: SqlStorage, row: JobRow, turnId: string, now: number): JobRow | undefined {
+  const restarted = sql
+    .exec<JobRow>(
+      `UPDATE prq_jobs SET rev = rev + 1, turn_id = ?, updated_at = ?
+       WHERE job_id = ? AND state = 'running' AND turn_id IS ? RETURNING *`,
+      turnId,
+      now,
+      row.job_id,
+      row.turn_id,
+    )
+    .toArray()[0];
+  if (restarted !== undefined) {
+    addStart(sql, restarted, now);
+  }
+  return restarted;
+}
+
+// How a running job's turn ended: its result stored as the message, or a failure with the reason.
+export type TurnEnd = { done: string } | { failed: string };
+
+// running → done (which resolves a failure the job had) or failed, with the turn cleared. Only while the job is still
+// the turn's: a turn whose job a restart or a retry has moved on changes nothing.
+export function endTurn(sql: SqlStorage, row: JobRow, end: TurnEnd, now: number): JobRow | undefined {
+  const done = `UPDATE prq_jobs SET rev = rev + 1, state = 'done', result_message_id = ?, unresolved_failure = 0,
+    turn_id = NULL, updated_at = ? WHERE job_id = ? AND state = 'running' AND turn_id IS ? RETURNING *`;
+  const failed = `UPDATE prq_jobs SET rev = rev + 1, state = 'failed', failure = ?, unresolved_failure = 1,
+    turn_id = NULL, updated_at = ? WHERE job_id = ? AND state = 'running' AND turn_id IS ? RETURNING *`;
+  return sql
+    .exec<JobRow>("done" in end ? done : failed, "done" in end ? end.done : end.failed, now, row.job_id, row.turn_id)
+    .toArray()[0];
+}
+
+// What one run of a job used so far.
+export type JobUsage = {
+  starts: number;
+  steps: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  started_at: number;
+};
+
+export function jobUsage(sql: SqlStorage, row: Pick<JobRow, "job_id" | "run">): JobUsage | undefined {
+  return sql
+    .exec<JobUsage>(
+      `SELECT starts, steps, input_tokens, output_tokens, cached_input_tokens, started_at FROM prq_job_usage
+       WHERE job_id = ? AND run = ?`,
+      row.job_id,
+      row.run,
+    )
+    .toArray()[0];
+}
+
+// One model call's tokens, added to its run's usage while the job is still the turn's.
+export function addStep(
+  sql: SqlStorage,
+  row: Pick<JobRow, "job_id" | "run" | "turn_id">,
+  tokens: { input: number; output: number; cachedInput: number },
+): void {
+  sql.exec(
+    `UPDATE prq_job_usage SET steps = steps + 1, input_tokens = input_tokens + ?, output_tokens = output_tokens + ?,
+       cached_input_tokens = cached_input_tokens + ?
+     WHERE job_id = ? AND run = ? AND EXISTS (
+       SELECT 1 FROM prq_jobs WHERE job_id = ? AND run = ? AND state = 'running' AND turn_id IS ?)`,
+    tokens.input,
+    tokens.output,
+    tokens.cachedInput,
+    row.job_id,
+    row.run,
+    row.job_id,
+    row.run,
+    row.turn_id,
+  );
 }
 
 export type OutboxKind = "notify" | "ledger";
