@@ -14,9 +14,6 @@ export const CLOUD_NOT_CONFIGURED = "cloud agent not configured";
 // The start of the reason a cloud job fails while the cloud agent's configuration is invalid; the variables follow.
 export const CLOUD_MISCONFIGURED = "cloud agent misconfigured";
 
-// The code a cloud job with a workspace commit reads: the workspace at that commit.
-export type Workspace = { sha: string };
-
 // The reason a job with a workspace commit fails when no workspace can be had: a result is never produced without the
 // code it is about.
 export const WORKSPACE_NOT_AVAILABLE = "workspace: not available";

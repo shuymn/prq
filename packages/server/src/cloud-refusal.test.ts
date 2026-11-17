@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureLogs, events } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import { type CloudSession, cloudSession, textOf, untilState } from "./test/cloud.ts";
-import { ScriptedModel, text, useCloudModel } from "./test/model.ts";
+import { finish, ScriptedModel, text, toolCall, useCloudModel, useWorkspace } from "./test/model.ts";
 import {
   delta,
   errorBody,
@@ -19,7 +19,9 @@ import {
   until,
   useModelEnv,
 } from "./test/provider.ts";
-import { hub, jobOf } from "./test/session.ts";
+import { hub, jobOf, jobRows } from "./test/session.ts";
+import { push, sha } from "./test/webhook.ts";
+import { FakeWorkspace } from "./test/workspace.ts";
 
 // A provider that refuses a call (its spend limit, a bad key) fails the job with the provider's reason, never as done,
 // and the API key never shows in what the job leaves.
@@ -85,6 +87,31 @@ describe("refusals", () => {
       (message) => message.id === `answer-${job.job_id}-r1-incomplete`,
     );
     expect(textOf(incomplete)).toBe("partial answer");
+    expect(v.parse(MessageMetadata, incomplete?.metadata).incomplete).toEqual({ reason: REFUSED });
+  });
+
+  it("fails a job the provider refuses on the call after a tool step, keeping the text as incomplete", async () => {
+    captureLogs();
+    const session = await cloudSession("refusal", sockets);
+    const model = new ScriptedModel().add(
+      [...text("partial answer"), toolCall("list_files", {}), finish("tool-calls")],
+      { refuse: insufficientBalance() },
+    );
+    useCloudModel(model);
+    useWorkspace(new FakeWorkspace({ head: { "src/a.ts": "a\n" } }));
+
+    await push(session.ref, "a");
+    await untilState(session.stub, sha("a"), "failed");
+
+    const [job] = await jobRows(session.stub);
+    expect(job?.failure).toBe(REFUSED);
+    expect(model.calls).toHaveLength(2);
+    const stored = await storedMessages(session.path, session.token);
+    expect(stored.map((message) => message.id)).toEqual([`analysis-${job?.job_id}-r1-incomplete`]);
+    const [incomplete] = stored;
+    expect(textOf(incomplete)).toBe("partial answer");
+    // The settled tool step stays with the text it came with.
+    expect(incomplete?.parts.map((part) => part.type)).toContain("tool-list_files");
     expect(v.parse(MessageMetadata, incomplete?.metadata).incomplete).toEqual({ reason: REFUSED });
   });
 });

@@ -5,9 +5,10 @@
 import { MockLanguageModelV4 } from "ai/test";
 import { vi } from "vitest";
 
-import type { Workspace } from "../pr-session/cloud.ts";
 import { PrSession } from "../pr-session/index.ts";
+import type { WorkspaceClient } from "../pr-session/workspace.ts";
 import { type Gate, prSessionSeams } from "./session.ts";
+import { FakeWorkspace } from "./workspace.ts";
 
 type DoStream = MockLanguageModelV4["doStream"];
 export type CallOptions = Parameters<DoStream>[0];
@@ -52,6 +53,11 @@ export function finish(
   };
 }
 
+// A call of one of the turn's tools, as the model streams it.
+export function toolCall(toolName: string, input: Record<string, unknown>, toolCallId = "call-1"): StreamPart {
+  return { type: "tool-call", toolCallId, toolName, input: JSON.stringify(input) };
+}
+
 // A whole answer: its text, then a normal finish.
 export function answerScript(answer: string, tokens: Tokens = {}): Script {
   return [...text(answer), finish("stop", tokens)];
@@ -87,6 +93,8 @@ export class ScriptedModel {
   readonly calls: CallOptions[] = [];
   readonly #scripts: Call[] = [];
   readonly model: MockLanguageModelV4;
+  // The model's context window in tokens (MODEL_CONTEXT_TOKENS): a window of about a million tokens by default.
+  contextTokens = 1_048_576;
 
   constructor(modelId = "scripted-model") {
     this.model = new MockLanguageModelV4({
@@ -129,12 +137,20 @@ export class ScriptedModel {
 
 // Every PrSession of the test file runs its cloud turns on the model (undefined: none configured).
 export function useCloudModel(model: ScriptedModel | undefined): void {
-  vi.spyOn(prSessionSeams(PrSession.prototype), "cloudModel").mockReturnValue(model?.model);
+  const seams = prSessionSeams(PrSession.prototype);
+  vi.spyOn(seams, "cloudModel").mockReturnValue(model?.model);
+  vi.spyOn(seams, "contextTokens").mockImplementation(() => {
+    if (model === undefined) {
+      throw new Error("no model is configured");
+    }
+    return model.contextTokens;
+  });
 }
 
-// Every PrSession of the test file has a workspace at a job's commit.
-export function useWorkspace(): void {
-  vi.spyOn(prSessionSeams(PrSession.prototype), "workspaceFor").mockImplementation((job): Workspace | null =>
-    job.workspaceSha === null ? null : { sha: job.workspaceSha },
+// Every PrSession of the test file has the workspace (an empty one by default) for a job with a workspace commit.
+export function useWorkspace(workspace: WorkspaceClient = new FakeWorkspace()): WorkspaceClient {
+  vi.spyOn(prSessionSeams(PrSession.prototype), "workspaceFor").mockImplementation((job) =>
+    job.workspaceSha === null ? null : workspace,
   );
+  return workspace;
 }
