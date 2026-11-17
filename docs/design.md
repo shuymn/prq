@@ -687,8 +687,10 @@ or an analysis's task.
   its job's end), each answer preceded by its question wherever that question is stored. Incomplete texts are left
   out, and so is every question without a stored answer (waiting, running or failed). A question therefore enters
   together with its answer, the results of jobs that ran before this one are kept wherever they were stored, and the
-  projection only grows at its end. The stored messages up to the question's position were the alternative; they drop
-  the results committed after the question was stored and keep earlier open questions.
+  projection only grows at its end. It is read from storage, root to leaf, never from the history the SDK keeps in
+  memory (`this.messages`), which holds only the most recent part within `hydrationByteBudget`: an older result would
+  otherwise drop out of a long conversation's context unseen. The stored messages up to the question's position were
+  the alternative; they drop the results committed after the question was stored and keep earlier open questions.
 - **The job's own part.** An answer's question is read by the job's target, never as the last user message. An
   analysis gets the task "Summarize the pull request at head `<sha>`.", which is not stored. Before them comes the
   system prompt: the pull request, its details (or that no webhook has arrived), and the job (the head an analysis
