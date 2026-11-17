@@ -171,13 +171,10 @@ describe("questions outside the history in memory", () => {
     await client.chat([Q1]);
     client.close();
     // Nine 4 MiB questions stored with no job, as a stop between their save and their job step leaves them. Together
-    // they are over the 32 MiB of history the SDK loads into this.messages at a start.
+    // they are over the 32 MiB of history the SDK loads into this.messages at a start. They are stored in one write:
+    // each write handles the history in memory, so nine writes would handle it nine times as it grows.
     const large = Array.from({ length: 9 }, (_, n) => question(`large-${n}`, "x".repeat(4 * 1024 * 1024)));
-    await runInDurableObject(stub, async (instance) => {
-      for (const message of large) {
-        await instance.persistMessages([message]);
-      }
-    });
+    await runInDurableObject(stub, (instance) => instance.persistMessages(large));
     await cancelWakes(stub);
     await abortAllDurableObjects();
 

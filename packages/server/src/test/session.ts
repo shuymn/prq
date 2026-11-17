@@ -10,6 +10,7 @@ import * as v from "valibot";
 import { expect, vi } from "vitest";
 
 import type { Hub } from "../hub.ts";
+import type { LedgerEntry } from "../ledger.ts";
 import { hubStub, prSessionStub } from "../names.ts";
 import type { CloudAgent } from "../pr-session/cloud.ts";
 import type { PrSession, Submission } from "../pr-session/index.ts";
@@ -69,6 +70,23 @@ export async function ledgerRows(): Promise<LedgerRow[]> {
 // A session's row in the Hub's ledger.
 export async function ledgerRowOf(name: string): Promise<LedgerRow | undefined> {
   return (await ledgerRows()).find((row) => sessionName(row.pr) === name);
+}
+
+// A ledger entry with nothing to show.
+export function quiet(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
+  return {
+    details: null,
+    owner: "local",
+    latestEvent: null,
+    summaryFailed: false,
+    answerFailed: false,
+    stalled: false,
+    waitingWork: false,
+    unsummarized: false,
+    jobs: { waiting: 0, running: 0, failed: 0 },
+    claims: [],
+    ...overrides,
+  };
 }
 
 // Empties the Hub's notification queue (of the sessions earlier tests of the file left).
