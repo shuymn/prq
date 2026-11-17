@@ -53,6 +53,9 @@ export default defineConfig(async () => {
             include: ["src/**/*.node.test.ts"],
             environment: "node",
             globalSetup: ["../cli/src/test/canary.ts"],
+            // Real git processes: room for a slow CI runner, as the CLI's git tests have.
+            testTimeout: 30_000,
+            hookTimeout: 30_000,
           },
         },
       ],
