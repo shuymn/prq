@@ -45,13 +45,7 @@ export async function checkout(
     print({ path: null, sha: null, base: null, next: "answer" });
     return EXIT.ok;
   }
-  const refused = await state.jobsDirRefusal();
-  if (refused !== null) {
-    throw new CliError(
-      EXIT.error,
-      `${refused}; no worktree is added through it (set PRQ_HOME to keep prq's state elsewhere)`,
-    );
-  }
+  await state.assertJobsDir();
   const dir = state.jobDir(job);
   let details = await savedDetails(dir, job);
   if (details === undefined) {

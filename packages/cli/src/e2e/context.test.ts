@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readdir, readFile, rename, stat, symlink, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 
 import { ClaimResponse } from "@prq/protocol";
 import * as v from "valibot";
@@ -124,6 +124,28 @@ describe("prq context", () => {
     expect(exit.code).toBe(4);
     expect(result(exit)).toEqual({ status: "stale_claim", next: "claim" });
     expect(stack.access().log.map((entry) => entry.status)).toEqual([404]);
+  });
+
+  it("a jobs directory that is a symlink: exit 1 before any request, nothing written", async () => {
+    await present("laptop");
+    await push(stack.worker(), pr, sha("h1"));
+    const claimed = await claim("laptop");
+    // jobs/ moved to another state root's place and a symlink left in its own.
+    const elsewhere = join(stack.dir(), "elsewhere-jobs");
+    const jobs = join(stack.home(), "jobs");
+    await rename(jobs, elsewhere);
+    await symlink(elsewhere, jobs);
+    const record = await readFile(recordPath("laptop"), "utf8");
+
+    const exit = await stack.run(["context", "--agent-id", "laptop"]);
+    expect(exit.code).toBe(1);
+    expect(exit.stdout).toBe("");
+    expect(stderrLines(exit)).toEqual([
+      `prq: ${jobs} is a symlink, not followed; nothing is written through it (set PRQ_HOME to keep prq's state elsewhere)`,
+    ]);
+    expect(await readdir(join(elsewhere, basename(claimed.dir)))).toEqual([]);
+    expect(await readFile(recordPath("laptop"), "utf8")).toBe(record);
+    expect(stack.access().log.filter((entry) => entry.route === "/cli/context")).toEqual([]);
   });
 
   it("no claim saved: exit 1 before any request", async () => {

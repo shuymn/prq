@@ -466,6 +466,8 @@ describe("prq checkout", () => {
 
   it("a jobs directory that is a symlink: exit 1, no worktree added through it", async () => {
     const { repo, claimed } = await analysisJob();
+    // The context written first, so checkout reads it rather than writing it.
+    expect((await stack.run(["context", "--agent-id", "laptop"], repo.env)).code).toBe(0);
     // jobs/ moved elsewhere and a symlink left in its place.
     const elsewhere = join(stack.dir(), "elsewhere-jobs");
     const jobs = join(stack.home(), "jobs");
@@ -477,9 +479,9 @@ describe("prq checkout", () => {
     expect(exit.code).toBe(1);
     expect(exit.stdout).toBe("");
     expect(stderrLines(exit)).toEqual([
-      `prq: ${jobs} is a symlink, not followed; no worktree is added through it (set PRQ_HOME to keep prq's state elsewhere)`,
+      `prq: ${jobs} is a symlink, not followed; nothing is written through it (set PRQ_HOME to keep prq's state elsewhere)`,
     ]);
-    expect(await readdir(join(elsewhere, basename(claimed.dir)))).toEqual([]);
+    expect(await readdir(join(elsewhere, basename(claimed.dir)))).toEqual(["context.json"]);
     expect(await repo.clone.worktrees()).toEqual(registrations);
   });
 

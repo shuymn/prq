@@ -427,9 +427,11 @@ UI, webhook and CLI input all enter through PrSession.
 - **Cleanup**, by `reconcile` and by `checkout` before it adds a worktree, removes the job directories no record names.
   It lists `jobs/` and then reads every agent's record: a job directory is created only after the record that names it,
   so one listed first is never newer than its record. The records it reads must be those of the job directories it
-  lists, so nothing is removed while `jobs/` is a symlink (a stderr line and `jobs/` in `kept`), and `checkout` adds no
-  worktree through one (exit 1): a `jobs/` leading to another state root's would let this root's cleanup remove the
-  directories, answers and worktrees of the agents whose records are there. Each entry no record names is removed unless
+  lists, so nothing is removed while `jobs/` is a symlink (a stderr line and `jobs/` in `kept`), and no command creates
+  or writes a job directory through one: `claim` (`submit`'s too, when a `stale_claim` makes it claim again), `context`
+  and `checkout` end with exit 1 before any request, saving nothing. A `jobs/` leading to another state root's would let
+  this root's cleanup remove the directories, answers and worktrees of the agents whose records are there, and that
+  root's cleanup remove this root's. Each entry no record names is removed unless
   it holds the working directory: a symlink is unlinked, never followed; a job directory's worktree is removed from the
   clone its `checkout.json` names by its exact path (`git -C <clone> worktree remove --force --force <dir>/worktree`,
   which also removes one whose directory is gone, or one a stopped add left locked), then the directory. The worktree is

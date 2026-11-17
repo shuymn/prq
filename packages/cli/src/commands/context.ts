@@ -42,13 +42,15 @@ export async function context(
 export const STALE = { status: "stale_claim", next: "claim" } as const;
 
 // Reads the claim's context and writes it into the claim's directory: context.json, and an answer job's question as
-// question.md. null when the claim no longer holds.
+// question.md. null when the claim no longer holds. Nothing is read or written while jobs/ is a symlink
+// (State.assertJobsDir).
 export async function writeContext(
   client: Client,
   state: State,
   agentId: string,
   { job, claimId }: Claim,
 ): Promise<{ context: Context; dir: string; contextPath: string; questionPath: string | null } | null> {
+  await state.assertJobsDir();
   const read = await readContext(job.jobId, (cursor) => {
     const request = v.parse(ContextRequest, { agentId, pr: job.pr, jobId: job.jobId, claimId, cursor });
     return client.call("/cli/context", request, ContextResponse);

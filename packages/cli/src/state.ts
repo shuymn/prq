@@ -63,6 +63,18 @@ export class State {
     return entry?.isSymbolicLink() === true ? `${this.jobsDir} is a symlink, not followed` : null;
   }
 
+  // Ends the command, exit 1, when jobs/ is a symlink: claim, context and checkout check it before any request, and
+  // create or write nothing.
+  async assertJobsDir(): Promise<void> {
+    const refused = await this.jobsDirRefusal();
+    if (refused !== null) {
+      throw new CliError(
+        EXIT.error,
+        `${refused}; nothing is written through it (set PRQ_HOME to keep prq's state elsewhere)`,
+      );
+    }
+  }
+
   // The directory of a claim's work. A claim that resumes the same job, run and workspace names the same directory; a
   // retry or a moved workspace names another.
   jobDir(job: Job): string {
