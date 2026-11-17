@@ -39,7 +39,7 @@ The exit code comes first: the Rules below say what each failure leads to.
 6. **Submit.** Run `prq submit`.
    - 0 (`"status"` `accepted` or `duplicate`, `next` `wait`): the answer is stored. Step 2.
    - 4 (`"status": "dropped"`): the answer was not stored and is void; write nothing more for it. When `claim` is null,
-     step 2; otherwise `claim` is the job now claimed: go to the step its `next` names.
+     step 2; otherwise `claim` is the job now claimed: go to the step the submit result's top-level `next` names.
    - 1: run `prq submit` once more and handle its exit the same way; when it exits 1 again, tell the host the `prq:`
      line, then step 2.
 
