@@ -63,22 +63,23 @@ export class State {
     return record.output.claim;
   }
 
-  // Writes the record through a temporary file and a rename, so a reader sees the old record or the new one.
+  // The agent's record, which context and submit work under; none ends the command.
+  async claimed(): Promise<Claim> {
+    const claim = await this.readRecord();
+    if (claim === null) {
+      throw new CliError(EXIT.error, `no claim is saved for agent ${this.#agentId}; run prq claim`);
+    }
+    return claim;
+  }
+
   async saveRecord(claim: Claim): Promise<void> {
-    const path = this.recordPath;
     await mkdir(join(this.#home, "agents"), { recursive: true, mode: 0o700 });
     const record: v.InferOutput<typeof ClaimRecord> = {
       agentId: this.#agentId,
       claim,
       savedAt: new Date().toISOString(),
     };
-    const temporary = `${path}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600, flush: true });
-      await rename(temporary, path);
-    } finally {
-      await rm(temporary, { force: true });
-    }
+    await writeAtomically(this.recordPath, `${JSON.stringify(record)}\n`);
   }
 
   async removeRecord(): Promise<void> {
@@ -86,7 +87,18 @@ export class State {
   }
 }
 
-function isMissing(error: unknown): boolean {
+// Writes a file through a temporary file and a rename, so a reader sees the old file or the new one, never a part.
+export async function writeAtomically(path: string, content: string): Promise<void> {
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, content, { mode: 0o600, flush: true });
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+export function isMissing(error: unknown): boolean {
   return error instanceof Error && Reflect.get(error, "code") === "ENOENT";
 }
 

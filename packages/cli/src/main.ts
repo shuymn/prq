@@ -6,6 +6,8 @@ import { parseArgs } from "node:util";
 
 import { Client, VersionNotice } from "./client.ts";
 import { claim } from "./commands/claim.ts";
+import { context } from "./commands/context.ts";
+import { submit } from "./commands/submit.ts";
 import { wait } from "./commands/wait.ts";
 import { readConfig } from "./config.ts";
 import { CliError, EXIT, type ExitCode } from "./errors.ts";
@@ -18,6 +20,8 @@ const USAGE = `usage: prq <command> [options]
 commands:
   wait [--timeout <seconds>]  wait until the agent may have a job (default 1500 seconds)
   claim                       claim the agent's job and save it
+  context                     write the claimed job's context and question into its directory
+  submit                      submit the answer saved in the claimed job's directory
 
 options:
   --agent-id <id>  the agent ID (default: PRQ_AGENT_ID, else the host name)
@@ -36,6 +40,13 @@ exit codes: 0 done, 1 error, 2 wait timed out, 3 authentication failure, 4 claim
 `;
 
 const DEFAULT_WAIT_S = 1500;
+
+const COMMANDS = ["wait", "claim", "context", "submit"] as const;
+type Command = (typeof COMMANDS)[number];
+
+function isCommand(value: string): value is Command {
+  return COMMANDS.some((command) => command === value);
+}
 
 function print(result: object): void {
   process.stdout.write(`${JSON.stringify(result)}\n`);
@@ -96,7 +107,7 @@ async function main(argv: string[]): Promise<ExitCode> {
   if (rest.length > 0) {
     throw new UsageError(`unexpected argument ${JSON.stringify(rest[0])}`);
   }
-  if (command !== "wait" && command !== "claim") {
+  if (!isCommand(command)) {
     throw new UsageError(`unknown command ${JSON.stringify(command)}`);
   }
   if (command !== "wait" && values.timeout !== undefined) {
@@ -108,7 +119,14 @@ async function main(argv: string[]): Promise<ExitCode> {
   if (command === "wait") {
     return wait(client, systemClock, config.agentId, timeoutS, print);
   }
-  return claim(client, new State(config.home, config.agentId), config.agentId, print, stderr);
+  const state = new State(config.home, config.agentId);
+  if (command === "claim") {
+    return claim(client, state, config.agentId, print, stderr);
+  }
+  if (command === "context") {
+    return context(client, state, config.agentId, print);
+  }
+  return submit(client, state, config.agentId, print, stderr);
 }
 
 try {

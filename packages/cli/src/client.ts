@@ -1,11 +1,22 @@
-import { ErrorResponse, PRQ_VERSION_HEADER } from "@prq/protocol";
+import { type ErrorCode, ErrorResponse, PRQ_VERSION_HEADER } from "@prq/protocol";
 import * as v from "valibot";
 
 import type { Config } from "./config.ts";
 import { CliError, EXIT } from "./errors.ts";
 import { CALL_TIMEOUT_MS, type Clock, Retryable, withRetry } from "./retry.ts";
 
-export type Route = "/cli/wait" | "/cli/claim";
+export type Route = "/cli/wait" | "/cli/claim" | "/cli/context" | "/cli/submit";
+
+// A route's refusal: a status other than 2xx, 503 or an authentication failure. It ends the command with exit 1 unless
+// the command handles its code (a claim mismatch).
+export class Refused extends CliError {
+  readonly code: ErrorCode | null;
+
+  constructor(message: string, code: ErrorCode | null) {
+    super(EXIT.error, message);
+    this.code = code;
+  }
+}
 
 type Stderr = (line: string) => void;
 
@@ -69,7 +80,7 @@ export class Client {
   }
 
   // One request: the route's answer parsed with its schema, or Retryable. Authentication failures (any 3xx, 401, 403)
-  // and every other failure end the command.
+  // end the command, and so does every other failure, a refusal as Refused.
   async attempt<S extends v.GenericSchema>(
     route: Route,
     body: unknown,
@@ -119,7 +130,10 @@ export class Client {
     }
     const error = v.safeParse(ErrorResponse, parseJson(text));
     const code = error.success ? ` ${error.output.error}${error.output.detail ? `: ${error.output.detail}` : ""}` : "";
-    throw new CliError(EXIT.error, `${route} answered ${res.status}${printable(code, 200)}`);
+    throw new Refused(
+      `${route} answered ${res.status}${printable(code, 200)}`,
+      error.success ? error.output.error : null,
+    );
   }
 }
 
