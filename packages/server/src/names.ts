@@ -1,8 +1,10 @@
 import { HUB_NAME, parseSessionName, type PrRef, sessionName } from "@prq/protocol";
 import { getAgentByName } from "agents";
 
-// The only code that addresses a Durable Object: the Hub by HUB_NAME and a PrSession by its canonical session name,
-// so one pull request never reaches two instances.
+import type { Workspace } from "./workspace.ts";
+
+// The only code that addresses a Durable Object: the Hub by HUB_NAME, and a PrSession and its Workspace by the
+// canonical session name, so one pull request never reaches two instances of either.
 
 export function hubStub(env: Env) {
   return getAgentByName(env.Hub, HUB_NAME);
@@ -10,6 +12,11 @@ export function hubStub(env: Env) {
 
 export function prSessionStub(env: Env, ref: PrRef) {
   return getAgentByName(env.PrSession, sessionName(ref));
+}
+
+// The Workspace is not an Agent and no route reaches it: only its session calls it.
+export function workspaceStub(env: Env, ref: PrRef): DurableObjectStub<Workspace> {
+  return env.Workspace.getByName(sessionName(ref));
 }
 
 type AgentRoute = { className: string; name: string };

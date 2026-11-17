@@ -4,6 +4,7 @@ import * as v from "valibot";
 
 import type { JobRow, JobUsage } from "./jobs.ts";
 import { reasonText } from "./model.ts";
+import type { WorkspaceClient } from "./workspace.ts";
 
 // A cloud turn: what it is bound to, and how it ended as its callbacks recorded it in memory. prq commits it when the
 // SDK's turn has ended (docs/design.md, Owner and jobs).
@@ -11,8 +12,15 @@ import { reasonText } from "./model.ts";
 // The model a cloud turn runs on, as an object: its ID goes into each result's author.
 export type CloudModel = Exclude<LanguageModel, string>;
 
-// The binding of an SDK chat turn to a running job, made inside the turn's exclusive slot.
-export type Binding = { jobId: string; turnId: string; model: CloudModel; outcome: TurnOutcome };
+// The binding of an SDK chat turn to a running job, made inside the turn's exclusive slot; with the workspace the turn
+// called, under its turn's sequence number, once it called one.
+export type Binding = {
+  jobId: string;
+  turnId: string;
+  model: CloudModel;
+  outcome: TurnOutcome;
+  workspace?: { client: WorkspaceClient; seq: number };
+};
 
 export type TurnOutcome = {
   // Whether onChatMessage took the binding; a turn that never reached it ended without an outcome.

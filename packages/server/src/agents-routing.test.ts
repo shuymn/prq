@@ -23,10 +23,10 @@ async function ids(namespace: DurableObjectNamespace): Promise<string[]> {
   return (await listDurableObjectIds(namespace)).map((id) => id.toString()).toSorted();
 }
 
-// The Durable Object instances that exist: the plugin lists every ID with stored state, and both classes write their
-// schema version in their constructor.
-async function instances(): Promise<{ hub: string[]; prSession: string[] }> {
-  return { hub: await ids(env.Hub), prSession: await ids(env.PrSession) };
+// The Durable Object instances that exist: the plugin lists every ID with stored state, and every class writes its
+// schema version in its constructor.
+async function instances(): Promise<{ hub: string[]; prSession: string[]; workspace: string[] }> {
+  return { hub: await ids(env.Hub), prSession: await ids(env.PrSession), workspace: await ids(env.Workspace) };
 }
 
 function upgrade(path: string, token: string, headers: Record<string, string> = {}): Promise<Response> {
@@ -55,6 +55,9 @@ describe("routes only canonical names", () => {
     "/agents/__proto__/hub",
     "/agents/toString/hub",
     "/agents/hub",
+    // The Workspace is no Agent: only its session reaches it.
+    "/agents/workspace/octo~demo~1",
+    "/agents/Workspace/octo~demo~1",
   ];
 
   it.for(refused)("refuses %s over HTTP and WebSocket, creating no instance", async (path) => {

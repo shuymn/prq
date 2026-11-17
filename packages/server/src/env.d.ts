@@ -1,6 +1,7 @@
 // The Worker's bindings, declared by hand as wrangler.jsonc gains them.
 import type { Hub } from "./hub.ts";
 import type { PrSession } from "./pr-session/index.ts";
+import type { Workspace } from "./workspace.ts";
 
 declare global {
   namespace Cloudflare {
@@ -11,6 +12,8 @@ declare global {
     interface Env {
       Hub: DurableObjectNamespace<Hub>;
       PrSession: DurableObjectNamespace<PrSession>;
+      // One per session, named as the session: its container and checkout.
+      Workspace: DurableObjectNamespace<Workspace>;
       // Secrets, provisioned outside the repository and checked by config.ts.
       // The Access team's origin, https://<team>.cloudflareaccess.com.
       ACCESS_TEAM_DOMAIN: string;
@@ -28,7 +31,7 @@ declare global {
       MODEL_ID?: string;
       // The model's context window in tokens, at least 16,384.
       MODEL_CONTEXT_TOKENS?: string;
-      // The GitHub App's API access, both or none (none: no head reconciliation).
+      // The GitHub App's API access, both or none (none: no head reconciliation and no cloud workspace).
       // The App's numeric ID.
       GITHUB_APP_ID?: string;
       // The App's private key, PKCS#8 PEM.

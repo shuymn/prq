@@ -167,6 +167,29 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
   "ALTER TABLE prq_session ADD COLUMN reconcile_at INTEGER",
   "ALTER TABLE prq_session ADD COLUMN push_gen INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE prq_session ADD COLUMN reconcile_tries INTEGER NOT NULL DEFAULT 0",
+  // The cloud turns' sequence: turn_seq counts the turns started (each start and restart advances it), and a running
+  // job keeps the number of its turn, which the turn's workspace calls carry.
+  "ALTER TABLE prq_session ADD COLUMN turn_seq INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE prq_jobs ADD COLUMN turn_seq INTEGER",
+];
+
+export const WORKSPACE_SCHEMA: SchemaSteps = [
+  // seq: the newest turn sequence a call carried; released_through: the highest sequence released. Both outlive a
+  // reset, so a late call of an older or a released turn is refused by a new instance too.
+  `CREATE TABLE prq_workspace (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    seq INTEGER NOT NULL DEFAULT 0,
+    released_through INTEGER NOT NULL DEFAULT 0)`,
+  "INSERT INTO prq_workspace (id) VALUES (1)",
+  // The ready record: what the last complete prepare checked out (the remote, the commit and the base, their merge
+  // base) and the token it wrote into the checkout. No row while no checkout is ready.
+  `CREATE TABLE prq_ready (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    remote TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    base_sha TEXT NOT NULL,
+    merge_base TEXT,
+    token TEXT NOT NULL)`,
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {

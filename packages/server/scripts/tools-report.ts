@@ -119,7 +119,7 @@ export async function checkTools(
 ): Promise<boolean> {
   const say = (line: string) => print(redact(line, secret));
   const workspace = new FakeWorkspace({ base: BASE_FILES, head: HEAD_FILES });
-  const target = { sha: HEAD, baseSha: BASE };
+  const target = { fullName: `${PR.owner}/${PR.repo}`, installationId: null, sha: HEAD, baseSha: BASE, seq: 1 };
   const prepared = await workspace.prepare(target, new AbortController().signal);
   const system = systemPrompt({ pr: PR, details: DETAILS, job: JOB, tools: true });
   const messages = [{ role: "user" as const, content: QUESTION }];
