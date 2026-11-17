@@ -7,7 +7,7 @@ import type { Delivery, Head } from "./jobs.ts";
 // function here is synchronous: the caller runs it in the transaction of the step it belongs to.
 
 // How many failed reads one mark gets before it is cleared.
-export const MAX_RECONCILE_TRIES = 5;
+const MAX_RECONCILE_TRIES = 5;
 
 export type ReconcileState = {
   // The mark: the tied second, NULL when no read is wanted.
