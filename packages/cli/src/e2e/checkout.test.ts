@@ -199,7 +199,7 @@ describe("prq checkout", () => {
     // A decoy clone of the same repository: a git that followed the variables would find it as the clone, fetch into it
     // and register the worktree there.
     const decoy = join(stack.dir(), "decoy");
-    await repo.fixture.clone(repo.url, "decoy");
+    await repo.fixture.clone(repo.bare, "decoy");
     const decoyGit = join(decoy, ".git");
     const before = await digest(decoy);
     const env = {

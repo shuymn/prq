@@ -80,7 +80,7 @@ describe("addWorktree", () => {
   it("a worktree add stopped in time stops the filters git runs as well", async () => {
     const { files, pids } = await slowFilter(repo);
     const head = await repo.head("filtered", files);
-    await repo.clone.fetchPull(pr.number);
+    await repo.clone.fetchPull(repo.bare, pr.number);
     const before = await clone();
     const git = await Git.create(join(dir, "hooks"), { env: repo.fixture.env });
     const path = join(dir, "job", "worktree");
@@ -100,7 +100,7 @@ describe("addWorktree", () => {
   it("the same under Bun, the runtime prq is compiled with", async () => {
     const { files, pids } = await slowFilter(repo);
     const head = await repo.head("filtered", files);
-    await repo.clone.fetchPull(pr.number);
+    await repo.clone.fetchPull(repo.bare, pr.number);
     const before = await clone();
     const path = join(dir, "job", "worktree");
     await mkdir(join(dir, "job"));
@@ -176,7 +176,7 @@ describe("a signal to prq while a worktree add runs", () => {
     async (signal, _output, quiet) => {
       const { files, pids, signals } = await slowFilter(repo, { stubborn: true, quiet });
       const head = await repo.head("filtered", files);
-      await repo.clone.fetchPull(pr.number);
+      await repo.clone.fetchPull(repo.bare, pr.number);
       await mkdir(join(dir, "job"));
       const driver = join(dir, "driver.ts");
       await writeFile(
@@ -222,9 +222,10 @@ describe("a signal to prq while a worktree add runs", () => {
 describe("removeWorktree", () => {
   it("removes a locked worktree by its exact path, and nothing else", async () => {
     const other = (await repo.clone.worktreeAdd("host-worktree", repo.base)).path;
-    const path = (await repo.clone.worktreeAdd(join("job", "worktree"), repo.base)).path;
+    const job = await repo.clone.worktreeAdd(join("job", "worktree"), repo.base);
+    const { path } = job;
     // A worktree add that was stopped leaves its worktree locked.
-    await repo.clone.worktreeLock(join("job", "worktree"));
+    await repo.clone.worktreeLock(job);
     const refs = await repo.clone.refs();
     const git = await Git.create(join(dir, "hooks"), { env: repo.fixture.env });
 

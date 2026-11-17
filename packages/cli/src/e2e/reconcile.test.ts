@@ -176,8 +176,8 @@ describe("prq reconcile", () => {
       await rename((await repo.clone.worktreeAdd("elsewhere", repo.base)).path, path);
     } else {
       // The clone registers prq's worktree at the path, or no longer does; another repository's worktree is there now.
-      await repo.clone.worktreeAdd(name, repo.base);
-      await (kind === "removed" ? repo.clone.worktreeRemove(name) : rm(path, { recursive: true }));
+      const added = await repo.clone.worktreeAdd(name, repo.base);
+      await (kind === "removed" ? repo.clone.worktreeRemove(added) : rm(path, { recursive: true }));
       owner = await repo.fixture.init("other");
       await owner.commit("other", { allowEmpty: true });
       await owner.worktreeAdd(name);

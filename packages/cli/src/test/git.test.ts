@@ -58,7 +58,7 @@ describe("FixtureGit", () => {
       /outside the fixture root/,
     );
     await expect(repo.submoduleAdd(fixture.repo("out/victim"), "lib")).rejects.toThrow(/outside the fixture root/);
-    await expect(fixture.clone(`file://${victim.path}`, "copy")).rejects.toThrow(/clones only a URL/);
+    await expect(fixture.clone(fixture.repo("out/victim"), "copy")).rejects.toThrow(/outside the fixture root/);
     await expect(repo.remoteAdd("victim", victim.path)).rejects.toThrow(/is a GitHub URL/);
     await expect(repo.configSet("user.name", "x")).rejects.toThrow(/may not set/);
     await expect(repo.configSet("core.worktree", victim.path)).rejects.toThrow(/may not set/);
@@ -66,6 +66,50 @@ describe("FixtureGit", () => {
     expect(await victimState()).toEqual(before);
     expect(await repo.configGet("user.name")).toBeNull();
     expect(await repo.worktrees()).toEqual([repo.path]);
+  });
+
+  it("makes a repository only at a new name, and checks each repository a call touches before git runs", async () => {
+    const before = await victimState();
+    const gitfile = `gitdir: ${join(victim.path, ".git")}\n`;
+    const source = await fixture.init("source");
+    await source.commit("source", { allowEmpty: true });
+    // Directories that hold a .git file naming the victim's git directory.
+    for (const crafted of ["crafted", join("repo", "lib")]) {
+      await mkdir(join(root, crafted));
+      await writeFile(join(root, crafted, ".git"), gitfile);
+    }
+    // Repositories the fixture made whose .git was changed by hand: a bare one given a .git file, a work tree's .git
+    // directory replaced by such a file, and a .git directory given a commondir that names the victim's.
+    const bare = await fixture.init("bare.git", { bare: true });
+    await writeFile(join(bare.path, ".git"), gitfile);
+    const replaced = await fixture.init("replaced");
+    await rm(join(replaced.path, ".git"), { recursive: true });
+    await writeFile(join(replaced.path, ".git"), gitfile);
+    const shared = await fixture.init("shared");
+    await writeFile(join(shared.path, ".git", "commondir"), `${join(victim.path, ".git")}\n`);
+
+    await expect(fixture.init("crafted")).rejects.toThrow(/^crafted already exists/);
+    await expect(fixture.init("crafted", { bare: true })).rejects.toThrow(/^crafted already exists/);
+    await expect(fixture.clone(source, "crafted")).rejects.toThrow(/^crafted already exists/);
+    await expect(source.worktreeAdd("crafted")).rejects.toThrow(/^crafted already exists/);
+    await expect(repo.submoduleAdd(source, "lib")).rejects.toThrow(/^repo\/lib already exists/);
+    await expect(repo.push(fixture.repo("crafted"), "HEAD:refs/heads/stray")).rejects.toThrow(
+      /^the \.git file of crafted names .*, outside the fixture root/,
+    );
+    await expect(repo.push(bare, "HEAD:refs/heads/stray")).rejects.toThrow(
+      /^bare\.git is not a bare repository, with no \.git entry/,
+    );
+    await expect(fixture.clone(bare, "copy")).rejects.toThrow(/^bare\.git is not a bare repository/);
+    await expect(repo.push(replaced, "HEAD:refs/heads/stray")).rejects.toThrow(
+      /^replaced is not a work tree with a \.git directory/,
+    );
+    await expect(replaced.configSet("core.x", "y")).rejects.toThrow(/^replaced is not a work tree/);
+    await expect(repo.push(shared, "HEAD:refs/heads/stray")).rejects.toThrow(
+      /^git places a git directory of shared at .*, outside the fixture root/,
+    );
+
+    expect(await victimState()).toEqual(before);
+    expect(await readFile(join(root, "crafted", ".git"), "utf8")).toBe(gitfile);
   });
 
   it("has no free-form git: neither config -f<path> nor config --file <symlink> can be written", async () => {
