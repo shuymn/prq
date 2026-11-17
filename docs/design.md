@@ -739,14 +739,15 @@ never summarized, and once answered it enters the kept part with its answer, whe
 
 - **Trigger.** When the context exceeds the model's context length minus a reserve, the system shall compact. It checks
   after an answer has been committed (after the turn) and compacts then, before the next job is handed over; one
-  compaction took 14 to 23 seconds in the prototype. While it runs, the cloud seam, which every hand-over goes through (a
-  question, a push, a retry, settle, a commit), starts no job, so a job that arrives meanwhile waits and reads the
-  compacted context; the compaction's end, however it ended, opens the seam. At a turn's start, a context already over
-  is compacted first (a compaction a restart lost, or one a refusal asked for), unless a compaction failed at the same
-  end of the projection: that one is not repeated until a new result is committed. A request the provider refuses for
-  the context's length (the `context_length_exceeded` code, or a message about a request over the window, also after a
-  retry) counts the context as the whole window: the job is compacted and run again once per run, and a second refusal
-  fails it with the provider's reason.
+  compaction took 14 to 23 seconds in the prototype. While it runs, the cloud seam, which every hand-over of a waiting
+  job goes through (a question, a push, a retry, settle, a commit), starts no job, so a job that arrives meanwhile waits
+  and reads the compacted context (recovery and a refusal's re-run give the running job a new turn and start no other);
+  the compaction's end, however it ended, opens the seam. At a turn's start, a context already over is compacted first
+  (a compaction a restart lost, or one a refusal asked for), unless a compaction failed at the same end of the
+  projection: that one is not repeated until a new result is committed. A request the provider refuses for the context's
+  length (the `context_length_exceeded` code, or a message about a request over the window, also after a retry) counts
+  the context as the whole window: the job is compacted and run again once per run, and a second refusal fails it with
+  the provider's reason.
 - **Parameters.** At windows of 131,072 tokens or more, the reserve, the kept part and the notes' output limit are Pi's
   defaults (16,384, 20,000 and 8,192 tokens); below, they are shares of the window (one eighth, three tenths, one
   fifth), so none exceeds it. That does not make a summary request fit the window: the count that triggers compaction
@@ -991,7 +992,10 @@ Server:
 - A compaction logs its start with the job it followed or preceded (`prq.compaction.started`, with the notes revision
   and the cut, before any summary call) and its end: adopted (`done`, with the notes revision, the cut, the summary
   calls and their tokens), failed (`failed`, with the reason), overtaken (`discarded`), or with nothing to cut
-  (`skipped`, with no start); a summary tried again (`retry`), and a job run again after a refusal (`prq.job.rerun`).
+  (`skipped`, with no start); a summary tried again (`retry`, with the reason), and a job run again after a refusal
+  (`prq.job.rerun`). The start, end and re-run events carry identifiers, positions and counts, never notes, question or
+  answer text; a failure or retry reason is a job failure's reason (the provider's message, redacted and cut to 500
+  characters), which can echo part of a request.
 - The UI shows, per PR, the job state (waiting, which agent ID is working on it, failed with its reason) and, per answer,
   the target SHA, the model and the tokens used. The job state reaches it as the session's Agent state
   (`PrSessionView` in `@prq/protocol`), which only the server sets. Presence, the job counts and the ledger's version

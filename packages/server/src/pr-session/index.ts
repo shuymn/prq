@@ -583,7 +583,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   // The cloud seam: with no agent, every waiting job fails; with one, the next waiting job becomes running under a new
   // turn unless one is running already. While a compaction is in flight it does nothing: the next job waits for the
-  // context the compaction makes. Every hand-over of a job comes through here.
+  // context the compaction makes. Every hand-over of a waiting job comes through here. Recovery and the re-run after a
+  // context-length refusal call #handOver themselves, but each gives the job already running a new turn and starts no
+  // waiting one: a compaction after a commit runs only while no job is running, and the re-run compacts at its own
+  // start.
   #cloudSeam(now: number): CloudOutcome {
     if (this.#compacting) {
       return NO_CLOUD_OUTCOME;
