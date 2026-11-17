@@ -7,6 +7,7 @@ import {
   notesRequest,
   partsChars,
   projectionSteps,
+  readFiles,
   serializeSteps,
   SUMMARIZATION_PROMPT,
   SUMMARIZATION_SYSTEM_PROMPT,
@@ -15,6 +16,7 @@ import {
   UPDATE_SUMMARIZATION_PROMPT,
 } from "./pr-session/compaction.ts";
 import { contextBudget } from "./pr-session/context-budget.ts";
+import { NO_ROOM } from "./pr-session/tools.ts";
 import { question } from "./test/chat.ts";
 import { cloudAnswer, sized, WINDOW } from "./test/compaction.ts";
 
@@ -151,6 +153,37 @@ describe("the cut", () => {
       `[Tool result]: ${sized("file 0", 1000).slice(0, 25)}`,
       "[... 1000 more characters truncated]",
       `[Assistant]: ${sized("answer q1", 10).slice(0, 27)}`,
+    ]);
+  });
+});
+
+// A settled tool call of a cloud answer's step, with its result or its error.
+function toolCallOf(index: number, name: string, path: string, result: { output: string } | { errorText: string }) {
+  return {
+    type: `tool-${name}` as const,
+    toolCallId: `call-${index}`,
+    input: { path },
+    ...("output" in result
+      ? { state: "output-available" as const, output: result.output }
+      : { state: "output-error" as const, errorText: result.errorText }),
+  };
+}
+
+describe("the files read", () => {
+  it("lists a path only when its read_file or diff result holds what it read", () => {
+    const reads = cloudAnswer("q1", [
+      { type: "step-start" },
+      toolCallOf(0, "read_file", "src/read.ts", { output: "1\texport const a = 1;" }),
+      toolCallOf(1, "read_file", "src/no-room.ts", { output: NO_ROOM }),
+      toolCallOf(2, "diff", "src/missing.ts", { output: "error: path not found" }),
+      toolCallOf(3, "diff", "src/changed.ts", { output: "@@ -1 +1 @@\n-a\n+b" }),
+      toolCallOf(4, "read_file", "src/failed.ts", { errorText: "the tool failed" }),
+    ]);
+
+    expect(readFiles(projectionSteps([Q1, reads]), ["docs/earlier.md"])).toEqual([
+      "docs/earlier.md",
+      "src/changed.ts",
+      "src/read.ts",
     ]);
   });
 });

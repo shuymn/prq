@@ -34,6 +34,7 @@ import { STREAM_TIMEOUT } from "./model.ts";
 import type { ContextState, Notes } from "./notes.ts";
 import { analysisTask } from "./prompt.ts";
 import { CHARS_PER_TOKEN } from "./room.ts";
+import { NO_ROOM } from "./tools.ts";
 import type { CloudModel } from "./turn.ts";
 
 // Context compaction (docs/design.md, Model context): the projection before a cut point is summarized into the notes,
@@ -344,7 +345,18 @@ export function serializeSteps(steps: readonly Step[]): string {
   return lines.join("\n\n");
 }
 
-// The files the steps read (read_file, and diff of one file), added to the ones read before, sorted.
+// Whether a tool call's result holds what it read: not an error, and not the note that the context had no room for it.
+function readSomething(part: ToolUIPart | DynamicToolUIPart): boolean {
+  return (
+    part.state === "output-available" &&
+    typeof part.output === "string" &&
+    part.output !== NO_ROOM &&
+    !part.output.startsWith("error:")
+  );
+}
+
+// The files the steps read (read_file, and diff of one file, whose result holds what it read), added to the ones read
+// before, sorted.
 export function readFiles(steps: readonly Step[], before: readonly string[]): string[] {
   const files = new Set(before);
   for (const { parts } of steps) {
@@ -352,7 +364,7 @@ export function readFiles(steps: readonly Step[], before: readonly string[]): st
       const name = getToolName(part);
       const path: unknown =
         typeof part.input === "object" && part.input !== null ? Reflect.get(part.input, "path") : undefined;
-      if ((name === "read_file" || name === "diff") && typeof path === "string") {
+      if ((name === "read_file" || name === "diff") && typeof path === "string" && readSomething(part)) {
         files.add(path);
       }
     }
