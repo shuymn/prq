@@ -1,4 +1,4 @@
-import { AIChatAgent } from "@cloudflare/ai-chat";
+import { AIChatAgent, type ChatRecoveryOptions, type OnChatMessageOptions } from "@cloudflare/ai-chat";
 import { MessageType } from "@cloudflare/ai-chat/types";
 import {
   type ClaimResponse,
@@ -16,7 +16,7 @@ import {
   type SubmitResponse,
 } from "@prq/protocol";
 import type { Connection } from "agents";
-import type { UIMessage } from "ai";
+import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import * as v from "valibot";
 
 import { refuseSubAgent, sendServerVersion } from "../agents.ts";
@@ -24,18 +24,27 @@ import { errorName, log } from "../log.ts";
 import { hubStub } from "../names.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
 import { SerialQueue, WaitTimeout, withTimeout } from "../wait.ts";
-import { CLOUD_NOT_CONFIGURED, type CloudAgent } from "./cloud.ts";
+import {
+  CLOUD_NOT_CONFIGURED,
+  type CloudAgent,
+  MAX_STARTS,
+  TURN_INTERRUPTED,
+  type Workspace,
+  WORKSPACE_NOT_AVAILABLE,
+} from "./cloud.ts";
 import { type ContextMessage, type Cursor, cursorText, jsonBytes, messageRoom, parseCursor, take } from "./context.ts";
 import { addedMessages, isChatList, questionsOnly, refusedChatResponse, refusedFrame } from "./history.ts";
 import {
   addInbox,
   addIntake,
+  addStep,
   allJobs,
   createAnswerJobs,
   decideOwner,
   type Delivery,
   deleteOutbox,
   endFinalizing,
+  endTurn,
   failPending,
   finalizingJobs,
   freshClaim,
@@ -47,6 +56,8 @@ import {
   jobTarget,
   type JobRow,
   type JobState,
+  type JobUsage,
+  jobUsage,
   jobView,
   ledgerEntry,
   markStalls,
@@ -63,17 +74,36 @@ import {
   recordEvent,
   removeIntake,
   reserve,
+  restartTurn,
   resultMessageId,
   resumeClaim,
   retry,
+  runningJobs,
   stallDeadline,
   stallMarked,
   startNext,
   takeInbox,
+  type TurnEnd,
   writeDetails,
   writeLedger,
   writeNotify,
 } from "./jobs.ts";
+import { projection } from "./projection.ts";
+import { analysisTask, systemPrompt } from "./prompt.ts";
+import {
+  type Binding,
+  type CloudModel,
+  errorReason,
+  hasText,
+  incompleteMessageId,
+  newOutcome,
+  reasonText,
+  resultParts,
+  stepTokens,
+  storedFailure,
+  turnFailure,
+  usageMetadata,
+} from "./turn.ts";
 
 // Seconds until the wake armed before a write that creates work runs settle.
 const WAKE_S = 5;
@@ -115,8 +145,8 @@ function isQuestion(message: UIMessage): boolean {
   return message.role === "user" && message.metadata === undefined;
 }
 
-// A stored message as the session store returns it: its parts are not typed further.
-type StoredMessage = { parts: readonly unknown[] };
+// A stored message as the session store returns it: its parts and metadata are not typed further.
+type StoredMessage = { parts: readonly unknown[]; metadata?: unknown };
 
 const TextPart = v.object({ type: v.literal("text"), text: v.string() });
 
@@ -136,6 +166,11 @@ function contextMessage(
   return v.is(MessageMetadata, metadata) ? { ...read, metadata } : read;
 }
 
+// A stored message as the AI SDK reads it: the session store keeps the UIMessages the SDK and prq wrote, untyped.
+function isUIMessage<M extends { role: string }>(message: M): message is M & UIMessage {
+  return message.role === "user" || message.role === "assistant" || message.role === "system";
+}
+
 // One pull request's conversation (named by sessionName), its owner and its jobs. It is the only place job state
 // changes. Its stored history is append-only.
 export class PrSession extends AIChatAgent<Env, PrSessionView> {
@@ -144,6 +179,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   // Arming a delivery retry: a check for a later wake, then a schedule, one failed delivery at a time.
   readonly #retries = new SerialQueue("a delivery retry");
   #retryDelayS = RETRY_FIRST_S;
+  // The cloud turns live in this isolate: a running job whose turn is not among them was left by a restart.
+  readonly #liveTurns = new Set<string>();
+  // The binding a job's turn made in its exclusive slot, until that turn's onChatMessage takes it.
+  #bound: Binding | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -212,32 +251,58 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     }
   }
 
-  // A chat request has stored its questions: each gets a job. No model turn runs and nothing is streamed; the SDK
-  // then sends its "no response" frame, which ends the request in the client.
-  override async onChatMessage(): Promise<Response | undefined> {
-    await this.#attempt("create_jobs", () => this.createJobs());
-    return undefined;
+  // A chat turn. The turn a job's hand-over started finds its binding and streams the job's model call; any other turn
+  // (a chat request's) has stored its questions, and each gets a job: no model is called and nothing is streamed, and
+  // the SDK then sends its "no response" frame, which ends the request in the client.
+  override async onChatMessage(_onFinish: unknown, options?: OnChatMessageOptions): Promise<Response | undefined> {
+    const bound = this.#bound;
+    if (bound === null) {
+      await this.#attempt("create_jobs", () => this.createJobs());
+      return undefined;
+    }
+    this.#bound = null;
+    bound.outcome.reached = true;
+    try {
+      return await this.#turnResponse(bound, options?.abortSignal);
+    } catch (error) {
+      log("prq.turn.failed", { pr: this.name, jobId: bound.jobId, error: errorName(error) }, "error");
+      bound.outcome.failure = `the turn failed before the model was called (${errorName(error)})`;
+      return undefined;
+    }
   }
 
-  // The history writes of a chat request and of the server come here (the SDK's streaming paths write around it, and
-  // stay unused while onChatMessage returns undefined). A chat request passes the client's whole list (asking for
-  // stored messages it lacks to be deleted); only messages with new IDs are added, after the stored ones, and the
-  // stored history then goes to every connection, the sender included.
+  // Durable recovery cannot be turned off (agents 0.33), so each interrupted turn it finds is declined: nothing of it is
+  // stored and no turn is retried or continued. settle restarts prq's own jobs (docs/design.md, Owner and jobs).
+  override async onChatRecovery(): Promise<ChatRecoveryOptions> {
+    return { persist: false, continue: false };
+  }
+
+  // The SDK's history writes come here: a chat request's, saveMessages', and the streamed, orphaned or repaired
+  // messages of its streaming paths. They may add questions only; every other message the server stores is appended
+  // by prq itself (insertMessages with results). A chat request passes the client's whole list (asking for stored
+  // messages it lacks to be deleted); only questions with new IDs are added, after the stored ones, and the stored
+  // history then goes to every connection, the sender included.
   override persistMessages(messages: UIMessage[]): Promise<void> {
-    return this.#writes.run(() => this.insertMessages(messages));
+    return this.#writes.run(() => this.insertMessages(messages, "questions"));
   }
 
   // Inside the write queue: decides what is new against the history as it is now, not as it was when the write was
-  // requested. New questions arm the wake first, then get their intake rows, then are stored: a stored question always
-  // has its job or its row, and the wake that turns the row into a job is set before either is written.
-  protected async insertMessages(messages: UIMessage[]): Promise<void> {
+  // requested. What it may add: questions only (the SDK's writes; anything else new is dropped and logged), or the
+  // server's results as given. New questions arm the wake first, then get their intake rows, then are stored: a stored
+  // question always has its job or its row, and the wake that turns the row into a job is set before either is
+  // written.
+  protected async insertMessages(messages: UIMessage[], adds: "questions" | "results"): Promise<void> {
     const cached = new Set(this.messages.map((message) => message.id));
     // this.messages holds the most recent history only (hydrationByteBudget); an ID outside it is looked up in storage.
     const session = this.sessions.session();
-    const added = await addedMessages(
+    const fresh = await addedMessages(
       messages,
       async (id) => cached.has(id) || (await session.getMessage(id)) !== null,
     );
+    const added = adds === "questions" ? fresh.filter(isQuestion) : fresh;
+    if (adds === "questions") {
+      this.#logDropped(fresh.filter((message) => !isQuestion(message)));
+    }
     const questions = added.filter(isQuestion).map((message) => message.id);
     if (questions.length > 0) {
       await this.#armWake();
@@ -245,6 +310,14 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     }
     await super.persistMessages([...this.messages, ...added]);
     await this.#sendHistory();
+  }
+
+  // The messages the SDK tried to add that were not questions, counted by role.
+  #logDropped(dropped: readonly UIMessage[]): void {
+    for (const role of new Set(dropped.map((message) => message.role))) {
+      const count = dropped.filter((message) => message.role === role).length;
+      log("prq.chat.dropped", { pr: this.name, role, messages: count });
+    }
   }
 
   // Sends every connection the stored history, as the list a client replaces its own with. It is read within the
@@ -388,20 +461,46 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return this.#cloudSeam(now);
   }
 
-  // The cloud seam: with no agent, every waiting job fails; with one, the next waiting job becomes running unless one
-  // is running already.
+  // The cloud seam: with no agent, every waiting job fails; with one, the next waiting job becomes running under a new
+  // turn unless one is running already.
   #cloudSeam(now: number): CloudOutcome {
     const agent = this.cloudAgent();
     if (agent === undefined) {
       return { failed: failPending(this.#sql, CLOUD_NOT_CONFIGURED, now), started: null };
     }
-    const row = startNext(this.#sql, now);
+    const row = startNext(this.#sql, crypto.randomUUID(), now);
     return { failed: [], started: row === undefined ? null : { row, agent } };
   }
 
-  // The cloud agent of a cloud session; none until #5 configures one.
+  // The cloud agent of a cloud session (spied on in tests): the built-in one, once a model is configured.
   protected cloudAgent(): CloudAgent | undefined {
+    const model = this.cloudModel();
+    if (model === undefined) {
+      return undefined;
+    }
+    // The turn is not awaited: the hand-over can run inside a chat request's turn, and a turn queued behind it would
+    // wait for it.
+    return { start: (job, turnId) => void this.keepAliveWhile(() => this.#runTurn(job.jobId, turnId, model)) };
+  }
+
+  // The model cloud turns run on (spied on in tests); none until a provider is configured.
+  protected cloudModel(): CloudModel | undefined {
     return undefined;
+  }
+
+  // The workspace a job with a workspace commit reads its code from (spied on in tests); none until the Sandbox exists,
+  // so such a job fails rather than producing a result without the code it is about.
+  protected workspaceFor(_job: Job): Workspace | null {
+    return null;
+  }
+
+  // A job that has just become running reaches its agent: its turn is live in this isolate from here.
+  #handOver(row: JobRow, agent: CloudAgent): void {
+    if (row.turn_id === null) {
+      throw new Error("a running job has its turn");
+    }
+    this.#liveTurns.add(row.turn_id);
+    agent.start(this.#job(row), row.turn_id);
   }
 
   // After the step's transaction: logs, the hand-over to the cloud agent (still in the same synchronous step), and the
@@ -413,7 +512,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (cloud.started !== null) {
       const { row, agent } = cloud.started;
       log("prq.job.started", { ...this.#jobFields(row), from: "pending", to: "running" });
-      agent.start(this.#job(row));
+      this.#handOver(row, agent);
     }
     this.#publishView();
   }
@@ -792,14 +891,13 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       });
     }
     this.#publishView();
-    const by = { kind: "local", agentId } as const;
-    const metadata: MessageMetadata =
-      reserved.kind === "answer"
-        ? { kind: "answer", jobId, questionId: reserved.target, sha: reserved.workspace_sha, by }
-        : { kind: "analysis", jobId, headSha: reserved.target, by };
+    const metadata = this.#resultMetadata(reserved, { kind: "local", agentId });
     const messageId = resultMessageId(reserved);
     try {
-      await this.insertMessages([{ id: messageId, role: "assistant", metadata, parts: [{ type: "text", text }] }]);
+      await this.insertMessages(
+        [{ id: messageId, role: "assistant", metadata, parts: [{ type: "text", text }] }],
+        "results",
+      );
     } finally {
       await this.#endFinalizing(reserved, "prq.job.submitted");
     }
@@ -872,6 +970,221 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return { status: waiting ? "retried" : "superseded" };
   }
 
+  // --- Cloud turns ---
+
+  // A job's turn: an SDK chat turn started with saveMessages, bound to the job inside its exclusive slot (the function
+  // runs there, right before the same turn's onChatMessage), so no other turn can take the binding. It stores no request
+  // message, as a local analysis stores none. When the SDK's turn has ended, prq commits it in the history queue.
+  async #runTurn(jobId: string, turnId: string, model: CloudModel): Promise<void> {
+    const binding: Binding = { jobId, turnId, model, outcome: newOutcome() };
+    const { outcome } = binding;
+    try {
+      const result = await this.saveMessages((messages) => {
+        this.#bound = binding;
+        return [...messages];
+      });
+      // An ending the turn's own callbacks did not see (the SDK failed or aborted the reply around them).
+      if (outcome.reached && result.status === "error") {
+        outcome.error ??= reasonText(result.error ?? "the turn failed");
+      } else if (outcome.reached && result.status === "aborted") {
+        outcome.aborted = true;
+      }
+    } catch (error) {
+      log("prq.turn.failed", { pr: this.name, jobId, error: errorName(error) }, "error");
+    } finally {
+      // A turn that ended before its onChatMessage leaves no binding for a later turn to find.
+      if (this.#bound === binding) {
+        this.#bound = null;
+      }
+    }
+    try {
+      await this.#writes.run(() => this.#commitTurn(binding));
+    } catch (error) {
+      // The job stays running under this turn, which is no longer live: settle's retry wake recovers it.
+      log("prq.turn.commit_failed", { pr: this.name, jobId, error: errorName(error) }, "error");
+      await this.#armRetry();
+    } finally {
+      this.#liveTurns.delete(turnId);
+    }
+    await this.#deliverOutbox();
+  }
+
+  // The bound turn's model call, streamed: the job must still be running under this turn. A job with a workspace commit
+  // needs its workspace. The outcome is recorded as the stream ends, whatever ends it.
+  async #turnResponse(binding: Binding, abortSignal?: AbortSignal): Promise<Response | undefined> {
+    const { jobId, turnId, model, outcome } = binding;
+    const row = jobById(this.#sql, jobId);
+    if (row?.state !== "running" || row.turn_id !== turnId) {
+      return undefined;
+    }
+    const job = this.#job(row);
+    if (job.workspaceSha !== null && this.workspaceFor(job) === null) {
+      outcome.failure = WORKSPACE_NOT_AVAILABLE;
+      return undefined;
+    }
+    const messages = await this.#turnMessages(row);
+    if (messages === null) {
+      outcome.failure = "the question is not stored";
+      return undefined;
+    }
+    const result = streamText({
+      model,
+      system: systemPrompt({ pr: this.#pr(), details: readDetails(this.#sql), job }),
+      messages: await convertToModelMessages(messages),
+      ...(abortSignal === undefined ? {} : { abortSignal }),
+      onError: ({ error }) => {
+        outcome.error ??= errorReason(error);
+      },
+      onAbort: () => {
+        outcome.aborted = true;
+      },
+      onFinish: ({ finishReason, rawFinishReason }) => {
+        outcome.finishReason = finishReason;
+        outcome.rawFinishReason = rawFinishReason;
+      },
+      onStepFinish: ({ usage }) => {
+        addStep(this.#sql, row, stepTokens(usage));
+      },
+    });
+    const metadata = this.#resultMetadata(row, { kind: "cloud", model: model.modelId });
+    return result.toUIMessageStreamResponse({
+      generateMessageId: () => resultMessageId(row),
+      messageMetadata: ({ part }) => (part.type === "start" ? metadata : undefined),
+      onFinish: ({ responseMessage, isAborted }) => {
+        outcome.message = responseMessage;
+        outcome.aborted ||= isAborted;
+      },
+      onError: (error) => {
+        outcome.error ??= errorReason(error);
+        return outcome.error;
+      },
+    });
+  }
+
+  // What the job's model reads after the system prompt: the projection, then its own question (by the job's target)
+  // or an analysis's task. Null when the question is not stored.
+  async #turnMessages(row: JobRow): Promise<UIMessage[] | null> {
+    const session = this.sessions.session();
+    const projected = (await projection(session.history())).filter(isUIMessage);
+    if (row.kind === "analysis") {
+      return [...projected, { id: "task", role: "user", parts: [{ type: "text", text: analysisTask(row.target) }] }];
+    }
+    const question = await session.getMessage(row.target);
+    return question === null || !isUIMessage(question) ? null : [...projected, question];
+  }
+
+  #resultMetadata(row: JobRow, by: MessageMetadata["by"], usage?: JobUsage): MessageMetadata {
+    const used = usage === undefined ? {} : { usage: usageMetadata(usage) };
+    return row.kind === "answer"
+      ? { kind: "answer", jobId: row.job_id, questionId: row.target, sha: row.workspace_sha, by, ...used }
+      : { kind: "analysis", jobId: row.job_id, headSha: row.target, by, ...used };
+  }
+
+  // Inside the history queue, once the SDK's turn has ended. A turn whose job has moved on (another turn, a retry)
+  // changes nothing. A turn that ended normally appends its result and marks the job done; any other ending keeps the
+  // text it produced as incomplete and fails the job. A turn that never reached its model call is an interruption.
+  async #commitTurn({ jobId, turnId, model, outcome }: Binding): Promise<void> {
+    const row = jobById(this.#sql, jobId);
+    if (row?.state !== "running" || row.turn_id !== turnId) {
+      log("prq.turn.stale", { pr: this.name, jobId, state: row?.state ?? null });
+      return;
+    }
+    if (!outcome.reached) {
+      await this.#recoverTurn(row);
+      return;
+    }
+    const failure = turnFailure(outcome);
+    const metadata = this.#resultMetadata(row, { kind: "cloud", model: model.modelId }, jobUsage(this.#sql, row));
+    const parts = resultParts(outcome.message?.parts ?? []);
+    if (failure === null) {
+      const id = resultMessageId(row);
+      await this.insertMessages([{ id, role: "assistant", metadata, parts }], "results");
+      this.#endRun(row, { done: id }, model.modelId);
+      return;
+    }
+    if (hasText(parts)) {
+      const incomplete = { ...metadata, incomplete: { reason: failure } };
+      await this.insertMessages(
+        [{ id: incompleteMessageId(row), role: "assistant", metadata: incomplete, parts }],
+        "results",
+      );
+    }
+    this.#endRun(row, { failed: failure }, model.modelId);
+  }
+
+  // A running job whose turn is not live (the object restarted, or the turn ended before its model call): done when its
+  // result is stored, failed with the stored reason when its run's incomplete text is (either way a commit stopped
+  // between its append and its statement, and the run has ended), started again under a new turn while its run has
+  // starts left, else failed. Each is one statement guarded by the turn it found.
+  async #recoverTurn(row: JobRow): Promise<void> {
+    const model = this.cloudModel()?.modelId ?? null;
+    const id = resultMessageId(row);
+    if ((await this.#message(id)) !== undefined) {
+      this.#endRun(row, { done: id }, model);
+      return;
+    }
+    const incomplete = await this.#message(incompleteMessageId(row));
+    if (incomplete !== undefined) {
+      this.#endRun(row, { failed: storedFailure(incomplete.metadata) }, model);
+      return;
+    }
+    const agent = this.cloudAgent();
+    if (agent === undefined) {
+      this.#endRun(row, { failed: CLOUD_NOT_CONFIGURED }, null);
+      return;
+    }
+    if ((jobUsage(this.#sql, row)?.starts ?? 0) >= MAX_STARTS) {
+      this.#endRun(row, { failed: TURN_INTERRUPTED }, model);
+      return;
+    }
+    const restarted = restartTurn(this.#sql, row, crypto.randomUUID(), Date.now());
+    if (restarted !== undefined) {
+      log("prq.job.restarted", { ...this.#jobFields(restarted), run: restarted.run });
+      this.#handOver(restarted, agent);
+      this.#publishView();
+    }
+  }
+
+  // Ends a running job's run in one step: its guarded statement, its event and ledger entry, and the seam's hand-over
+  // of the next job. Logs the run's usage.
+  #endRun(row: JobRow, end: TurnEnd, model: string | null): void {
+    const now = Date.now();
+    const change = this.ctx.storage.transactionSync(() => {
+      const ended = endTurn(this.#sql, row, end, now);
+      if (ended === undefined) {
+        return null;
+      }
+      if ("done" in end) {
+        recordEvent(this.#sql, ended.kind === "analysis" ? "summary" : "answer", now);
+      }
+      writeLedger(this.#sql);
+      return { ended, usage: jobUsage(this.#sql, ended), cloud: this.#cloudSeam(now) };
+    });
+    if (change === null) {
+      log("prq.turn.stale", { pr: this.name, jobId: row.job_id, state: jobById(this.#sql, row.job_id)?.state ?? null });
+      return;
+    }
+    const { ended, usage } = change;
+    if ("done" in end) {
+      log("prq.job.done", { ...this.#jobFields(ended), from: "running", to: "done" });
+    } else {
+      log("prq.job.failed", { ...this.#jobFields(ended), from: "running", to: "failed", reason: end.failed }, "warn");
+    }
+    log("prq.job.usage", {
+      ...this.#jobFields(ended),
+      run: ended.run,
+      outcome: ended.state,
+      model,
+      steps: usage?.steps ?? 0,
+      inputTokens: usage?.input_tokens ?? 0,
+      outputTokens: usage?.output_tokens ?? 0,
+      cachedInputTokens: usage?.cached_input_tokens ?? 0,
+      wallMs: usage === undefined ? 0 : Math.max(0, now - usage.started_at),
+      starts: usage?.starts ?? 0,
+    });
+    this.#afterNewWork(change.cloud);
+  }
+
   // --- The wake, settle and the outbox ---
 
   // A new schedule row each time, never deduplicated: an idempotent one-shot would match the row of a settle that is
@@ -921,8 +1234,18 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     }
   }
 
-  #settleCloud(): void {
-    if (readOwner(this.#sql) === "cloud") {
+  // A cloud session's running jobs whose turn is not live here are recovered, then the seam hands over the next job.
+  // Inside the history queue, so no commit is between its result's append and its statement.
+  async #settleCloud(): Promise<void> {
+    if (readOwner(this.#sql) !== "cloud") {
+      return;
+    }
+    await this.#writes.run(async () => {
+      for (const row of runningJobs(this.#sql)) {
+        if (row.turn_id === null || !this.#liveTurns.has(row.turn_id)) {
+          await this.#recoverTurn(row);
+        }
+      }
       const cloud = this.ctx.storage.transactionSync(() => {
         const outcome = this.#cloudSeam(Date.now());
         if (outcome.failed.length > 0 || outcome.started !== null) {
@@ -931,7 +1254,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
         return outcome;
       });
       this.#afterNewWork(cloud);
-    }
+    });
   }
 
   // Delivers the outbox rows to the Hub (spied on in tests), each on its own: a failed one does not keep the other

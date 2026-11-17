@@ -55,6 +55,26 @@ describe("no cloud agent configured", () => {
   });
 });
 
+describe("config removed", () => {
+  it("fails a running cloud job that settle finds with no cloud model configured", async () => {
+    const logs = captureLogs();
+    await setPool([]);
+    const { stub, open } = await newSession("cloud", sockets);
+    await (await open()).chat([Q1]);
+    // A job left running by a turn of an earlier instance, which had a model.
+    await sessionSql(
+      stub,
+      "UPDATE prq_jobs SET state = 'running', failure = NULL, unresolved_failure = 0, turn_id = 'lost-turn' WHERE target = 'q1'",
+    );
+
+    await stub.settle();
+
+    expect(await jobOf(stub, "q1")).toMatchObject({ state: "failed", failure: CLOUD_NOT_CONFIGURED, turn_id: null });
+    const failed = logs.map((log) => log.entry).filter((entry) => entry["event"] === "prq.job.failed");
+    expect(failed.at(-1)).toMatchObject({ from: "running", to: "failed", reason: CLOUD_NOT_CONFIGURED });
+  });
+});
+
 describe("with a cloud agent", () => {
   it("hands over the oldest waiting job, once per job, and nothing while one is running", async () => {
     const logs = captureLogs();

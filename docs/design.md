@@ -171,8 +171,36 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   after the view it came from (a claim, another retry, a new failure), even when the job is back in the state the view
   showed. A refused retry changes no job state; any wake it armed only runs `settle`.
 - A cloud session hands its next waiting job to the cloud agent in the same step that made the job waiting, one job
-  at a time (the job is `running` until the agent ends it). While no cloud agent is configured, that step instead marks
-  the job `failed` with "cloud agent not configured"; no model is called and nothing is streamed.
+  at a time (the job is `running` until its turn ends). While no cloud agent is configured, that step instead marks
+  the job `failed` with "cloud agent not configured"; no model is called and nothing is streamed. A running job that
+  `settle` finds after the configuration was removed fails the same way, rather than waiting for one that may not come.
+- The cloud agent runs a job as one chat turn of the Agents SDK, bound to the job. The hand-over sets the job
+  `running` under a new turn ID and counts a start of its run, then starts the turn through `saveMessages`, whose
+  function binds the turn to the job inside the turn's exclusive slot, right before that turn's `onChatMessage`; it
+  stores no request message. Only the turn that took the binding calls the model, and only while the job is still
+  running under its turn ID. A chat request's turn makes jobs and calls no model, and a binding that no
+  `onChatMessage` took is cleared when its turn ends.
+- A job with a workspace commit (every analysis, and an answer after a push) runs only in a workspace at that commit;
+  without one it fails "workspace: not available" with no model call, so no result is stored that was produced
+  without the code it is about. A question asked before any push has no workspace commit and runs without one.
+- When the SDK's turn has ended, the session commits it inside the history write queue, against the job's state and
+  turn ID: a commit whose job has moved on (a restart, a retry) appends nothing and is logged as `prq.turn.stale`. A
+  turn whose final finish reason is `stop` and whose result holds answer text that is not blank appends that result as
+  `<kind>-<jobId>`, without reasoning and with only the tool parts whose result is settled, its metadata naming the
+  cloud model and the run's usage; the job then becomes `done` in one statement that also clears a failure it had and
+  advances `rev`. Any other ending (an error, a cancel, the output limit, the content filter, any other finish reason,
+  or a `stop` with no answer text, "the model returned no answer text") fails the job with the reason, so the host can
+  retry it, and text already produced is appended as `<kind>-<jobId>-r<run>-incomplete`, marked incomplete with the
+  reason, which leaves `<kind>-<jobId>` for a later success.
+- After a reset, `settle` takes each running cloud job whose turn is no longer live and, in one statement guarded by
+  that turn, marks it `done` when its result is stored, fails it with the stored reason when its run's incomplete text
+  is stored (either way the commit stopped between its append and its statement, and the run had ended), starts it
+  again under a new turn while its run has had fewer than 3 starts, or fails it "the turn was interrupted 3
+  times by restarts; retry to run it again". Two restarts cover a deploy or an eviction, and a turn that brings the
+  object down every time cannot restart forever. A commit that failed is taken up the same way at the next `settle`.
+  The SDK's own durable recovery cannot be turned off and is declined in `onChatRecovery`: its retry needs the turn's
+  user message last, which an analysis never has and an answer loses once a later question is stored, and its
+  continuation rewrites the last assistant message, which may be another job's.
 
 ### Intake
 
@@ -228,9 +256,10 @@ UI, webhook and CLI input all enter through PrSession.
   its job wait again, with the same `jobId` and a new run, so no answer from before the fold is accepted. A retry of an
   old head's analysis folds it the same way (see [Owner and jobs](#owner-and-jobs)).
 - A waiting question runs before the next analysis.
-- When the server appends a message to the conversation (an analysis request, for example), it calls
-  `waitUntilStable()` first and then `saveMessages` in its function form, which receives the latest history, and it
-  never uses a stale `this.messages`.
+- The server appends its own messages (a local answer, a cloud result or its incomplete text) through its own insert
+  inside the history write queue, which decides what is new against the history as it is then, never against a stale
+  `this.messages`. No request message is stored: a cloud turn starts through `saveMessages` with a function that
+  returns the history unchanged.
 - The stored conversation is append-only: whatever a client sends, a stored message keeps its content and place and
   none is removed. A client adds questions only: a chat request carries the client's whole list, and PrSession adds
   the user messages whose IDs are not stored, after the stored ones. A new answer, system message or user message with
@@ -240,17 +269,25 @@ UI, webhook and CLI input all enter through PrSession.
   (no message, intake row or job) and answered with a failed response for its ID, which ends the request in the SDK's
   client. A stored message is echoed whatever its ID, so a row from before the bound does not refuse every later
   request. Every history write goes through one queue, so each starts from the history the previous one left.
+- The Agents SDK's own history writes go through the same entry as a chat request and may add questions only: the
+  streamed message at the end of a turn, a partial after an error or a cancel, an orphaned stream after a reset or on a
+  resume, and a repair of interrupted tool calls add nothing, and each message dropped is counted by role in
+  `prq.chat.dropped` (never its text). A cloud result enters only through its commit.
 - After each write PrSession sends the stored history to every connection, the sender included, and a client replaces
   its list with it. These are the only chat lists the server sends: the Agents SDK's relay of a client's list to the
   other connections before the save is dropped. The history is read within the budget the SDK keeps it in memory
   under (`hydrationByteBudget`, 32 MiB). A longer history goes as `{ "type": "prq:history-changed" }`
   (`HistoryChangedMessage` in `@prq/protocol`) instead, since its most recent part would replace the whole list a
   client has; the UI then reloads the history through `get-messages`, which streams all of it.
+- A connection the SDK is resuming a stream to (between its offer and the client's acknowledgement, when the SDK's own
+  frames skip it) gets these lists too: the SDK sends no history after a resume, so a question stored during the
+  handshake would otherwise be missing, and the list holds stored messages only, while a streamed result is stored at
+  its commit, so the list and the replayed chunks never describe the same message.
 - The client frames other than a chat request that write history (`cf_agent_chat_clear`, `cf_agent_chat_messages`,
   `cf_agent_tool_result`, `cf_agent_tool_approval`) are refused and logged as `prq.chat.refused`. prq has no
   client-side tools.
 - A local answer never replaces the whole conversation. PrSession checks the question's message ID against the latest
-  history and appends one answer with `persistMessages`, which runs no turn and still reaches connected clients.
+  history and appends one answer through its own insert, which runs no turn and still reaches connected clients.
 - History keeps the order in which messages were saved: a question sent during a turn comes before that turn's answer,
   and a local answer comes last. Each answer carries the message ID of its question in `metadata`, and the UI uses it to
   pair them.
@@ -644,8 +681,22 @@ What is left out on purpose:
 
 ### Model context
 
-The full conversation (PrSession's UIMessages) is never trimmed. Only the context passed to the model is assembled, in
-`prepareStep`, as: the analysis notes + the messages after the cut point + the current question.
+The full conversation (PrSession's UIMessages) is never trimmed. Only the context passed to the model is assembled, for
+each job before its model call, as: the analysis notes + the projection after the cut point + the job's own question,
+or an analysis's task.
+
+- **The projection.** The results stored so far in storage order, which is commit order (every result is appended at
+  its job's end), each answer preceded by its question wherever that question is stored. Incomplete texts are left
+  out, and so is every question without a stored answer (waiting, running or failed). A question therefore enters
+  together with its answer, the results of jobs that ran before this one are kept wherever they were stored, and the
+  projection only grows at its end. It is read from storage, root to leaf, never from the history the SDK keeps in
+  memory (`this.messages`), which holds only the most recent part within `hydrationByteBudget`: an older result would
+  otherwise drop out of a long conversation's context unseen. The stored messages up to the question's position were
+  the alternative; they drop the results committed after the question was stored and keep earlier open questions.
+- **The job's own part.** An answer's question is read by the job's target, never as the last user message. An
+  analysis gets the task "Summarize the pull request at head `<sha>`.", which is not stored. Before them comes the
+  system prompt: the pull request, its details (or that no webhook has arrived), and the job (the head an analysis
+  summarizes, or the commit an answer is about, or that no push has been seen yet).
 
 Compaction follows the approach of Pi (`pi-coding-agent`, MIT license). The prompts and procedure that are copied keep
 Pi's copyright notice.
@@ -784,6 +835,10 @@ Server:
 - Workers observability (logs) is enabled. Webhook receipt, job state changes, LLM and tool errors, and compactions are
   logged with the PR key and `jobId`. A claim that reaches 60 minutes is logged (`prq.job.stalled`), and so is a
   ledger entry the Hub refuses as older than the one it has (`prq.ledger.stale_rev`).
+- When a cloud job's run ends (`done` or `failed`), `prq.job.usage` logs the PR key, `jobId`, kind, run, outcome, the
+  model, the steps (model calls), the input, output and cached input tokens, the time from the run's first start to its
+  end (`wallMs`, on the session's clock) and its starts. Each finished step is added to the run's row as it ends, so
+  the numbers are summed over every start and a reset loses none.
 - The UI shows, per PR, the job state (waiting, which agent ID is working on it, failed with its reason) and, per answer,
   the target SHA, the model and the tokens used. The job state reaches it as the session's Agent state
   (`PrSessionView` in `@prq/protocol`), which only the server sets. Presence, the job counts and the ledger's version
@@ -798,7 +853,8 @@ These are enforced, not left to observation.
 - A cloud turn has a step limit (for example, 20) and a job has a token limit (for example, 500,000). When a turn hits
   either limit, the system shall make no further model or tool calls and end the job as `failed` with the reason. Text the
   turn had already produced is kept in the conversation and marked incomplete.
-- AIChatAgent's automatic recovery retries are lowered from the default of 10 to about 2. A compaction is retried once.
+- A cloud job's run is started at most 3 times across restarts, and the SDK's own recovery is declined (see
+  [Owner and jobs](#owner-and-jobs)). A compaction is retried once.
 - Spending is capped at the model provider, with the spend limit or prepaid credit of the API key; prq keeps no budget
   of its own. When the provider refuses a call, the job ends as `failed` with the provider's reason.
 - A Sandbox stops after inactivity (for example, 30 minutes).
@@ -846,7 +902,10 @@ prq/
 │  │   │   │   ├─ history.ts     append-only history: refused client frames, insert-only writes
 │  │   │   │   ├─ jobs.ts        job rows and their guarded transitions, the webhook inbox and GitHub's order
 │  │   │   │   ├─ context.ts     the conversation's pages for /cli/context
-│  │   │   │   └─ cloud.ts       the cloud agent seam
+│  │   │   │   ├─ cloud.ts       the cloud agent seam and its failure reasons
+│  │   │   │   ├─ turn.ts        a cloud turn: its binding, how it ended, what its commit stores
+│  │   │   │   ├─ projection.ts  what a job's model reads of the conversation
+│  │   │   │   └─ prompt.ts      the system prompt and an analysis's task
 │  │   │   ├─ github/            App token; attaching the token to outbound git traffic
 │  │   │   ├─ instructions/      prompts, skill registry, activate_skill / read_skill_resource
 │  │   │   ├─ workspace.ts       Sandbox

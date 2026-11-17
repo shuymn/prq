@@ -67,6 +67,10 @@ Costs accepted:
 - **Compaction is ours to write.** It is accepted because the prototype's check showed it keeps earlier decisions
   across repeated compaction (see [spikes.md](spikes.md)).
 - **Experimental status is unknown.** Recovery is not treated as exactly-once; job commits are idempotent instead.
+- **Recovery is prq's.** Durable chat recovery cannot be turned off and does not fit prq's jobs: its retry needs the
+  turn's user message last, which an analysis never has and an answer loses once a later question is stored, and its
+  continuation rewrites the last assistant message, which may be another job's. prq declines each incident and starts
+  a job's turn again from its own rows, at most 3 times per run, guarded by the turn the job was running under.
 
 If a provider that cannot be reached through an AI SDK provider is needed, or compaction fails the adoption test at a
 realistic context length, this comparison is the place to return to.

@@ -2,7 +2,7 @@ import type { AIChatAgent } from "@cloudflare/ai-chat";
 import { HistoryChangedMessage } from "@prq/protocol";
 import { WebSocketChatTransport } from "agents/chat/transport";
 import type { UIMessage } from "ai";
-import { runInDurableObject } from "cloudflare:test";
+import { abortAllDurableObjects, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import * as v from "valibot";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,8 +12,10 @@ import { CHAT_REQUEST_REFUSED } from "./pr-session/history.ts";
 import type { PrSession } from "./pr-session/index.ts";
 import { captureLogs, type LogEntry } from "./test/access.ts";
 import { type AgentSocket, answer, connect, hostToken, question, storedMessages } from "./test/chat.ts";
+import { cloudSession, expectAppended, messageRows, resumeOffer, untilState } from "./test/cloud.ts";
 import { latch } from "./test/latch.ts";
-import { hydrateRecent, jobRows } from "./test/session.ts";
+import { answerScript, finish, reasoning, ScriptedModel, text, useCloudModel } from "./test/model.ts";
+import { gate, holdInsert, hydrateRecent, jobOf, jobRows, prSessionSeams } from "./test/session.ts";
 
 const sockets: AgentSocket[] = [];
 
@@ -44,9 +46,9 @@ async function session() {
   return { stub: await prSessionStub(env, ref), path, token, open };
 }
 
-// The server's own append, as the job code makes it: through persistMessages on the instance.
+// The server's own append, as a job's end makes it (inside the history queue there).
 async function serverAppend(stub: DurableObjectStub<PrSession>, message: UIMessage): Promise<void> {
-  await runInDurableObject(stub, (instance) => instance.persistMessages([message]));
+  await runInDurableObject(stub, (instance) => prSessionSeams(instance).insertMessages([message], "results"));
 }
 
 // The promise's outcome, or a rejection when it is still pending after WAIT_MS.
@@ -127,52 +129,60 @@ describe("resend without the answer", () => {
 });
 
 describe("one write at a time", () => {
-  it("queues a server append behind a client's save, so the last list sent is the stored one", async () => {
+  it("queues a job's commit behind a client's save, so the last list sent is the stored one", async () => {
     captureLogs();
-    const { stub, path, token, open } = await session();
-    const sender = await open();
-    const observer = await open();
-    await sender.chat([Q1, Q2]);
-    // Holds the SDK's save (AIChatAgent.prototype.persistMessages, inside the queue) for the next write, and marks
-    // the server append's arrival at PrSession.persistMessages, before the queue.
-    let entered = false;
-    let appendArrived = false;
-    let release: (() => void) | null = null;
+    const cloud = await cloudSession("history", sockets);
+    const { stub, path, token, client: sender } = cloud;
+    const observer = await cloud.open();
+    useCloudModel(new ScriptedModel().add(answerScript("answer one")));
+    // The job's turn is held when it has ended, before its commit queues; the commit's appends are counted.
+    const ended = await gate(stub);
+    let appends = 0;
     await runInDurableObject(stub, (instance) => {
-      const held = latch();
-      release = () => held.open();
-      const base: AIChatAgent<Env> = Object.getPrototypeOf(Object.getPrototypeOf(instance));
-      const save = base.persistMessages.bind(instance);
-      vi.spyOn(base, "persistMessages").mockImplementationOnce(async (...args) => {
-        entered = true;
-        await held.promise;
-        return save(...args);
+      const save = instance.saveMessages.bind(instance);
+      vi.spyOn(instance, "saveMessages").mockImplementationOnce(async (...args) => {
+        const result = await save(...args);
+        await ended.wait();
+        return result;
       });
-      const persist = instance.persistMessages.bind(instance);
-      vi.spyOn(instance, "persistMessages").mockImplementation(async (messages) => {
-        appendArrived ||= messages.some((message) => message.id === A1.id);
-        return persist(messages);
+      const seams = prSessionSeams(instance);
+      const insert = seams.insertMessages.bind(instance);
+      vi.spyOn(seams, "insertMessages").mockImplementation(async (messages, adds) => {
+        appends += adds === "results" ? 1 : 0;
+        return insert(messages, adds);
       });
     });
+    await sender.chat([Q1]);
+    await ended.reached();
+    const saving = await holdInsert(stub, "before");
+    const asked = sender.chat([Q1, Q2]);
+    await saving.reached();
 
-    const asked = sender.chat([Q1, Q2, Q3]);
-    await vi.waitFor(() => expect(entered).toBe(true), { timeout: 2000 });
-    let appended = false;
-    const append = serverAppend(stub, A1).then(() => {
-      appended = true;
-    });
-    await vi.waitFor(() => expect(appendArrived).toBe(true), { timeout: 2000 });
-    // The object keeps serving while the save is held, and the append, which has arrived, waits for it.
-    expect(await storedMessages(path, token)).toEqual([Q1, Q2]);
-    expect(appended).toBe(false);
-    await runInDurableObject(stub, () => release?.());
-    await Promise.all([asked, append]);
-    await sender.received(A1.id);
-    await observer.received(A1.id);
+    await ended.open();
+    // The commit waits for the held save, and the object keeps serving meanwhile.
+    expect(await storedMessages(path, token)).toEqual([Q1]);
+    expect(appends).toBe(0);
+    await saving.open();
+    await asked;
+    await untilState(stub, "q1", "done");
+    const result = `answer-${(await jobOf(stub, "q1")).job_id}`;
+    await sender.received(result);
+    await observer.received(result);
 
-    expect(await storedMessages(path, token)).toEqual([Q1, Q2, Q3, A1]);
-    expect(sender.chatLists().at(-1)).toEqual([Q1, Q2, Q3, A1]);
-    expect(observer.chatLists().at(-1)).toEqual([Q1, Q2, Q3, A1]);
+    const ids = (await storedMessages(path, token)).map((message) => message.id);
+    expect(ids).toEqual(["q1", "q2", result]);
+    expect(
+      sender
+        .chatLists()
+        .at(-1)
+        ?.map((message) => message.id),
+    ).toEqual(ids);
+    expect(
+      observer
+        .chatLists()
+        .at(-1)
+        ?.map((message) => message.id),
+    ).toEqual(ids);
   });
 });
 
@@ -467,4 +477,74 @@ it("persistence is insert-only", async () => {
   });
 
   expect(await storedMessages(path, token)).toEqual([...before, Q3]);
+});
+
+// The SDK's history writes in a cloud turn, as prq.chat.dropped counted what they tried to add besides questions.
+function dropped(logs: LogEntry[]): unknown[] {
+  return logs
+    .filter((log) => log.entry["event"] === "prq.chat.dropped")
+    .map((log) => ({ role: log.entry["role"], messages: log.entry["messages"] }));
+}
+
+// Each SDK write that a cloud turn makes is checked against the history: every row stored before the scenario stays as
+// it was, and the history grows by prq's own appends only.
+describe("cloud turns", () => {
+  it("stores a turn's result by prq's commit only, dropping the streamed message the SDK saves", async () => {
+    const logs = captureLogs();
+    const cloud = await cloudSession("history", sockets);
+    useCloudModel(new ScriptedModel().add([...reasoning("thinking"), ...text("answer one"), finish()]));
+    const before = await messageRows(cloud);
+
+    await cloud.client.chat([Q1]);
+    await untilState(cloud.stub, "q1", "done");
+
+    const job = await jobOf(cloud.stub, "q1");
+    expectAppended(before, await messageRows(cloud), ["q1", `answer-${job.job_id}`]);
+    expect(dropped(logs)).toEqual([{ role: "assistant", messages: 1 }]);
+  });
+
+  it("stores no partial the SDK saves when a turn errors, only prq's incomplete message", async () => {
+    const logs = captureLogs();
+    const cloud = await cloudSession("history", sockets);
+    useCloudModel(new ScriptedModel().add([...text("partial"), { fail: new Error("lost") }]));
+    const before = await messageRows(cloud);
+
+    await cloud.client.chat([Q1]);
+    await untilState(cloud.stub, "q1", "failed");
+
+    const job = await jobOf(cloud.stub, "q1");
+    expectAppended(before, await messageRows(cloud), ["q1", `answer-${job.job_id}-r1-incomplete`]);
+    expect(dropped(logs)).toEqual([{ role: "assistant", messages: 1 }]);
+  });
+
+  it("stores nothing of a cut turn's stream that a connection resumes after a reset", async () => {
+    const logs = captureLogs();
+    const cloud = await cloudSession("history", sockets);
+    const held = await gate(cloud.stub);
+    // More chunks than the SDK buffers before it stores them (10), so the cut stream has stored chunks to replay.
+    const deltas = Array.from(
+      { length: 12 },
+      (_, index) => ({ type: "text-delta", id: "t", delta: `${index} ` }) as const,
+    );
+    useCloudModel(new ScriptedModel().add([{ type: "text-start", id: "t" }, ...deltas, { hold: held }, finish()]));
+    await cloud.client.chat([Q1]);
+    await held.reached();
+    const before = await messageRows(cloud);
+
+    await abortAllDurableObjects();
+    // With no model after the reset, settle fails the job rather than running it again, and the cut stream stays.
+    useCloudModel(undefined);
+    const stub = await prSessionStub(env, cloud.ref);
+    await untilState(stub, "q1", "failed");
+    const client = await cloud.open();
+    const transport = new WebSocketChatTransport({ agent: client.transportConnection() });
+    const probed = client.frames.length;
+    const resuming = transport.reconnectToStream({ chatId: "chat" });
+    const offer = await resumeOffer(client, probed);
+    expect(transport.handleStreamResuming(offer)).toBe(true);
+    expect(await resuming).not.toBeNull();
+    await vi.waitFor(() => expect(dropped(logs)).toEqual([{ role: "assistant", messages: 1 }]));
+
+    expectAppended(before, await messageRows(cloud), []);
+  });
 });

@@ -123,19 +123,24 @@ export class AgentSocket {
     return this.frames.length;
   }
 
-  // Sends a chat request and waits for its last response frame (the SDK answers every request with one).
-  async chat(messages: UIMessage[], trigger: "submit-message" | "regenerate-message" = "submit-message") {
-    const id = crypto.randomUUID();
+  // Sends a chat request (with any other body fields given, under the given request ID) and waits for its last response
+  // frame (the SDK answers every request with one). Returns the request's ID.
+  async chat(
+    messages: UIMessage[],
+    trigger: "submit-message" | "regenerate-message" = "submit-message",
+    { body = {}, id = crypto.randomUUID() }: { body?: Record<string, unknown>; id?: string } = {},
+  ): Promise<string> {
     const from = this.frames.length;
     this.send({
       type: "cf_agent_use_chat_request",
       id,
-      init: { method: "POST", body: JSON.stringify({ messages, trigger }) },
+      init: { method: "POST", body: JSON.stringify({ ...body, messages, trigger }) },
     });
     await this.next(
       (frame) => frame["type"] === "cf_agent_use_chat_response" && frame["id"] === id && frame["done"] === true,
       from,
     );
+    return id;
   }
 
   close(): void {

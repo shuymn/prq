@@ -126,3 +126,8 @@ export function captureLogs(): LogEntry[] {
   }
   return entries;
 }
+
+// The entries of one event, in the order they were logged.
+export function events(logs: LogEntry[], event: string): Record<string, unknown>[] {
+  return logs.map((log) => log.entry).filter((entry) => entry["event"] === event);
+}
