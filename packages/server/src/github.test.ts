@@ -92,6 +92,21 @@ describe("installation tokens", () => {
     expect(api.tokens()).toHaveLength(2);
     expect(githubStatus(next.error)).toBe(503);
   });
+  it("ends a mint whose signing does not finish at the bound", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const api = serveGithub();
+    const signing = vi.spyOn(crypto.subtle, "sign").mockReturnValue(new Promise(() => undefined));
+    const github = client();
+
+    const call = track(github.pullRequest(15, PR));
+    await until(() => signing.mock.calls.length === 1, "the signing");
+    await vi.advanceTimersByTimeAsync(GITHUB_CALL_MS - 1);
+    expect(call.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await until(() => call.settled, "the call's end");
+    expect(String(call.error)).toMatch(/the installation token took over 10000 ms/);
+    expect(api.requests).toEqual([]);
+  });
 });
 
 describe("pull request reads", () => {
