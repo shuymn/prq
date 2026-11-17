@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import { ClaimResponse } from "@prq/protocol";
 import * as v from "valibot";
@@ -50,8 +50,11 @@ async function endedDir(repo: Repo | null, commit: string | null): Promise<strin
   const dir = join(stack.home(), "jobs", `${randomUUID()}-r1-${commit ?? "none"}`);
   await mkdir(dir, { recursive: true });
   if (repo !== null && commit !== null) {
-    await writeFile(join(dir, "checkout.json"), JSON.stringify({ clone: await realpath(repo.clone), sha: commit }));
-    await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", join(dir, "worktree"), commit);
+    await writeFile(
+      join(dir, "checkout.json"),
+      JSON.stringify({ clone: await realpath(repo.clone.path), sha: commit }),
+    );
+    await repo.clone.worktreeAdd(relative(stack.dir(), join(dir, "worktree")), commit);
   }
   return dir;
 }
@@ -66,7 +69,10 @@ async function reconcile(agentId: string, env: Record<string, string> = {}, cwd?
 async function recordedDir(repo: Repo): Promise<{ dir: string; path: string }> {
   const dir = join(stack.home(), "jobs", `${randomUUID()}-r1-${repo.base}`);
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, "checkout.json"), JSON.stringify({ clone: await realpath(repo.clone), sha: repo.base }));
+  await writeFile(
+    join(dir, "checkout.json"),
+    JSON.stringify({ clone: await realpath(repo.clone.path), sha: repo.base }),
+  );
   return { dir, path: join(dir, "worktree") };
 }
 
@@ -99,12 +105,11 @@ describe("prq reconcile", () => {
     await mkdir(odd);
     await writeFile(join(odd, "file"), "notes\n");
     // The host's own worktree whose directory is gone: registered, prunable.
-    const hostWorktree = join(stack.dir(), "host-worktree");
-    await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", hostWorktree, repo.base);
+    const hostWorktree = (await repo.clone.worktreeAdd("host-worktree", repo.base)).path;
     const hostRegistration = await realpath(hostWorktree);
     await rm(hostWorktree, { recursive: true });
-    const refs = await repo.git(repo.clone, "for-each-ref", "--format=%(refname) %(objectname)");
-    const before = await repo.worktrees();
+    const refs = await repo.clone.refs();
+    const before = await repo.clone.worktrees();
     expect(before).toEqual(expect.arrayContaining([...prqRegistrations, hostRegistration]));
     const outsideBefore = await stat(join(outside, "file"));
 
@@ -128,20 +133,19 @@ describe("prq reconcile", () => {
     expect(await readdir(outside)).toEqual(["file"]);
     expect((await stat(join(outside, "file"))).mtimeMs).toBe(outsideBefore.mtimeMs);
     // The clone: both prq registrations gone, the host's kept, every ref as it was.
-    expect(await repo.worktrees()).toEqual(before.filter((path) => !prqRegistrations.includes(path)));
-    expect(await repo.worktrees()).toContain(hostRegistration);
-    expect(await repo.git(repo.clone, "for-each-ref", "--format=%(refname) %(objectname)")).toBe(refs);
+    expect(await repo.clone.worktrees()).toEqual(before.filter((path) => !prqRegistrations.includes(path)));
+    expect(await repo.clone.worktrees()).toContain(hostRegistration);
+    expect(await repo.clone.refs()).toBe(refs);
   });
 
   it("cleanup: a job's worktree path that is a symlink to a host worktree: kept, and the host worktree with it", async () => {
     const repo = await makeRepo(stack.dir(), pr);
-    const host = join(stack.dir(), "host-worktree");
-    await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", host, repo.base);
+    const host = (await repo.clone.worktreeAdd("host-worktree", repo.base)).path;
     await writeFile(join(host, "host-file"), "the host's\n");
     const { dir, path } = await recordedDir(repo);
     await symlink(host, path);
-    const registrations = await repo.worktrees();
-    const refs = await repo.git(repo.clone, "for-each-ref", "--format=%(refname) %(objectname)");
+    const registrations = await repo.clone.worktrees();
+    const refs = await repo.clone.refs();
 
     const { exit, out } = await reconcile("laptop", repo.env);
     expect(out).toEqual({
@@ -153,8 +157,8 @@ describe("prq reconcile", () => {
     expect(stderrLines(exit)).toEqual([`prq: ${path} is a symlink, not followed; its job directory is kept`]);
     expect(await readFile(join(host, "host-file"), "utf8")).toBe("the host's\n");
     expect(await readFile(join(host, "README.md"), "utf8")).toBe("a widget\n");
-    expect(await repo.worktrees()).toEqual(registrations);
-    expect(await repo.git(repo.clone, "for-each-ref", "--format=%(refname) %(objectname)")).toBe(refs);
+    expect(await repo.clone.worktrees()).toEqual(registrations);
+    expect(await repo.clone.refs()).toBe(refs);
     expect((await lstat(path)).isSymbolicLink()).toBe(true);
   });
 
@@ -165,32 +169,30 @@ describe("prq reconcile", () => {
   ] as const)("cleanup: a job's worktree path holding %s: kept, its files and registrations too", async (_, kind) => {
     const repo = await makeRepo(stack.dir(), pr);
     const { dir, path } = await recordedDir(repo);
+    const name = relative(stack.dir(), path);
     let owner = repo.clone;
     if (kind === "moved") {
       // Its .git leads to the clone, which registers it where it was.
-      const elsewhere = join(stack.dir(), "elsewhere");
-      await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", elsewhere, repo.base);
-      await rename(elsewhere, path);
+      await rename((await repo.clone.worktreeAdd("elsewhere", repo.base)).path, path);
     } else {
       // The clone registers prq's worktree at the path, or no longer does; another repository's worktree is there now.
-      await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", path, repo.base);
-      await (kind === "removed" ? repo.git(repo.clone, "worktree", "remove", path) : rm(path, { recursive: true }));
-      owner = join(stack.dir(), "other");
-      await repo.fixture.init(owner);
-      await repo.git(owner, "commit", "--quiet", "--allow-empty", "-m", "other");
-      await repo.git(owner, "worktree", "add", "--quiet", "--detach", path, "HEAD");
+      await repo.clone.worktreeAdd(name, repo.base);
+      await (kind === "removed" ? repo.clone.worktreeRemove(name) : rm(path, { recursive: true }));
+      owner = await repo.fixture.init("other");
+      await owner.commit("other", { allowEmpty: true });
+      await owner.worktreeAdd(name);
     }
     await writeFile(join(path, "important.txt"), "keep\n");
-    const ownerRegistrations = await repo.git(owner, "worktree", "list", "--porcelain");
-    const registrations = await repo.worktrees();
+    const ownerRegistrations = await owner.worktreeList();
+    const registrations = await repo.clone.worktrees();
 
     const { exit, out } = await reconcile("laptop", repo.env);
-    const reason = `${path} is not a worktree of ${await realpath(repo.clone)}`;
+    const reason = `${path} is not a worktree of ${await realpath(repo.clone.path)}`;
     expect(out).toEqual({ claim: null, removed: [], kept: [{ dir, reason }], next: "wait" });
     expect(stderrLines(exit)).toEqual([`prq: ${reason}; its job directory is kept`]);
     expect(await readFile(join(path, "important.txt"), "utf8")).toBe("keep\n");
-    expect(await repo.git(owner, "worktree", "list", "--porcelain")).toBe(ownerRegistrations);
-    expect(await repo.worktrees()).toEqual(registrations);
+    expect(await owner.worktreeList()).toBe(ownerRegistrations);
+    expect(await repo.clone.worktrees()).toEqual(registrations);
   });
 
   it("restart after a replaced claimId: keeps the record and the saved answer; the next claim resumes them", async () => {

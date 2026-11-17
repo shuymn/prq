@@ -20,7 +20,7 @@ import * as v from "valibot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { result, stderrLines } from "../test/cli.ts";
-import { liveProcesses, makeRepo, type Repo, slowFilter } from "../test/git.ts";
+import { type FixtureRepo, liveProcesses, makeRepo, type Repo, slowFilter } from "../test/git.ts";
 import { ask, push, retry, sha } from "../test/pr.ts";
 import { useStack } from "../test/stack.ts";
 
@@ -50,17 +50,22 @@ async function exists(path: string): Promise<boolean> {
   );
 }
 
+// The repository or worktree at a path in the fixture root, such as the worktree prq added.
+function at(repo: Repo, path: string): FixtureRepo {
+  return repo.fixture.repo(relative(repo.fixture.root, path));
+}
+
 // What a checkout must leave as it was in the host's clone: every ref with its commit (a submodule's too), HEAD,
 // FETCH_HEAD, and the worktrees it registers.
 async function hostState(repo: Repo) {
-  const fetchHead = join(repo.clone, ".git", "FETCH_HEAD");
-  const refs = async (dir: string) => repo.git(dir, "for-each-ref", "--format=%(refname) %(objectname)");
+  const fetchHead = join(repo.clone.path, ".git", "FETCH_HEAD");
+  const lib = repo.fixture.repo(join(repo.clone.name, "lib"));
   return {
-    refs: await refs(repo.clone),
-    submoduleRefs: (await exists(join(repo.clone, "lib"))) ? await refs(join(repo.clone, "lib")) : null,
-    head: await repo.git(repo.clone, "rev-parse", "--symbolic-full-name", "HEAD"),
+    refs: await repo.clone.refs(),
+    submoduleRefs: (await exists(lib.path)) ? await lib.refs() : null,
+    head: await repo.clone.branch(),
     fetchHead: (await exists(fetchHead)) ? await readFile(fetchHead, "utf8") : null,
-    worktrees: await repo.worktrees(),
+    worktrees: await repo.clone.worktrees(),
   };
 }
 
@@ -86,16 +91,14 @@ async function digest(dir: string): Promise<string[]> {
 
 // A submodule in the host's clone, whose own remote then moves on: a fetch that recursed would update its refs.
 async function addSubmodule(repo: Repo): Promise<void> {
-  const lib = join(stack.dir(), "lib.git");
-  const libSeed = join(stack.dir(), "lib-seed");
-  await repo.fixture.init(lib, { bare: true });
-  await repo.fixture.init(libSeed);
-  await repo.git(libSeed, "commit", "--quiet", "--allow-empty", "-m", "lib");
-  await repo.git(libSeed, "push", "--quiet", lib, "HEAD:refs/heads/main");
-  await repo.git(repo.clone, "submodule", "--quiet", "add", `file://${lib}`, "lib");
-  await repo.git(repo.clone, "commit", "--quiet", "-m", "add lib");
-  await repo.git(libSeed, "commit", "--quiet", "--allow-empty", "-m", "lib moves on");
-  await repo.git(libSeed, "push", "--quiet", lib, "HEAD:refs/heads/main");
+  const lib = await repo.fixture.init("lib.git", { bare: true });
+  const libSeed = await repo.fixture.init("lib-seed");
+  await libSeed.commit("lib", { allowEmpty: true });
+  await libSeed.push(lib, "HEAD:refs/heads/main");
+  await repo.clone.submoduleAdd(lib, "lib");
+  await repo.clone.commit("add lib");
+  await libSeed.commit("lib moves on", { allowEmpty: true });
+  await libSeed.push(lib, "HEAD:refs/heads/main");
 }
 
 // The agent is present first (its wait was a contact), so the pull request's session is local.
@@ -132,7 +135,7 @@ describe("prq checkout", () => {
     // pull refs fetched into remote-tracking refs (--refmap=), every tag fetched (--no-tags), refs and local tags the
     // remote lacks pruned (--no-prune), submodules fetched (--no-recurse-submodules), and automatic maintenance, in the
     // foreground, that prunes the host's worktree registrations whose directory is gone (--no-auto-maintenance).
-    await repo.git(repo.bare, "tag", "v1", head);
+    await repo.bare.tag("v1", head);
     const settings: [string, string][] = [
       ["remote.origin.fetch", "+refs/pull/*/head:refs/remotes/origin/pr/*"],
       ["remote.origin.tagOpt", "--tags"],
@@ -145,14 +148,13 @@ describe("prq checkout", () => {
       ["gc.worktreePruneExpire", "now"],
     ];
     for (const [key, value] of settings) {
-      await repo.git(repo.clone, "config", "--add", key, value);
+      await repo.clone.configSet(key, value, { add: true });
     }
-    await repo.git(repo.clone, "update-ref", "refs/remotes/origin/gone", repo.base);
-    await repo.git(repo.clone, "tag", "local-only", repo.base);
+    await repo.clone.updateRef("refs/remotes/origin/gone", repo.base);
+    await repo.clone.tag("local-only", repo.base);
     await addSubmodule(repo);
     // After the last commit in the clone, whose own automatic maintenance would prune it already.
-    const hostWorktree = join(stack.dir(), "host-worktree");
-    await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", hostWorktree, repo.base);
+    const hostWorktree = (await repo.clone.worktreeAdd("host-worktree", repo.base)).path;
     await rm(hostWorktree, { recursive: true });
     const before = await hostState(repo);
     expect(before.worktrees).toContain(hostWorktree);
@@ -162,12 +164,12 @@ describe("prq checkout", () => {
     const { exit, out } = await checkout("laptop", repo.env);
 
     const path = join(claimed.dir, "worktree");
-    expect(out).toEqual({ path, sha: head, base: repo.base, clone: await realpath(repo.clone), next: "answer" });
+    expect(out).toEqual({ path, sha: head, base: repo.base, clone: await realpath(repo.clone.path), next: "answer" });
     expect(exit.stderr).toBe("");
-    expect(await repo.git(path, "rev-parse", "HEAD")).toBe(head);
-    expect(await repo.git(path, "symbolic-ref", "--quiet", "HEAD").catch(() => "detached")).toBe("detached");
+    expect(await at(repo, path).headCommit()).toBe(head);
+    expect(await at(repo, path).branch()).toBeNull();
     expect(JSON.parse(await readFile(join(claimed.dir, "checkout.json"), "utf8"))).toEqual({
-      clone: await realpath(repo.clone),
+      clone: await realpath(repo.clone.path),
       sha: head,
     });
     const after = await hostState(repo);
@@ -181,12 +183,12 @@ describe("prq checkout", () => {
   it("runs none of the clone's hooks", async () => {
     const { repo } = await analysisJob();
     const marker = join(stack.dir(), "hook-ran");
-    const hooks = join(repo.clone, ".git", "hooks");
+    const hooks = join(repo.clone.path, ".git", "hooks");
     await writeFile(join(hooks, "post-checkout"), `#!/bin/sh\ntouch '${marker}'\n`);
     await chmod(join(hooks, "post-checkout"), 0o755);
     // The isolated global config turns hooks off for every git of the tests; the clone's own config names its hooks
     // again, as a host's would.
-    await repo.git(repo.clone, "config", "core.hooksPath", hooks);
+    await repo.clone.configSet("core.hooksPath", hooks);
 
     await checkout("laptop", repo.env);
     expect(await exists(marker)).toBe(false);
@@ -197,7 +199,7 @@ describe("prq checkout", () => {
     // A decoy clone of the same repository: a git that followed the variables would find it as the clone, fetch into it
     // and register the worktree there.
     const decoy = join(stack.dir(), "decoy");
-    await repo.fixture.clone(repo.url, decoy);
+    await repo.fixture.clone(repo.url, "decoy");
     const decoyGit = join(decoy, ".git");
     const before = await digest(decoy);
     const env = {
@@ -212,8 +214,12 @@ describe("prq checkout", () => {
     };
 
     const { out } = await checkout("laptop", env);
-    expect(out).toMatchObject({ path: join(claimed.dir, "worktree"), sha: head, clone: await realpath(repo.clone) });
-    expect(await repo.worktrees()).toContain(await realpath(out.path));
+    expect(out).toMatchObject({
+      path: join(claimed.dir, "worktree"),
+      sha: head,
+      clone: await realpath(repo.clone.path),
+    });
+    expect(await repo.clone.worktrees()).toContain(await realpath(out.path));
     expect(await digest(decoy)).toEqual(before);
   });
 
@@ -237,7 +243,7 @@ describe("prq checkout", () => {
     expect(await readFile(join(outside, "file"), "utf8")).toBe("outside\n");
     expect(file.mtimeMs).toBe(before.file.mtimeMs);
     // Tracked files as the commit has them, nothing added or ignored.
-    expect(await repo.git(out.path, "status", "--porcelain", "--ignored")).toBe("");
+    expect(await at(repo, out.path).status()).toBe("");
   });
 
   it("finds the clone under a root whatever the case of its directory names", async () => {
@@ -252,26 +258,26 @@ describe("prq checkout", () => {
   it("finds the clone from --clone, without roots", async () => {
     const { repo } = await analysisJob();
     const env = { ...repo.env, PRQ_CLONE_ROOTS: "" };
-    const flagged = await stack.run(["checkout", "--agent-id", "laptop", "--clone", repo.clone], env);
+    const flagged = await stack.run(["checkout", "--agent-id", "laptop", "--clone", repo.clone.path], env);
     expect(flagged.code).toBe(0);
-    expect(result(flagged)).toMatchObject({ clone: await realpath(repo.clone) });
+    expect(result(flagged)).toMatchObject({ clone: await realpath(repo.clone.path) });
   });
 
   it("finds the clone holding the working directory, without roots", async () => {
     const { repo } = await analysisJob();
-    await mkdir(join(repo.clone, "sub"), { recursive: true });
-    const { out } = await checkout("laptop", { ...repo.env, PRQ_CLONE_ROOTS: "" }, join(repo.clone, "sub"));
-    expect(out.clone).toBe(await realpath(repo.clone));
+    await mkdir(join(repo.clone.path, "sub"), { recursive: true });
+    const { out } = await checkout("laptop", { ...repo.env, PRQ_CLONE_ROOTS: "" }, join(repo.clone.path, "sub"));
+    expect(out.clone).toBe(await realpath(repo.clone.path));
   });
 
   it("finds a fork clone through its upstream remote", async () => {
     const { repo, head } = await analysisJob();
-    await repo.git(repo.clone, "remote", "rename", "origin", "upstream");
-    await repo.git(repo.clone, "remote", "add", "origin", "git@github.com:someone/widgets.git");
+    await repo.clone.remoteRename("origin", "upstream");
+    await repo.clone.remoteAdd("origin", "git@github.com:someone/widgets.git");
     const before = await hostState(repo);
 
     const { out } = await checkout("laptop", repo.env);
-    expect(out).toMatchObject({ sha: head, clone: await realpath(repo.clone) });
+    expect(out).toMatchObject({ sha: head, clone: await realpath(repo.clone.path) });
     expect((await hostState(repo)).refs).toBe(before.refs);
   });
 
@@ -294,7 +300,7 @@ describe("prq checkout", () => {
     const repo = await makeRepo(stack.dir(), pr);
     const first = await repo.head("h1");
     // h1 stays reachable from a branch while the pull ref is force-pushed past it.
-    await repo.git(repo.bare, "update-ref", "refs/heads/kept", first);
+    await repo.bare.updateRef("refs/heads/kept", first);
     await repo.head("h2");
     await present("laptop");
     await push(stack.worker(), pr, first, repo.base);
@@ -303,7 +309,7 @@ describe("prq checkout", () => {
 
     const { out } = await checkout("laptop", repo.env);
     expect(out.sha).toBe(first);
-    expect(await repo.git(out.path, "rev-parse", "HEAD")).toBe(first);
+    expect(await at(repo, out.path).headCommit()).toBe(first);
     expect((await hostState(repo)).refs).toBe(before.refs);
   });
 
@@ -387,10 +393,10 @@ describe("prq checkout", () => {
 
     const second = await checkout("laptop", repo.env);
     expect(second.out).toMatchObject({ path: join(resumed.dir, "worktree"), sha: h2 });
-    expect(await repo.git(second.out.path, "rev-parse", "HEAD")).toBe(h2);
+    expect(await at(repo, second.out.path).headCommit()).toBe(h2);
     // The ended claim's directory and its worktree went with this checkout.
     expect(await exists(question.dir)).toBe(false);
-    expect(await repo.worktrees()).not.toContain(firstPath);
+    expect(await repo.clone.worktrees()).not.toContain(firstPath);
 
     await writeFile(join(second.out.path, "notes.txt"), "the AI's file\n");
     const rerun = await checkout("laptop", repo.env);
@@ -403,22 +409,23 @@ describe("prq checkout", () => {
     const { out } = await checkout("laptop", repo.env);
     await writeFile(join(out.path, "notes.txt"), "the AI's file\n");
 
-    await repo.git(out.path, "checkout", "--quiet", "--detach", repo.base);
+    const worktree = at(repo, out.path);
+    await worktree.checkoutDetach(repo.base);
     const moved = await stack.run(["checkout", "--agent-id", "laptop"], repo.env);
     expect(moved.code).toBe(1);
     expect(moved.stdout).toBe("");
     expect(stderrLines(moved)).toEqual([
       `prq: the worktree ${out.path} is detached at ${repo.base}, not at the job's commit ${head}; its files are left as they are`,
     ]);
-    expect(await repo.git(out.path, "rev-parse", "HEAD")).toBe(repo.base);
+    expect(await worktree.headCommit()).toBe(repo.base);
 
-    await repo.git(out.path, "switch", "--quiet", "-c", "work", head);
+    await worktree.switchCreate("work", head);
     const onBranch = await stack.run(["checkout", "--agent-id", "laptop"], repo.env);
     expect(onBranch.code).toBe(1);
     expect(stderrLines(onBranch)).toEqual([
       `prq: the worktree ${out.path} is at ${head} on refs/heads/work, not detached at the job's commit ${head}; its files are left as they are`,
     ]);
-    expect(await repo.git(out.path, "symbolic-ref", "HEAD")).toBe("refs/heads/work");
+    expect(await worktree.branch()).toBe("refs/heads/work");
     expect(await readFile(join(out.path, "notes.txt"), "utf8")).toBe("the AI's file\n");
   });
 
@@ -430,21 +437,19 @@ describe("prq checkout", () => {
     const path = join(claimed.dir, "worktree");
     await mkdir(claimed.dir, { recursive: true });
     let target: string;
-    let owner: string;
+    let owner: FixtureRepo;
     if (kind === "symlink") {
-      target = join(stack.dir(), "host-worktree");
       owner = repo.clone;
-      await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", target, repo.base);
+      target = (await repo.clone.worktreeAdd("host-worktree", repo.base)).path;
       await symlink(target, path);
     } else {
       target = path;
-      owner = join(stack.dir(), "other");
-      await repo.fixture.init(owner);
-      await repo.git(owner, "commit", "--quiet", "--allow-empty", "-m", "other");
-      await repo.git(owner, "worktree", "add", "--quiet", "--detach", path, "HEAD");
+      owner = await repo.fixture.init("other");
+      await owner.commit("other", { allowEmpty: true });
+      await owner.worktreeAdd(relative(stack.dir(), path));
     }
     await writeFile(join(target, "keep.txt"), "keep\n");
-    const registrations = await repo.git(owner, "worktree", "list", "--porcelain");
+    const registrations = await owner.worktreeList();
 
     const exit = await stack.run(["checkout", "--agent-id", "laptop"], repo.env);
     expect(exit.code).toBe(1);
@@ -452,10 +457,10 @@ describe("prq checkout", () => {
     const reason =
       kind === "symlink"
         ? `${path} is a symlink, not followed`
-        : `${path} is not a worktree of ${await realpath(repo.clone)}`;
+        : `${path} is not a worktree of ${await realpath(repo.clone.path)}`;
     expect(stderrLines(exit)).toEqual([`prq: ${reason}; nothing was removed`]);
     expect(await readFile(join(target, "keep.txt"), "utf8")).toBe("keep\n");
-    expect(await repo.git(owner, "worktree", "list", "--porcelain")).toBe(registrations);
+    expect(await owner.worktreeList()).toBe(registrations);
     expect(await exists(join(claimed.dir, "checkout.json"))).toBe(false);
   });
 

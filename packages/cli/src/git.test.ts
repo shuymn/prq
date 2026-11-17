@@ -19,7 +19,7 @@ afterEach(async () => {
 describe("Git", () => {
   it("drops every variable the installed git lists as local to a repository", async () => {
     const fixture = await FixtureGit.create(root);
-    const listed = (await fixture.git(root, "rev-parse", "--local-env-vars")).split("\n");
+    const listed = await fixture.localEnvVars();
     expect(listed.length).toBeGreaterThan(0);
     expect([...REPOSITORY_VARIABLES]).toEqual(expect.arrayContaining([...listed, "GIT_NAMESPACE"]));
   });

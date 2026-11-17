@@ -1,13 +1,17 @@
-// Git for the tests, safe by construction. Every fixture git command goes through FixtureGit, which runs git only on
-// paths inside one fixture root (a fresh temporary directory outside every repository) and with an environment built
-// from nothing: no variable of the test process reaches git, so a GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE that a hook
-// set cannot send a command to the real repository, and the developer's config, identity, signing and hooks never apply.
-// Identity comes only from GIT_AUTHOR_* and GIT_COMMITTER_*; no fixture writes user.* or global or system config.
+// Git for the tests, safe by construction. A test runs git only through the named operations of FixtureGit and
+// FixtureRepo, each of which builds its own arguments: there is no free-form git, so no option a test writes can send a
+// command to another repository or another config file. The values a test passes (refs, commits, config keys) follow
+// --end-of-options, where git cannot take them as options. A path is a name in the fixture root (a fresh temporary
+// directory outside every repository), checked before git runs to resolve inside the root with every symlink followed;
+// an operation in a repository also checks that the repository's git directories are inside the root. git runs with an
+// environment built from nothing: no variable of the test process reaches it, so a GIT_DIR, GIT_WORK_TREE or
+// GIT_INDEX_FILE that a hook set cannot point it elsewhere, and the developer's config, identity, signing and hooks never
+// apply. Identity comes only from GIT_AUTHOR_* and GIT_COMMITTER_*; no fixture writes user.* or global or system config.
 
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { promisify } from "node:util";
 
 import type { PrRef } from "@prq/protocol";
@@ -48,53 +52,51 @@ export function gitEnv(root: string): Record<string, string> {
   };
 }
 
-// Options that would point a command at another repository than its -C directory.
-const ELSEWHERE = /^(?:-C|--git-dir(?:=.*)?|--work-tree(?:=.*)?|--namespace(?:=.*)?)$/;
-
-// git's options before the subcommand that take the next argument as their value.
-const GLOBAL_WITH_VALUE = new Set(["-c", "--config-env", "--attr-source"]);
-
-// The subcommand: the first argument after git's own options.
-function subcommand(args: readonly string[]): string | undefined {
-  let index = 0;
-  while (args[index]?.startsWith("-") === true) {
-    index += GLOBAL_WITH_VALUE.has(args[index] ?? "") ? 2 : 1;
-  }
-  return args[index];
-}
-
-// What in args may name a path: the value of every --option=value, and every other argument that looks like a path
-// (absolute, a file URL, holding a /, . or ..). That covers an option's path given as the next argument (--file <path>)
-// too: one that does not look like a path resolves inside the directory git runs in.
-function pathsIn(args: readonly string[]): string[] {
-  const paths: string[] = [];
-  for (const arg of args) {
-    const value = /^--[^=]+=(.*)$/s.exec(arg)?.[1];
-    if (value !== undefined) {
-      paths.push(value);
-    } else if (arg.includes("/") || arg === "." || arg === "..") {
-      paths.push(arg);
-    }
-  }
-  return paths.map((path) => path.replace(/^file:\/\//, ""));
-}
+// What a FixtureRepo reaches of its FixtureGit.
+type Runner = {
+  root: string;
+  // The path of a name in the root, checked to resolve inside it.
+  path(name: string): Promise<string>;
+  // git in the repository at name, both checked first.
+  git(name: string, args: string[]): Promise<string>;
+  // The same, null where git fails (not where a check does).
+  gitOrNull(name: string, args: string[]): Promise<string | null>;
+};
 
 export class FixtureGit {
   readonly root: string;
   readonly env: Record<string, string>;
   readonly #noHooks: string;
+  // The URLs the isolated config rewrites to a repository in the root: the only ones a fixture clones.
+  readonly #urls: ReadonlySet<string>;
+  readonly #runner: Runner;
 
-  private constructor(root: string) {
+  private constructor(root: string, urls: Iterable<string>) {
     this.root = root;
     this.env = gitEnv(root);
     this.#noHooks = join(root, "no-hooks");
+    this.#urls = new Set(urls);
+    this.#runner = {
+      root,
+      path: async (name) => this.#path(name),
+      git: async (name, args) => this.#git(await this.#repository(name), args),
+      gitOrNull: async (name, args) => {
+        const dir = await this.#repository(name);
+        return this.#git(dir, args).catch(() => null);
+      },
+    };
   }
 
-  // The isolated global config, in a root from fixtureRoot: no signing, hooks from an empty directory, url.insteadOf
-  // rewrites (to: from).
-  static async create(root: string, insteadOf: Readonly<Record<string, string>> = {}): Promise<FixtureGit> {
-    const fixture = new FixtureGit(root);
-    await mkdir(fixture.#noHooks, { recursive: true });
+  // The isolated global config, in a root from fixtureRoot: no signing, hooks from an empty directory, and a URL
+  // rewritten to the repository a name in the root holds (url: name).
+  static async create(root: string, rewrites: Readonly<Record<string, string>> = {}): Promise<FixtureGit> {
+    const fixture = new FixtureGit(root, Object.keys(rewrites));
+    const urls = await Promise.all(
+      Object.entries(rewrites).map(async ([url, name]) => [
+        `[url "file://${await fixture.#path(name)}"]`,
+        `\tinsteadOf = ${url}`,
+      ]),
+    );
     const config = [
       "[init]",
       "\tdefaultBranch = main",
@@ -107,59 +109,87 @@ export class FixtureGit {
       // Submodules from local paths, for the fixture that has one.
       '[protocol "file"]',
       "\tallow = always",
-      ...Object.entries(insteadOf).flatMap(([to, from]) => [`[url "${to}"]`, `\tinsteadOf = ${from}`]),
+      ...urls.flat(),
       "",
     ];
     await writeFile(join(root, "gitconfig"), config.join("\n"));
     return fixture;
   }
 
-  // git -C dir args, checked before git runs: dir, and every path in args (pathsIn) resolved against dir, must be
-  // inside the root; no option may name another repository; no config write may be global, system or of user.*. Not a
-  // parser of git's arguments: a guard against a test's mistake, with the canary (canary.ts) behind it. No hook runs.
-  async git(dir: string, ...args: string[]): Promise<string> {
-    const cwd = await realpath(dir);
-    await this.#assertInside(dir, cwd);
-    const elsewhere = args.find((arg) => ELSEWHERE.test(arg));
-    if (elsewhere !== undefined) {
-      throw new Error(`a fixture git command may not pass ${elsewhere}`);
+  // The repository or worktree at a name in the root, such as one the CLI under test made. Checked as each operation
+  // runs.
+  repo(name: string): FixtureRepo {
+    return new FixtureRepo(this.#runner, name);
+  }
+
+  // A new repository at a name in the root, checked to be its own: its top level (a bare one's git directory) is there.
+  async init(name: string, { bare = false } = {}): Promise<FixtureRepo> {
+    const path = await this.#path(name);
+    await this.#git(this.root, ["init", "--quiet", ...(bare ? ["--bare"] : []), "--end-of-options", path]);
+    await this.#assertOwnRepository(path, bare);
+    return this.repo(name);
+  }
+
+  // A clone, at a name in the root, of a URL the isolated config rewrites to a repository in the root; checked the
+  // same way.
+  async clone(url: string, name: string): Promise<FixtureRepo> {
+    if (!this.#urls.has(url)) {
+      throw new Error(`a fixture clones only a URL its config rewrites into the root, not ${url}`);
     }
-    for (const path of pathsIn(args)) {
-      await this.#assertInside(path, resolve(cwd, path));
-    }
-    if (subcommand(args) === "config" && args.some((arg) => /^(?:--global|--system|user\..*)$/i.test(arg))) {
-      throw new Error(`a fixture may not run git ${args.join(" ")}`);
-    }
+    const path = await this.#path(name);
+    await this.#git(this.root, ["clone", "--quiet", "--end-of-options", url, path]);
+    await this.#assertOwnRepository(path, false);
+    return this.repo(name);
+  }
+
+  // The variables the installed git lists as local to a repository.
+  async localEnvVars(): Promise<string[]> {
+    return (await this.#git(this.root, ["rev-parse", "--local-env-vars"])).split("\n");
+  }
+
+  // The one place git runs: in dir, already checked, with the fixture's environment and no hooks.
+  async #git(dir: string, args: string[]): Promise<string> {
     const { stdout } = await run("git", ["-C", dir, "-c", `core.hooksPath=${this.#noHooks}`, ...args], {
       env: this.env,
     });
     return stdout.trim();
   }
 
-  // A new repository at path, checked to be its own: its top level (a bare one's git directory) is path.
-  async init(path: string, { bare = false } = {}): Promise<void> {
-    await mkdir(path, { recursive: true });
-    await this.git(path, "init", "--quiet", ...(bare ? ["--bare"] : []));
-    await this.#assertOwnRepository(path, bare);
-  }
-
-  // A clone of url at path, checked the same way.
-  async clone(url: string, path: string): Promise<void> {
-    await this.git(dirname(path), "clone", "--quiet", url, path);
-    await this.#assertOwnRepository(path, false);
+  // The directory of the repository at name, once it and the repository's git directories are checked to be in the
+  // root.
+  async #repository(name: string): Promise<string> {
+    const dir = await this.#path(name);
+    const locations = await this.#git(dir, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--absolute-git-dir",
+      "--git-common-dir",
+    ]);
+    for (const location of locations.split("\n")) {
+      await this.#assertInside(location, location);
+    }
+    return dir;
   }
 
   async #assertOwnRepository(path: string, bare: boolean): Promise<void> {
-    const commonDir = await this.git(path, "rev-parse", "--path-format=absolute", "--git-common-dir");
-    const top = bare ? path : await this.git(path, "rev-parse", "--path-format=absolute", "--show-toplevel");
+    const commonDir = await this.#git(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const top = bare ? path : await this.#git(path, ["rev-parse", "--path-format=absolute", "--show-toplevel"]);
     if (top !== path || commonDir !== (bare ? path : join(path, ".git"))) {
       throw new Error(`git at ${path} found the repository ${top} (${commonDir}), not its own`);
     }
   }
 
-  async #assertInside(what: string, resolved: string): Promise<void> {
-    // Through the existing part of the path, as the file system resolves it.
-    let existing = resolved;
+  // A name is a path relative to the root without .. segments; it is checked through the existing part of its path,
+  // as the file system resolves it, to be inside the root.
+  async #path(name: string): Promise<string> {
+    if (isAbsolute(name) || name.split(sep).includes("..")) {
+      throw new Error(`a fixture path is a name in the fixture root ${this.root}, not ${name}`);
+    }
+    return this.#assertInside(name, join(this.root, name));
+  }
+
+  async #assertInside(what: string, path: string): Promise<string> {
+    let existing = path;
     let rest = "";
     for (;;) {
       try {
@@ -172,8 +202,159 @@ export class FixtureGit {
     }
     const full = join(existing, rest);
     if (full !== this.root && !full.startsWith(`${this.root}${sep}`)) {
-      throw new Error(`a fixture git command names ${what}, outside the fixture root ${this.root}`);
+      throw new Error(
+        `a fixture git command names ${what}, which resolves to ${full}, outside the fixture root ${this.root}`,
+      );
     }
+    return full;
+  }
+}
+
+// A repository or worktree at a name in a fixture root, and what the tests do with it in git. Names an operation takes
+// for a path are in the fixture root (worktreeAdd's), or in the repository's work tree (add's files).
+export class FixtureRepo {
+  readonly name: string;
+  // Its path, for the file system and the CLI under test.
+  readonly path: string;
+  readonly #fixture: Runner;
+
+  constructor(fixture: Runner, name: string) {
+    this.#fixture = fixture;
+    this.name = name;
+    this.path = join(fixture.root, name);
+  }
+
+  async #git(...args: string[]): Promise<string> {
+    return this.#fixture.git(this.name, args);
+  }
+
+  // Reads.
+
+  // Every ref with its commit.
+  async refs(): Promise<string> {
+    return this.#git("for-each-ref", "--format=%(refname) %(objectname)");
+  }
+
+  async headCommit(): Promise<string> {
+    return this.#git("rev-parse", "--verify", "HEAD");
+  }
+
+  // The branch HEAD is on, null when it is detached.
+  async branch(): Promise<string | null> {
+    return this.#fixture.gitOrNull(this.name, ["symbolic-ref", "--quiet", "HEAD"]);
+  }
+
+  async gitDir(): Promise<string> {
+    return this.#git("rev-parse", "--absolute-git-dir");
+  }
+
+  async configGet(key: string): Promise<string | null> {
+    return this.#fixture.gitOrNull(this.name, ["config", "--get", "--end-of-options", key]);
+  }
+
+  // git status --porcelain --ignored; it refreshes the index's stat data.
+  async status(): Promise<string> {
+    return this.#git("status", "--porcelain", "--ignored");
+  }
+
+  async worktreeList(): Promise<string> {
+    return this.#git("worktree", "list", "--porcelain");
+  }
+
+  // The paths of the worktrees the repository registers, its own first.
+  async worktrees(): Promise<string[]> {
+    return (await this.worktreeList())
+      .split("\n")
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => line.slice("worktree ".length));
+  }
+
+  // Writes.
+
+  // Stages files, names in the work tree.
+  async add(...files: string[]): Promise<void> {
+    for (const file of files) {
+      await this.#fixture.path(join(this.name, file));
+    }
+    await this.#git("add", "--", ...files);
+  }
+
+  async commit(message: string, { allowEmpty = false } = {}): Promise<void> {
+    await this.#git("commit", "--quiet", ...(allowEmpty ? ["--allow-empty"] : []), "-m", message);
+  }
+
+  async push(to: FixtureRepo, refspec: string, { force = false } = {}): Promise<void> {
+    const target = await this.#fixture.path(to.name);
+    await this.#git("push", "--quiet", ...(force ? ["--force"] : []), "--end-of-options", target, refspec);
+  }
+
+  async updateRef(ref: string, target: string): Promise<void> {
+    await this.#git("update-ref", "--end-of-options", ref, target);
+  }
+
+  async tag(name: string, target: string): Promise<void> {
+    await this.#git("tag", "--end-of-options", name, target);
+  }
+
+  // A key in the repository's own config. Not user.*, whose identity no fixture sets, nor core.worktree, which would
+  // move the work tree out of the root.
+  async configSet(key: string, value: string, { add = false } = {}): Promise<void> {
+    if (/^(?:user\..*|core\.worktree)$/i.test(key)) {
+      throw new Error(`a fixture may not set ${key}`);
+    }
+    await this.#git("config", ...(add ? ["--add"] : []), "--end-of-options", key, value);
+  }
+
+  // A remote at a GitHub URL, which no fixture fetches from.
+  async remoteAdd(name: string, url: string): Promise<void> {
+    if (!/^(?:https:\/\/github\.com\/|git@github\.com:)/.test(url)) {
+      throw new Error(`a fixture remote is a GitHub URL, not ${url}`);
+    }
+    await this.#git("remote", "add", "--end-of-options", name, url);
+  }
+
+  async remoteRename(from: string, to: string): Promise<void> {
+    await this.#git("remote", "rename", "--end-of-options", from, to);
+  }
+
+  // The repository from, as a submodule at a name in the work tree.
+  async submoduleAdd(from: FixtureRepo, name: string): Promise<void> {
+    const source = await this.#fixture.path(from.name);
+    await this.#fixture.path(join(this.name, name));
+    await this.#git("submodule", "--quiet", "add", "--", `file://${source}`, name);
+  }
+
+  // origin's pull/<number>/head, into FETCH_HEAD.
+  async fetchPull(number: number): Promise<void> {
+    await this.#git("fetch", "--quiet", "--end-of-options", "origin", `pull/${number}/head`);
+  }
+
+  async checkoutDetach(commit: string): Promise<void> {
+    await this.#git("checkout", "--quiet", "--detach", "--end-of-options", commit);
+  }
+
+  async switchCreate(branch: string, commit: string): Promise<void> {
+    await this.#git("switch", "--quiet", "-c", branch, "--end-of-options", commit);
+  }
+
+  async skipWorktree(file: string): Promise<void> {
+    await this.#fixture.path(join(this.name, file));
+    await this.#git("update-index", "--skip-worktree", "--end-of-options", file);
+  }
+
+  // A detached worktree of commit at a name in the root.
+  async worktreeAdd(name: string, commit = "HEAD"): Promise<FixtureRepo> {
+    const path = await this.#fixture.path(name);
+    await this.#git("worktree", "add", "--quiet", "--detach", "--end-of-options", path, commit);
+    return new FixtureRepo(this.#fixture, name);
+  }
+
+  async worktreeRemove(name: string): Promise<void> {
+    await this.#git("worktree", "remove", "--end-of-options", await this.#fixture.path(name));
+  }
+
+  async worktreeLock(name: string): Promise<void> {
+    await this.#git("worktree", "lock", "--end-of-options", await this.#fixture.path(name));
   }
 }
 
@@ -185,66 +366,48 @@ export type Repo = {
   // What the CLI under test needs on top of gitEnv: the clone root.
   env: Record<string, string>;
   url: string;
-  bare: string;
-  clone: string;
+  bare: FixtureRepo;
+  clone: FixtureRepo;
   // The commit main points at, the pull request's base.
   base: string;
-  git(dir: string, ...args: string[]): Promise<string>;
-  // The paths of the worktrees the clone registers, its own first.
-  worktrees(): Promise<string[]>;
   // A commit on top of main holding the files and symlinks, made the pull request's head in origin.git.
   head(label: string, files?: Record<string, string>, symlinks?: Record<string, string>): Promise<string>;
 };
 
 export async function makeRepo(root: string, pr: PrRef): Promise<Repo> {
-  const repos = join(root, "repos");
-  const bare = join(repos, "origin.git");
-  const seed = join(repos, "seed");
-  const roots = join(repos, "roots");
-  const clone = join(roots, pr.owner, pr.repo);
   const url = `https://github.com/${pr.owner}/${pr.repo}.git`;
-  const fixture = await FixtureGit.create(root, { [`file://${bare}`]: url });
-  const git = (dir: string, ...args: string[]) => fixture.git(dir, ...args);
-  await fixture.init(bare, { bare: true });
-  await fixture.init(seed);
-  await writeFile(join(seed, "README.md"), "a widget\n");
-  await git(seed, "add", "README.md");
-  await git(seed, "commit", "--quiet", "-m", "base");
-  await git(seed, "push", "--quiet", bare, "HEAD:refs/heads/main");
-  const base = await git(seed, "rev-parse", "HEAD");
-  await mkdir(join(roots, pr.owner), { recursive: true });
-  await fixture.clone(url, clone);
+  const fixture = await FixtureGit.create(root, { [url]: join("repos", "origin.git") });
+  const bare = await fixture.init(join("repos", "origin.git"), { bare: true });
+  const seed = await fixture.init(join("repos", "seed"));
+  await writeFile(join(seed.path, "README.md"), "a widget\n");
+  await seed.add("README.md");
+  await seed.commit("base");
+  await seed.push(bare, "HEAD:refs/heads/main");
+  const base = await seed.headCommit();
+  const clone = await fixture.clone(url, join("repos", "roots", pr.owner, pr.repo));
 
   return {
     fixture,
-    env: { PRQ_CLONE_ROOTS: roots },
+    env: { PRQ_CLONE_ROOTS: join(root, "repos", "roots") },
     url,
     bare,
     clone,
     base,
-    git,
-    async worktrees() {
-      const listed = await git(clone, "worktree", "list", "--porcelain");
-      return listed
-        .split("\n")
-        .filter((line) => line.startsWith("worktree "))
-        .map((line) => line.slice("worktree ".length));
-    },
     async head(label, files = {}, symlinks = {}) {
-      await git(seed, "checkout", "--quiet", "--detach", base);
-      await writeFile(join(seed, "change.txt"), `${label}\n`);
+      await seed.checkoutDetach(base);
+      await writeFile(join(seed.path, "change.txt"), `${label}\n`);
       for (const [path, content] of Object.entries(files)) {
-        await mkdir(join(seed, path, ".."), { recursive: true });
-        await writeFile(join(seed, path), content);
+        await mkdir(dirname(join(seed.path, path)), { recursive: true });
+        await writeFile(join(seed.path, path), content);
       }
       for (const [path, target] of Object.entries(symlinks)) {
-        await mkdir(join(seed, path, ".."), { recursive: true });
-        await symlink(target, join(seed, path));
+        await mkdir(dirname(join(seed.path, path)), { recursive: true });
+        await symlink(target, join(seed.path, path));
       }
-      await git(seed, "add", "--all");
-      await git(seed, "commit", "--quiet", "-m", label);
-      await git(seed, "push", "--quiet", "--force", bare, `HEAD:refs/pull/${pr.number}/head`);
-      return git(seed, "rev-parse", "HEAD");
+      await seed.add(".");
+      await seed.commit(label);
+      await seed.push(bare, `HEAD:refs/pull/${pr.number}/head`, { force: true });
+      return seed.headCommit();
     },
   };
 }
@@ -257,8 +420,8 @@ export async function slowFilter(repo: Repo): Promise<{ files: Record<string, st
   const filter = join(repo.fixture.root, "slow-filter");
   await writeFile(filter, `#!/bin/sh\necho $$ >> '${pids}'\nsleep 20 &\necho $! >> '${pids}'\nwait $!\ncat\n`);
   await chmod(filter, 0o755);
-  await repo.git(repo.clone, "config", "filter.slow.smudge", filter);
-  await repo.git(repo.clone, "config", "filter.slow.required", "true");
+  await repo.clone.configSet("filter.slow.smudge", filter);
+  await repo.clone.configSet("filter.slow.required", "true");
   return { files: { ".gitattributes": "large.bin filter=slow\n", "large.bin": "pointer\n" }, pids };
 }
 

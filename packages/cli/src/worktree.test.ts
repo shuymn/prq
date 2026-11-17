@@ -44,8 +44,8 @@ async function exists(path: string): Promise<boolean> {
 // What must stay in the clone: every ref, and its other worktrees.
 async function clone() {
   return {
-    refs: await repo.git(repo.clone, "for-each-ref", "--format=%(refname) %(objectname)"),
-    worktrees: await repo.git(repo.clone, "worktree", "list", "--porcelain"),
+    refs: await repo.clone.refs(),
+    worktrees: await repo.clone.worktreeList(),
   };
 }
 
@@ -64,13 +64,13 @@ async function fakeGit(name: string, body: string): Promise<Git> {
 
 describe("addWorktree", () => {
   it("a worktree add that does not finish in time is stopped, and its worktree removed by its exact path", async () => {
-    await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", join(dir, "host-worktree"), repo.base);
+    await repo.clone.worktreeAdd("host-worktree", repo.base);
     const before = await clone();
     const git = await fakeGit("slow-git", 'git "$@"; exec sleep 30');
     const path = join(dir, "job", "worktree");
     await mkdir(join(dir, "job"));
 
-    await expect(addWorktree(git, repo.clone, path, repo.base, 1_000)).rejects.toEqual(
+    await expect(addWorktree(git, repo.clone.path, path, repo.base, 1_000)).rejects.toEqual(
       new GitTimeout("worktree add", 1_000),
     );
     expect(await exists(path)).toBe(false);
@@ -80,14 +80,14 @@ describe("addWorktree", () => {
   it("a worktree add stopped in time stops the filters git runs as well", async () => {
     const { files, pids } = await slowFilter(repo);
     const head = await repo.head("filtered", files);
-    await repo.git(repo.clone, "fetch", "--quiet", "origin", `pull/${pr.number}/head`);
+    await repo.clone.fetchPull(pr.number);
     const before = await clone();
     const git = await Git.create(join(dir, "hooks"), { env: repo.fixture.env });
     const path = join(dir, "job", "worktree");
     await mkdir(join(dir, "job"));
 
     const started = Date.now();
-    await expect(addWorktree(git, repo.clone, path, head, 1_500)).rejects.toEqual(
+    await expect(addWorktree(git, repo.clone.path, path, head, 1_500)).rejects.toEqual(
       new GitTimeout("worktree add", 1_500),
     );
     // Well before the filter's sleep ends, and without waiting for the grace before SIGKILL.
@@ -100,7 +100,7 @@ describe("addWorktree", () => {
   it("the same under Bun, the runtime prq is compiled with", async () => {
     const { files, pids } = await slowFilter(repo);
     const head = await repo.head("filtered", files);
-    await repo.git(repo.clone, "fetch", "--quiet", "origin", `pull/${pr.number}/head`);
+    await repo.clone.fetchPull(pr.number);
     const before = await clone();
     const path = join(dir, "job", "worktree");
     await mkdir(join(dir, "job"));
@@ -119,7 +119,7 @@ describe("addWorktree", () => {
       ].join("\n"),
     );
 
-    const { stdout } = await promisify(execFile)("bun", [driver, join(dir, "hooks"), repo.clone, path, head], {
+    const { stdout } = await promisify(execFile)("bun", [driver, join(dir, "hooks"), repo.clone.path, path, head], {
       cwd: dir,
       env: repo.fixture.env,
     });
@@ -144,7 +144,7 @@ describe("addWorktree", () => {
     const path = join(dir, "job", "worktree");
     await mkdir(join(dir, "job"));
 
-    const failed = addWorktree(git, repo.clone, path, "f".repeat(40));
+    const failed = addWorktree(git, repo.clone.path, path, "f".repeat(40));
     await expect(failed).rejects.toBeInstanceOf(CliError);
     await expect(failed).rejects.toThrow(/^git worktree add failed: fatal: /);
     expect(await exists(path)).toBe(false);
@@ -158,7 +158,7 @@ describe("addWorktree", () => {
     // A git ended before it cleaned up: the directory and a file in it, and no registration.
     const git = await fakeGit("partial-git", `mkdir -p '${path}' && touch '${path}/partial' && exit 128`);
 
-    await expect(addWorktree(git, repo.clone, path, repo.base)).rejects.toThrow(/^git worktree add failed/);
+    await expect(addWorktree(git, repo.clone.path, path, repo.base)).rejects.toThrow(/^git worktree add failed/);
     expect(await exists(path)).toBe(false);
     expect(await exists(join(dir, "job"))).toBe(true);
     expect(await clone()).toEqual(before);
@@ -167,21 +167,19 @@ describe("addWorktree", () => {
 
 describe("removeWorktree", () => {
   it("removes a locked worktree by its exact path, and nothing else", async () => {
-    const other = join(dir, "host-worktree");
-    await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", other, repo.base);
-    const path = join(dir, "job", "worktree");
-    await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", path, repo.base);
+    const other = (await repo.clone.worktreeAdd("host-worktree", repo.base)).path;
+    const path = (await repo.clone.worktreeAdd(join("job", "worktree"), repo.base)).path;
     // A worktree add that was stopped leaves its worktree locked.
-    await repo.git(repo.clone, "worktree", "lock", path);
-    const refs = await repo.git(repo.clone, "for-each-ref", "--format=%(refname) %(objectname)");
+    await repo.clone.worktreeLock(join("job", "worktree"));
+    const refs = await repo.clone.refs();
     const git = await Git.create(join(dir, "hooks"), { env: repo.fixture.env });
 
-    expect(await removeWorktree(git, repo.clone, path)).toBe(true);
+    expect(await removeWorktree(git, repo.clone.path, path)).toBe(true);
     expect(await exists(path)).toBe(false);
-    const listed = await repo.git(repo.clone, "worktree", "list", "--porcelain");
+    const listed = await repo.clone.worktreeList();
     expect(listed).not.toContain(path);
     expect(listed).toContain(`worktree ${other}`);
     expect(await exists(join(other, "README.md"))).toBe(true);
-    expect(await repo.git(repo.clone, "for-each-ref", "--format=%(refname) %(objectname)")).toBe(refs);
+    expect(await repo.clone.refs()).toBe(refs);
   });
 });
