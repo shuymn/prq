@@ -63,6 +63,15 @@ describe("classifyModelError", () => {
     });
   });
 
+  it("does not take a refusal that only mentions the context length for a context-length refusal", () => {
+    const quota = refusal(402, {
+      message: "You exceeded your current quota for this model (context length: 131072). Check your plan.",
+      type: "insufficient_quota",
+      code: "insufficient_quota",
+    });
+    expect(classifyModelError(quota).contextLength).toBe(false);
+  });
+
   it("names the last error and the attempts after a retry", () => {
     const error = new RetryError({
       message: "Failed after 3 attempts. Last error: busy",

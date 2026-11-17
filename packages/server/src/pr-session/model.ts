@@ -101,8 +101,16 @@ export type ModelFailure = {
   contextLength: boolean;
 };
 
+// A context-length refusal is known by its code, or, from a provider that sends no such code, by a message about a
+// request over the model's context ("This model's maximum context length is 131072 tokens. However, you requested
+// …", "the input exceeds the context window"); a message that only mentions the context length is not one.
 const CONTEXT_LENGTH_CODE = "context_length_exceeded";
-const CONTEXT_LENGTH_MESSAGE = /context[ _-]?(length|window)/i;
+const CONTEXT_OVERFLOW_MESSAGE =
+  /maximum context (length|window) is|exceed(s|ed)? (the )?(model's )?(maximum )?context (length|window)|context (length|window) exceeded/i;
+
+function overContext(code: unknown, message: string): boolean {
+  return code === CONTEXT_LENGTH_CODE || CONTEXT_OVERFLOW_MESSAGE.test(message);
+}
 
 // An API error's body as the adapter parsed it: the provider's own message and code.
 const ErrorBody = v.object({ error: v.object({ message: v.string(), code: v.nullish(v.unknown()) }) });
@@ -129,14 +137,14 @@ function classifyCause(cause: unknown): ModelFailure {
         : `provider refused the request (HTTP ${cause.statusCode}): ${message}`;
     return {
       reason,
-      contextLength: body.code === CONTEXT_LENGTH_CODE || CONTEXT_LENGTH_MESSAGE.test(body.message ?? cause.message),
+      contextLength: overContext(body.code, body.message ?? cause.message),
     };
   }
   if (StreamProviderError.isInstance(cause)) {
     const label = cause.code ?? cause.type;
     return {
       reason: `provider error during the answer${label === undefined ? "" : ` (${label})`}: ${cause.message}`,
-      contextLength: cause.code === CONTEXT_LENGTH_CODE || CONTEXT_LENGTH_MESSAGE.test(cause.message),
+      contextLength: overContext(cause.code, cause.message),
     };
   }
   return { reason: errorMessage(cause), contextLength: false };
