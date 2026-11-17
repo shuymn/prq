@@ -24,7 +24,8 @@
   // The cloud workspace's container (src/workspace.ts, Dockerfile): one per session, on the basic instance type.
   "containers": [{ "class_name": "Workspace", "image": "./Dockerfile", "instance_type": "basic" }],
   // Tests and `wrangler dev` run without Docker: the vitest pool and wrangler's test harness read this, and the
-  // Workspace then has no container. `wrangler dev --enable-containers` runs it with Docker (AGENTS.md).
+  // Workspace then has no container. The owner's check (`pnpm run check:workspace` in packages/cli, AGENTS.md) runs it
+  // with Docker through an inline copy of this config that turns containers on (packages/cli/src/test/worker.ts).
   "dev": { "enable_containers": false },
   "observability": {
     "enabled": true,
