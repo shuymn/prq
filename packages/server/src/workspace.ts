@@ -6,6 +6,7 @@ import { TOOL_RESULT_CHARS } from "./pr-session/tools.ts";
 import {
   type CommandResult,
   type PreparedWorkspace,
+  raceAbort,
   STDERR_CHARS,
   type WorkspaceCommand,
   type WorkspaceTarget,
@@ -114,15 +115,7 @@ function messageOf(error: unknown): string {
 // settle on its own, its failure observed here.
 async function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   promise.catch(() => undefined);
-  signal.throwIfAborted();
-  const stop = Promise.withResolvers<never>();
-  const onAbort = () => stop.reject(signal.reason);
-  signal.addEventListener("abort", onAbort, { once: true });
-  try {
-    return await Promise.race([promise, stop.promise]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-  }
+  return raceAbort(() => promise, signal);
 }
 
 // The outcome of a promise within ms, or "timeout".
@@ -341,10 +334,10 @@ export class Workspace extends DurableObject<Env> {
   async #ensure(target: WorkspaceTarget): Promise<Checkout> {
     for (;;) {
       this.#check(target.seq);
-      const flight = this.#flight;
+      let flight = this.#flight;
       if (flight === null) {
-        this.#flight = this.#fly(target);
-        continue;
+        flight = this.#fly(target);
+        this.#flight = flight;
       }
       if (flight.seq === target.seq && flight.sha === target.sha) {
         const checkout = await flight.promise;
