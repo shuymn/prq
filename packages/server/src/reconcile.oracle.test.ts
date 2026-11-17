@@ -810,8 +810,11 @@ describe("head reconciliation against GitHub's truth", () => {
     ).resolves.toBeUndefined();
   });
 
+  // A batch is 40 whole runs against the real Durable Object: under 0.5 s on a laptop, 2.4–5.2 s on CI's runners. The
+  // bound is per batch so a hung run still fails, with room for the runners' spread.
+  const BATCH_TIMEOUT_MS = 30_000;
   for (let batch = 1; batch <= BATCHES; batch += 1) {
-    it(`runs generated interleavings, batch ${batch} of ${BATCHES}`, async () => {
+    it(`runs generated interleavings, batch ${batch} of ${BATCHES}`, { timeout: BATCH_TIMEOUT_MS }, async () => {
       const logs = captureLogs();
       serveReads();
       await setPool(["laptop"]);
