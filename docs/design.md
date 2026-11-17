@@ -865,7 +865,8 @@ Server:
   `prq.config.invalid` naming the variable and makes none either. The private key is stored as PKCS#8: GitHub issues
   PKCS#1, which the WebCrypto-based path in workerd cannot read, so convert it once with `openssl pkcs8 -topk8` before
   storing it. `pnpm run check:github` in `packages/server` mints an installation token and reads a pull request with
-  it, printing neither the key nor the token.
+  it; `pnpm run check:reconcile` in `packages/cli` does the same through the Worker in wrangler's local runtime, after
+  two signed deliveries of that pull request tie within one second. Neither prints the key, a JWT or a token.
 
 ### Observability
 
@@ -987,7 +988,7 @@ prq/
 │          ├─ answer.ts          the answer prq submit sends: answer.md, checked before any request
 │          ├─ commands/          one module per command
 │          ├─ e2e/               the compiled binary against the real Worker
-│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`), a manual check of a cloud question (`pnpm run check:cloud`)
+│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`), manual checks of a cloud question and of head reconciliation (`pnpm run check:cloud`, `check:reconcile`)
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
 ├─ .claude/skills/verify-prq/  running the local stack with scripted jobs for a local agent, and reading its request log
 ├─ docs/                   design.md, decisions.md, ui.md, spikes.md
@@ -1022,12 +1023,13 @@ Only a deployment can show these.
   takes from GitHub's documentation is checked on a deployment too: that `pull_request.updated_at` advances with each
   push and `synchronize` carries `before`, that a redelivery repeats `X-GitHub-Delivery`, and the 10 s limit. And
   fetching by SHA a commit that a force-push left behind `pull/<n>/head`, as `prq checkout` does for an answer's
-  workspace: when GitHub refuses it, `checkout` exits 1 naming the commit. Head reconciliation against GitHub's API
-  (an answer's `updated_at` and how far a replica lags) is tested only with a served API.
+  workspace: when GitHub refuses it, `checkout` exits 1 naming the commit. Head reconciliation has read GitHub's API
+  through the Worker only in wrangler's local runtime (`check:reconcile`); how an answer's `updated_at` moves under
+  pushes, and how far a replica lags, are tested only with a served API.
 - **Sandbox in production.** Start and rebuild times, and checkout time of a large repository. The local Docker
   numbers are not production values.
-- **Bundling by wrangler.** That the PKCS#8-only crypto path of `@octokit/auth-app` is the one wrangler bundles was
-  checked with an equivalent esbuild condition set, not with wrangler's own.
+- **Bundling by wrangler.** The PKCS#8-only crypto path of `@octokit/auth-app`, bundled by wrangler, has minted a
+  real installation token in wrangler's local runtime (`check:reconcile`); a deployed Worker has not minted one yet.
 - **Billing.** The Durable Object duration of the `wait` long-poll with one waiter, and the real cost of cloud turns.
 - **Providers other than the one tried.** Tool calling and streaming through the AI SDK were tried against one
   OpenAI-compatible provider; each provider to be used needs the same check.
