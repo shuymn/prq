@@ -2,10 +2,11 @@
 // tests of one file (and not across files), so each test takes a pull request of its own and sets the pool it needs.
 
 import type { AIChatAgent } from "@cloudflare/ai-chat";
-import type { ClaimResponse, Owner, PrRef } from "@prq/protocol";
+import { type ClaimResponse, LedgerPage, type LedgerRow, type Owner, type PrRef, sessionName } from "@prq/protocol";
 import type { UIMessage } from "ai";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import * as v from "valibot";
 import { expect, vi } from "vitest";
 
 import type { Hub } from "../hub.ts";
@@ -40,15 +41,34 @@ export function hub(): Promise<DurableObjectStub<Hub>> {
   return hubStub(env);
 }
 
-// The pool as a test needs it: no agent present, or the given agents present (a contact just now).
+// The pool as a test needs it: no agent present, or the given agents present (a contact just now). The claims the
+// ledger gave the Hub go too, since a claim keeps its agent present.
 export async function setPool(agentIds: readonly string[]): Promise<void> {
   const stub = await hub();
   await runInDurableObject(stub, (_, state) => {
     state.storage.sql.exec("DELETE FROM prq_agents");
+    state.storage.sql.exec("DELETE FROM prq_claims");
   });
   for (const agentId of agentIds) {
     await stub.touch(agentId);
   }
+}
+
+// Every row of the Hub's ledger, read page by page as the UI reads them, closed pull requests included.
+export async function ledgerRows(): Promise<LedgerRow[]> {
+  const rows: LedgerRow[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = v.parse(LedgerPage, await (await hub()).ledgerPage({ cursor, state: "all" }));
+    rows.push(...page.rows);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return rows;
+}
+
+// A session's row in the Hub's ledger.
+export async function ledgerRowOf(name: string): Promise<LedgerRow | undefined> {
+  return (await ledgerRows()).find((row) => sessionName(row.pr) === name);
 }
 
 // Empties the Hub's notification queue (of the sessions earlier tests of the file left).
@@ -275,9 +295,19 @@ export type HubSeams = {
   peekSession(session: string, agentId: string): Promise<Peek>;
   claimSession(session: string, agentId: string, mode: "resume" | "fresh", attempt: number): Promise<unknown>;
   waitTimer(ms: number, end: () => void): () => void;
+  ledgerPageBytes(): number;
+  clock(): number;
 };
 
-const HUB_SEAMS = ["sessionStub", "sessionCallMs", "peekSession", "claimSession", "waitTimer"] as const;
+const HUB_SEAMS = [
+  "sessionStub",
+  "sessionCallMs",
+  "peekSession",
+  "claimSession",
+  "waitTimer",
+  "ledgerPageBytes",
+  "clock",
+] as const;
 
 function hasHubSeams(instance: object): instance is HubSeams {
   return HUB_SEAMS.every((name) => typeof Reflect.get(instance, name) === "function");

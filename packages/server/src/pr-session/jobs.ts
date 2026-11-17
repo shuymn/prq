@@ -1,4 +1,6 @@
-import type { JobTarget, JobView, Owner, PrDetails } from "@prq/protocol";
+import type { JobTarget, JobView, LatestEvent, Owner, PrDetails } from "@prq/protocol";
+
+import { type LedgerEntry, STALL_MS } from "../ledger.ts";
 
 // A session's jobs and the rows that go with them. Every transition is one SQL statement guarded by the state it
 // expects (and the claim), so no state is read in one step and changed in another (docs/design.md, Owner and jobs). The
@@ -24,6 +26,8 @@ export type JobRow = {
   updated_at: number;
   rev: number;
   run: number;
+  // 1 from the statement that fails the job to the statement that completes it, through retries.
+  unresolved_failure: 0 | 1;
 };
 
 export function jobTarget(row: JobRow): JobTarget {
@@ -395,10 +399,11 @@ export function reserve(
     .toArray()[0];
 }
 
-// finalizing → done, once the result message exists, or back to claimed (same claim) when it does not.
+// finalizing → done, once the result message exists (which resolves a failure the job had), or back to claimed (same
+// claim) when it does not.
 export function endFinalizing(sql: SqlStorage, row: JobRow, stored: boolean, now: number): JobRow | undefined {
   const done = `UPDATE prq_jobs SET rev = rev + 1, state = 'done', done_claim_id = claim_id, result_message_id = ?,
-    updated_at = ? WHERE job_id = ? AND state = 'finalizing' AND claim_id = ? RETURNING *`;
+    unresolved_failure = 0, updated_at = ? WHERE job_id = ? AND state = 'finalizing' AND claim_id = ? RETURNING *`;
   const claimed = `UPDATE prq_jobs SET rev = rev + 1, state = 'claimed', updated_at = ?
     WHERE job_id = ? AND state = 'finalizing' AND claim_id = ? RETURNING *`;
   return (
@@ -434,11 +439,12 @@ export function retry(sql: SqlStorage, jobId: string, expectedRev: number, now: 
     .toArray()[0];
 }
 
-// Every pending job → failed, with the reason.
+// Every pending job → failed, with the reason; the failure stays unresolved until the job completes.
 export function failPending(sql: SqlStorage, failure: string, now: number): JobRow[] {
   return sql
     .exec<JobRow>(
-      "UPDATE prq_jobs SET rev = rev + 1, state = 'failed', failure = ?, updated_at = ? WHERE state = 'pending' RETURNING *",
+      `UPDATE prq_jobs SET rev = rev + 1, state = 'failed', failure = ?, unresolved_failure = 1, updated_at = ?
+       WHERE state = 'pending' RETURNING *`,
       failure,
       now,
     )
@@ -459,20 +465,34 @@ export function startNext(sql: SqlStorage, now: number): JobRow | undefined {
     .toArray()[0];
 }
 
-// The outbox row for a notify, written with the next value of the session's counter: a row deleted and written again
-// always has a larger generation than any delivery of the old one read.
-export function writeNotify(sql: SqlStorage): void {
+export type OutboxKind = "notify" | "ledger";
+export type OutboxRow = { kind: OutboxKind; gen: number };
+
+// An outbox row, written with the next value of the session's counter: a row deleted and written again always has a
+// larger generation than any delivery of the old one read.
+function writeOutbox(sql: SqlStorage, kind: OutboxKind): void {
   const { gen } = sql.exec<{ gen: number }>("UPDATE prq_session SET gen = gen + 1 WHERE id = 1 RETURNING gen").one();
   sql.exec(
-    "INSERT INTO prq_outbox (kind, gen) VALUES ('notify', ?) ON CONFLICT (kind) DO UPDATE SET gen = excluded.gen",
+    "INSERT INTO prq_outbox (kind, gen) VALUES (?, ?) ON CONFLICT (kind) DO UPDATE SET gen = excluded.gen",
+    kind,
     gen,
   );
 }
 
-export type OutboxRow = { kind: "notify"; gen: number };
+// A local job became pending: the Hub's queue is to hear of the session.
+export function writeNotify(sql: SqlStorage): void {
+  writeOutbox(sql, "notify");
+}
 
-export function outboxRow(sql: SqlStorage): OutboxRow | undefined {
-  return sql.exec<OutboxRow>("SELECT kind, gen FROM prq_outbox WHERE kind = 'notify'").toArray()[0];
+// The session's ledger entry changed. The row's generation is the entry's revision: the entry is built from the
+// session as it is when the row is read, in the same synchronous step, so a later revision never carries an older
+// state.
+export function writeLedger(sql: SqlStorage): void {
+  writeOutbox(sql, "ledger");
+}
+
+export function outboxRow(sql: SqlStorage, kind: OutboxKind): OutboxRow | undefined {
+  return sql.exec<OutboxRow>("SELECT kind, gen FROM prq_outbox WHERE kind = ?", kind).toArray()[0];
 }
 
 // Deletes the row a delivery read, unless it was written again since. Returns whether it deleted it.
@@ -483,18 +503,139 @@ export function deleteOutbox(sql: SqlStorage, row: OutboxRow): boolean {
   );
 }
 
-export function jobView(row: JobRow): JobView {
-  const held = row.state === "claimed" || row.state === "finalizing";
+// Whether a job is held under a claim: claimed, or being finalized by its submit.
+export function isHeld(row: Pick<JobRow, "state">): boolean {
+  return row.state === "claimed" || row.state === "finalizing";
+}
+
+// Whether a held job's claim has had no result for STALL_MS at now.
+function isStalled(row: Pick<JobRow, "state" | "claimed_at">, now: number): boolean {
+  return isHeld(row) && row.claimed_at !== null && now >= row.claimed_at + STALL_MS;
+}
+
+export function jobView(row: JobRow, now: number): JobView {
+  const held = isHeld(row);
   return {
     jobId: row.job_id,
     target: jobTarget(row),
     state: row.state === "finalizing" ? "running" : row.state,
     agentId: row.agent_id,
     since: held ? row.claimed_at : null,
+    stalled: isStalled(row, now),
     failure: row.failure,
     resultMessageId: row.result_message_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     rev: row.rev,
+  };
+}
+
+// The jobs held under a claim, oldest first.
+export function heldJobs(sql: SqlStorage): JobRow[] {
+  return sql.exec<JobRow>("SELECT * FROM prq_jobs WHERE state IN ('claimed', 'finalizing') ORDER BY seq").toArray();
+}
+
+// Marks every held claim past its deadline whose stall the ledger has not been told of, and drops the marks of claims
+// no longer held. Returns the jobs it marked: the caller writes the ledger row in the same step, so each claim's stall
+// is published once.
+export function markStalls(sql: SqlStorage, now: number): JobRow[] {
+  sql.exec(
+    `DELETE FROM prq_stalls WHERE claim_id NOT IN (
+       SELECT claim_id FROM prq_jobs WHERE state IN ('claimed', 'finalizing') AND claim_id IS NOT NULL)`,
+  );
+  const marked = sql
+    .exec<{ claim_id: string }>(
+      `INSERT INTO prq_stalls (claim_id)
+       SELECT claim_id FROM prq_jobs
+       WHERE state IN ('claimed', 'finalizing') AND claim_id IS NOT NULL AND claimed_at <= ?
+       ON CONFLICT (claim_id) DO NOTHING RETURNING claim_id`,
+      now - STALL_MS,
+    )
+    .toArray()
+    .map((row) => row.claim_id);
+  return marked.flatMap((claimId) => sql.exec<JobRow>("SELECT * FROM prq_jobs WHERE claim_id = ?", claimId).toArray());
+}
+
+// Whether a claim's stall has been published.
+export function stallMarked(sql: SqlStorage, claimId: string): boolean {
+  return sql.exec("SELECT 1 FROM prq_stalls WHERE claim_id = ?", claimId).toArray().length > 0;
+}
+
+// The claim's deadline: when a held job's claim has had no result for STALL_MS.
+export function stallDeadline(row: Pick<JobRow, "claimed_at">): number {
+  if (row.claimed_at === null) {
+    throw new Error("a held job has its claim's time");
+  }
+  return row.claimed_at + STALL_MS;
+}
+
+// The head as it is before a push is taken in: whether one was set by a push yet, and which.
+export function readHead(sql: SqlStorage): { headSha: string | null; pushed: boolean } {
+  const row = sql
+    .exec<{ head_sha: string | null; head_at: number | null }>("SELECT head_sha, head_at FROM prq_session WHERE id = 1")
+    .one();
+  return { headSha: row.head_sha, pushed: row.head_at !== null };
+}
+
+// The session's latest event, which orders its ledger row.
+export function recordEvent(sql: SqlStorage, kind: LatestEvent["kind"], now: number): void {
+  sql.exec("UPDATE prq_session SET latest_event_kind = ?, latest_event_at = ? WHERE id = 1", kind, now);
+}
+
+function latestEvent(sql: SqlStorage): LatestEvent | null {
+  const row = sql
+    .exec<{ kind: LatestEvent["kind"] | null; at: number | null }>(
+      "SELECT latest_event_kind AS kind, latest_event_at AS at FROM prq_session WHERE id = 1",
+    )
+    .one();
+  return row.kind === null || row.at === null ? null : { kind: row.kind, at: row.at };
+}
+
+// The session's ledger entry at now, read in one synchronous step (docs/design.md, PR ledger). Summary failed follows
+// the current head: an older head's failed analysis counts again only if its head becomes current before it completes.
+export function ledgerEntry(sql: SqlStorage, now: number): LedgerEntry {
+  const owner = readOwner(sql);
+  const { headSha } = readHead(sql);
+  const states = new Map(
+    sql
+      .exec<{ state: JobState; jobs: number }>("SELECT state, count(*) AS jobs FROM prq_jobs GROUP BY state")
+      .toArray()
+      .map((row) => [row.state, row.jobs]),
+  );
+  const count = (...of: JobState[]) => of.reduce((sum, state) => sum + (states.get(state) ?? 0), 0);
+  const exists = (where: string, ...bindings: unknown[]) =>
+    sql.exec(`SELECT 1 FROM prq_jobs WHERE ${where} LIMIT 1`, ...bindings).toArray().length > 0;
+  // The unresolved failures the labels count: every answer's, and the current head's analysis's.
+  const answersFailed = sql
+    .exec<{ jobs: number }>("SELECT count(*) AS jobs FROM prq_jobs WHERE kind = 'answer' AND unresolved_failure = 1")
+    .one().jobs;
+  const summaryFailed = exists("kind = 'analysis' AND target = ? AND unresolved_failure = 1", headSha);
+  const held = heldJobs(sql);
+  return {
+    details: readDetails(sql),
+    owner,
+    latestEvent: latestEvent(sql),
+    summaryFailed,
+    answerFailed: answersFailed > 0,
+    stalled: held.some((row) => isStalled(row, now)),
+    waitingWork: owner === "local" && count("pending") > 0,
+    unsummarized: headSha !== null && !exists("kind = 'analysis' AND target = ? AND state = 'done'", headSha),
+    jobs: {
+      waiting: count("pending"),
+      running: count("claimed", "finalizing", "running"),
+      failed: answersFailed + Number(summaryFailed),
+    },
+    claims: held.flatMap((row) =>
+      row.agent_id === null || row.claimed_at === null
+        ? []
+        : [
+            {
+              agentId: row.agent_id,
+              jobId: row.job_id,
+              since: row.claimed_at,
+              ageMs: Math.max(0, now - row.claimed_at),
+            },
+          ],
+    ),
   };
 }

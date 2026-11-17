@@ -14,6 +14,51 @@ export const HUB_SCHEMA: SchemaSteps = [
   // The notification queue: sessions that may have local work, with the generation of their latest notify.
   `CREATE TABLE prq_notifications (
     session TEXT PRIMARY KEY, gen INTEGER NOT NULL, notified_at INTEGER NOT NULL)`,
+  // The ledger: each session's newest entry (JSON) with its revision, and what the list's order, its filters and the
+  // Hub's totals read without parsing it: the latest event's time (-1 without one), the repository (owner/name,
+  // canonical), whether the pull request is open (or its state not known yet), whether its problem needs attention with
+  // a local agent present and without one, and its jobs.
+  `CREATE TABLE prq_ledger (
+    session TEXT PRIMARY KEY, rev INTEGER NOT NULL, entry TEXT NOT NULL,
+    sort_at INTEGER NOT NULL, repo TEXT NOT NULL, open INTEGER NOT NULL CHECK (open IN (0, 1)),
+    attention_present INTEGER NOT NULL CHECK (attention_present IN (0, 1)),
+    attention_absent INTEGER NOT NULL CHECK (attention_absent IN (0, 1)),
+    jobs_waiting INTEGER NOT NULL, jobs_running INTEGER NOT NULL, jobs_failed INTEGER NOT NULL)`,
+  // The list's order, walked backwards, under each filter the ledger's pages take (prq_ledger_repo_open below is the
+  // last): every page is a range of one index that holds only the rows the filter keeps.
+  "CREATE INDEX prq_ledger_order ON prq_ledger (sort_at, session)",
+  "CREATE INDEX prq_ledger_open ON prq_ledger (sort_at, session) WHERE open = 1",
+  "CREATE INDEX prq_ledger_repo ON prq_ledger (repo, sort_at, session)",
+  "CREATE INDEX prq_ledger_attention_present ON prq_ledger (sort_at, session) WHERE attention_present = 1",
+  "CREATE INDEX prq_ledger_attention_absent ON prq_ledger (sort_at, session) WHERE attention_absent = 1",
+  // The claims the ledger entries hold, per session and job: the agent ID and the claim's time on the Hub's clock.
+  `CREATE TABLE prq_claims (
+    session TEXT NOT NULL, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, claimed_at INTEGER NOT NULL,
+    PRIMARY KEY (session, job_id))`,
+  "CREATE INDEX prq_claims_agent ON prq_claims (agent_id)",
+  // The repositories the ledger has rows of (owner/name, canonical), with their owner and their name in GitHub's display
+  // case once an entry has given it.
+  "CREATE TABLE prq_repos (repo TEXT PRIMARY KEY, owner TEXT NOT NULL, full_name TEXT NOT NULL)",
+  "CREATE INDEX prq_repos_owner ON prq_repos (owner)",
+  // The ledger's totals, kept with each stored entry so the Hub's view reads no row: its version (advanced by every
+  // stored entry), the rows that need attention with a local agent present and without one, the jobs of every row, and
+  // the owners of the repositories.
+  `CREATE TABLE prq_ledger_totals (
+    id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL DEFAULT 0,
+    attention_present INTEGER NOT NULL DEFAULT 0, attention_absent INTEGER NOT NULL DEFAULT 0,
+    jobs_waiting INTEGER NOT NULL DEFAULT 0, jobs_running INTEGER NOT NULL DEFAULT 0,
+    jobs_failed INTEGER NOT NULL DEFAULT 0, owners INTEGER NOT NULL DEFAULT 0)`,
+  "INSERT INTO prq_ledger_totals (id) VALUES (1)",
+  // One repository's open rows in the list's order, for the list under both of its filters (state=open with repo).
+  "CREATE INDEX prq_ledger_repo_open ON prq_ledger (repo, sort_at, session) WHERE open = 1",
+  // Each agent's last contact and each claim by its time, so presence reads only the contacts and claims recent enough
+  // to make an agent present, however many came before.
+  "CREATE INDEX prq_agents_seen ON prq_agents (last_seen_at)",
+  "CREATE INDEX prq_claims_claimed ON prq_claims (claimed_at)",
+  // Each agent's claims by time, so a present agent's latest claim is one row however many it holds; it takes the place
+  // of the index on the agent alone.
+  "CREATE INDEX prq_claims_agent_claimed ON prq_claims (agent_id, claimed_at)",
+  "DROP INDEX prq_claims_agent",
 ];
 
 export const PR_SESSION_SCHEMA: SchemaSteps = [
@@ -81,6 +126,22 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
     pr_state TEXT NOT NULL CHECK (pr_state IN ('open', 'closed', 'merged')),
     url TEXT NOT NULL,
     processed INTEGER NOT NULL DEFAULT 0 CHECK (processed IN (0, 1)))`,
+  // The ledger row's latest event (a push that changed the head, a question, a completed summary or answer) and the
+  // session's time of it, NULL until the first.
+  "ALTER TABLE prq_session ADD COLUMN latest_event_kind TEXT CHECK (latest_event_kind IN ('push', 'question', 'summary', 'answer'))",
+  "ALTER TABLE prq_session ADD COLUMN latest_event_at INTEGER",
+  // unresolved_failure: 1 from the statement that fails the job to the statement that completes it, whatever happens
+  // between (a retry, a supersede, a revival).
+  "ALTER TABLE prq_jobs ADD COLUMN unresolved_failure INTEGER NOT NULL DEFAULT 0 CHECK (unresolved_failure IN (0, 1))",
+  "UPDATE prq_jobs SET unresolved_failure = 1 WHERE state = 'failed'",
+  // The outbox's second kind, ledger: the session's entry for the Hub. SQLite cannot change a CHECK in place.
+  "CREATE TABLE prq_outbox_next (kind TEXT PRIMARY KEY CHECK (kind IN ('notify', 'ledger')), gen INTEGER NOT NULL)",
+  "INSERT INTO prq_outbox_next (kind, gen) SELECT kind, gen FROM prq_outbox",
+  "DROP TABLE prq_outbox",
+  "ALTER TABLE prq_outbox_next RENAME TO prq_outbox",
+  // The claims whose stall the ledger has been told of: a claim past its deadline is published once, by claimAged or by
+  // settle, whichever finds it first. Rows of claims no longer held are dropped with the next mark.
+  "CREATE TABLE prq_stalls (claim_id TEXT PRIMARY KEY)",
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {

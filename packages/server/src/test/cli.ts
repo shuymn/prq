@@ -110,6 +110,13 @@ export async function lastSeenAgo(ms: number): Promise<void> {
   });
 }
 
+// Sets the time of every claim the Hub holds `ms` ago, on the Hub's clock.
+export async function claimedAgo(ms: number): Promise<void> {
+  await runInDurableObject(await hub(), (_, state) => {
+    state.storage.sql.exec("UPDATE prq_claims SET claimed_at = ?", Date.now() - ms);
+  });
+}
+
 // Takes over the timers that end the Hub's waits: each wait's bound is recorded with whether it was cancelled, and a
 // wait reaches its bound only when the test expires it.
 export async function controlWaitTimers() {

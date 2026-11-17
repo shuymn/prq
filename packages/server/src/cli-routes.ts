@@ -13,7 +13,7 @@ import {
 import { Hono } from "hono";
 import * as v from "valibot";
 
-import { type CallBound, errorResponse, invalidRequest, ROUTE_CALL_MS } from "./http.ts";
+import { type CallBound, errorResponse, invalidRequest, ROUTE_CALL_MS, Unavailable } from "./http.ts";
 import { waitBoundMs } from "./hub.ts";
 import { hubStub, prSessionStub } from "./names.ts";
 
@@ -42,6 +42,9 @@ export function cliRoutes(bound: CallBound) {
           stop.abort();
           throw error;
         }
+        if (res.status === 503) {
+          throw new Unavailable("the Hub could not record the wait");
+        }
         if (!res.ok) {
           throw new Error(`the Hub's wait answered ${res.status}`);
         }
@@ -49,10 +52,17 @@ export function cliRoutes(bound: CallBound) {
       })
       // A claim that lands after the route stopped waiting is a newer attempt than the agent's resend, so it can take
       // the job under another claimId. The agent's submit then gets stale_claim; it claims again and resubmits under the
-      // run its answer was produced under, accepted only if no retry came since (docs/design.md, Owner and jobs).
+      // run its answer was produced under, accepted only if no retry came since (docs/design.md, Owner and jobs). A
+      // claim the Hub fails (its contact first of all) answers 503: the agent's next claim resumes anything it took.
       .post("/claim", vValidator("json", ClaimRequest, invalidRequest), async (c) => {
         const { agentId } = c.req.valid("json");
-        const call = (async (): Promise<ClaimResponse> => (await hubStub(c.env)).claim(agentId))();
+        const call = (async (): Promise<ClaimResponse> => {
+          try {
+            return await (await hubStub(c.env)).claim(agentId);
+          } catch (error) {
+            throw new Unavailable("the Hub's claim failed", { cause: error });
+          }
+        })();
         return c.json(await bound(call, ROUTE_CALL_MS, "the Hub's claim"));
       })
       // A submit is a contact from the agent, whatever the session answers. One that lands after the route stopped
@@ -60,7 +70,7 @@ export function cliRoutes(bound: CallBound) {
       .post("/submit", vValidator("json", SubmitRequest, invalidRequest), async (c) => {
         const { pr, ...submission } = c.req.valid("json");
         const call = (async (): Promise<SubmitResponse | ErrorResponse> => {
-          await (await hubStub(c.env)).touch(submission.agentId);
+          await contact(c.env, submission.agentId);
           return (await prSessionStub(c.env, pr)).submit(submission);
         })();
         const result = await bound(call, ROUTE_CALL_MS, "the submit");
@@ -71,11 +81,21 @@ export function cliRoutes(bound: CallBound) {
       .post("/context", vValidator("json", ContextRequest, invalidRequest), async (c) => {
         const { pr, agentId, jobId, claimId, cursor } = c.req.valid("json");
         const call = (async (): Promise<ContextResponse | ErrorResponse> => {
-          await (await hubStub(c.env)).touch(agentId);
+          await contact(c.env, agentId);
           return (await prSessionStub(c.env, pr)).context(agentId, jobId, claimId, cursor);
         })();
         const result = await bound(call, ROUTE_CALL_MS, "the context");
         return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
       })
   );
+}
+
+// A contact from the agent, recorded by the Hub. One the Hub could not record (its view or its presence alarm) is not
+// acknowledged: the route answers 503 before calling the session, and the agent tries again.
+async function contact(env: Env, agentId: string): Promise<void> {
+  try {
+    await (await hubStub(env)).touch(agentId);
+  } catch (error) {
+    throw new Unavailable("the Hub did not record the contact", { cause: error });
+  }
 }

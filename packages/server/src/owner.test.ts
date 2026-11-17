@@ -1,7 +1,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PRESENCE_MS } from "./hub.ts";
+import { PRESENCE_MS } from "./ledger.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
 import { gate, hub, newSession, prSessionSeams, setPool, tracked } from "./test/session.ts";
