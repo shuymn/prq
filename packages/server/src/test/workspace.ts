@@ -164,8 +164,9 @@ export type FakeWorkspaceOptions = {
 export class FakeWorkspace implements WorkspaceClient {
   readonly prepares: WorkspaceTarget[] = [];
   readonly commands: (WorkspaceCommand & { target: WorkspaceTarget })[] = [];
-  // A prepare that fails with this error; a run that never settles.
+  // A prepare that fails with this error, or never settles; a run that never settles.
   prepareFailure: Error | null = null;
+  prepareHangs = false;
   hang = false;
   readonly #base: Files;
   readonly #head: Files;
@@ -182,6 +183,9 @@ export class FakeWorkspace implements WorkspaceClient {
 
   async prepare(target: WorkspaceTarget, _signal: AbortSignal): Promise<PreparedWorkspace> {
     this.prepares.push(target);
+    if (this.prepareHangs) {
+      return new Promise<never>(() => undefined);
+    }
     if (this.prepareFailure !== null) {
       throw this.prepareFailure;
     }

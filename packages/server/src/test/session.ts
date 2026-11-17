@@ -299,6 +299,7 @@ export type PrSessionSeams = {
   github(): GithubClient | undefined;
   // AIChatAgent's own.
   waitUntilStable(options?: { timeout?: number }): Promise<boolean>;
+  abortAllRequests(reason?: unknown): void;
 };
 
 const PR_SESSION_SEAMS = [
@@ -313,6 +314,7 @@ const PR_SESSION_SEAMS = [
   "contextTokens",
   "github",
   "waitUntilStable",
+  "abortAllRequests",
 ] as const;
 
 function hasPrSessionSeams(instance: object): instance is PrSessionSeams {

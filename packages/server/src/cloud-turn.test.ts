@@ -11,6 +11,7 @@ import { PrSession } from "./pr-session/index.ts";
 import { CHARS_PER_TOKEN } from "./pr-session/room.ts";
 import { MIN_RESULT_CHARS } from "./pr-session/tools.ts";
 import { NO_ANSWER_TEXT } from "./pr-session/turn.ts";
+import { WORKSPACE_CALL_MS } from "./pr-session/workspace.ts";
 import { captureLogs, events } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import {
@@ -36,6 +37,7 @@ import {
   useCloudModel,
   useWorkspace,
 } from "./test/model.ts";
+import { advance, until } from "./test/provider.ts";
 import { gate, jobOf, jobRows, prSessionSeams, retryIn, revOf, sessionSql } from "./test/session.ts";
 import { BASE, push, sha } from "./test/webhook.ts";
 import { FakeWorkspace } from "./test/workspace.ts";
@@ -43,6 +45,7 @@ import { FakeWorkspace } from "./test/workspace.ts";
 const sockets: AgentSocket[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const socket of sockets.splice(0)) {
     socket.close();
   }
@@ -705,6 +708,75 @@ describe("tools", () => {
 
     expect((await jobRows(stub))[0]?.failure).toBe("workspace: the fetch of the commit failed");
     expect(workspace.prepares).toEqual([{ sha: sha("a"), baseSha: BASE }]);
+    expect(model.calls).toHaveLength(0);
+  });
+});
+
+describe("workspace prepare", () => {
+  it("fails a job whose workspace does not answer its prepare at the backstop, and not a tick sooner", async () => {
+    captureLogs();
+    const { stub, ref } = await cloudSession("turn", sockets);
+    const model = new ScriptedModel();
+    useCloudModel(model);
+    const workspace = new FakeWorkspace();
+    workspace.prepareHangs = true;
+    useWorkspace(workspace);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    await push(ref, "a");
+    await until(() => workspace.prepares.length === 1, "the prepare");
+    await advance(stub, WORKSPACE_CALL_MS - 1);
+    expect((await jobRows(stub))[0]?.state).toBe("running");
+    await advance(stub, 1);
+
+    expect(await untilEnded(stub, sha("a"))).toEqual({
+      state: "failed",
+      failure: "workspace: no answer within 31 minutes",
+    });
+    expect(model.calls).toHaveLength(0);
+  });
+
+  it("ends the wait for the prepare at once when the turn is aborted", async () => {
+    captureLogs();
+    const { stub, ref } = await cloudSession("turn", sockets);
+    const model = new ScriptedModel();
+    useCloudModel(model);
+    const workspace = new FakeWorkspace();
+    workspace.prepareHangs = true;
+    useWorkspace(workspace);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    await push(ref, "a");
+    await until(() => workspace.prepares.length === 1, "the prepare");
+    // As a client's cancel aborts it.
+    await runInDurableObject(stub, (instance) => prSessionSeams(instance).abortAllRequests());
+
+    expect(await untilEnded(stub, sha("a"))).toEqual({ state: "failed", failure: "the turn was cancelled" });
+    expect(model.calls).toHaveLength(0);
+  });
+});
+
+describe("workspace base", () => {
+  it("fails a job with a workspace commit whose pull request's base is not known, preparing nothing", async () => {
+    captureLogs();
+    const { stub, ref } = await cloudSession("turn", sockets);
+    const model = new ScriptedModel();
+    useCloudModel(model);
+    await push(ref, "a");
+    await untilState(stub, sha("a"), "failed");
+    // The details lose a field, so the session no longer knows the pull request's base.
+    await sessionSql(stub, "UPDATE prq_session SET title = NULL WHERE id = 1");
+    const workspace = new FakeWorkspace();
+    useWorkspace(workspace);
+
+    const [job] = await jobRows(stub);
+    await retryIn(stub, job?.job_id ?? "");
+
+    expect(await untilEnded(stub, sha("a"))).toEqual({
+      state: "failed",
+      failure: "workspace: the pull request's base is not known",
+    });
+    expect(workspace.prepares).toEqual([]);
     expect(model.calls).toHaveLength(0);
   });
 });
