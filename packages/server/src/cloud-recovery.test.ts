@@ -253,6 +253,7 @@ describe("usage", () => {
         // The run's first start was the job's creation; its end, the done statement.
         wallMs: job.updated_at - job.created_at,
         starts: 2,
+        overflowRerun: false,
       },
     ]);
   });

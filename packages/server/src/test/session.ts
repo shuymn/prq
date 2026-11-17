@@ -297,6 +297,12 @@ export type PrSessionSeams = {
   workspaceFor(job: Job): WorkspaceClient | null;
   contextTokens(): number;
   github(): GithubClient | undefined;
+  compactContext(
+    model: CloudModel,
+    window: number,
+    options: { jobId: string; signal?: AbortSignal },
+  ): Promise<"adopted" | "discarded" | "failed" | "skipped">;
+  measureContext(own: UIMessage | null): Promise<{ tokens: number; end: string | null }>;
   // AIChatAgent's own.
   waitUntilStable(options?: { timeout?: number }): Promise<boolean>;
   abortAllRequests(reason?: unknown): void;
@@ -313,6 +319,8 @@ const PR_SESSION_SEAMS = [
   "workspaceFor",
   "contextTokens",
   "github",
+  "compactContext",
+  "measureContext",
   "waitUntilStable",
   "abortAllRequests",
 ] as const;

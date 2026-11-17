@@ -309,16 +309,18 @@ export type ToolLoop = {
 // A turn with a workspace: its tools, and the room that withdraws them (no tools offered) when the next request would
 // leave no room for a result, so the model answers from what it has read. Under toolChoice "none", which would keep the
 // tool definitions in the cached prefix, a provider wrote its tool call as the answer's text (DeepSeek), and an answer
-// the author can read is worth more than that prefix. The room is measured at the end of each model call; tools run
-// after it.
+// the author can read is worth more than that prefix. The first request's size is the context count when the session
+// has a measurement (`measured`), else the request's estimate; the room is measured again at the end of each model
+// call, and tools run after it.
 export async function toolLoop(
   context: Omit<ToolContext, "room">,
   window: number,
   request: { system: string; messages: ModelMessage[] },
+  measured: number | null = null,
 ): Promise<ToolLoop> {
   const room = new ContextRoom(window);
   const tools = workspaceTools({ ...context, room });
-  room.estimate(await requestChars(request, tools));
+  room.start(measured === null ? { chars: await requestChars(request, tools) } : { tokens: measured });
   let withdrawn: number | null = null;
   return {
     tools,

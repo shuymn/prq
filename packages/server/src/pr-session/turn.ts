@@ -20,6 +20,8 @@ export type Binding = {
   model: CloudModel;
   outcome: TurnOutcome;
   workspace?: { client: WorkspaceClient; seq: number };
+  // The notes revision the turn's context was built on, once it was built.
+  notesRev?: number;
 };
 
 export type TurnOutcome = {
@@ -33,12 +35,15 @@ export type TurnOutcome = {
   finishReason?: FinishReason;
   rawFinishReason?: string | undefined;
   aborted: boolean;
-  // The first error the turn saw.
+  // The first error the turn saw, and whether it was the provider's refusal of the context's length.
   error?: string;
+  contextLength: boolean;
+  // The tokens of the turn's latest model call (input and output), when the provider reported them.
+  contextTokens?: number | undefined;
 };
 
 export function newOutcome(): TurnOutcome {
-  return { reached: false, aborted: false };
+  return { reached: false, aborted: false, contextLength: false };
 }
 
 // The reason a turn that stopped normally fails when its result holds no answer text (reasoning only, or nothing): as

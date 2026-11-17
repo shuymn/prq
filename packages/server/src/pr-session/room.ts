@@ -1,6 +1,6 @@
 import type { LanguageModelUsage } from "ai";
 
-import { contextBudget } from "./context-budget.ts";
+import { contextLimit } from "./context-budget.ts";
 
 // How much a cloud turn may still read (docs/design.md, Model context: "Overrun inside one turn"): the model's window
 // less the reserve, less the newest request the provider measured, less an estimate of what came after it. The newest
@@ -19,13 +19,14 @@ export class ContextRoom {
   #added = 0;
 
   constructor(window: number) {
-    this.#limit = window - contextBudget(window).reserve;
+    this.#limit = contextLimit(window);
     this.#measured = 0;
   }
 
-  // The turn's first request, before any model call has measured one: its characters, estimated.
-  estimate(requestChars: number): void {
-    this.#measured = Math.ceil(requestChars / CHARS_PER_TOKEN);
+  // The turn's first request, before any model call of the turn has measured one: the context count (the last
+  // committed turn's measurement and what came after it), or, without a measurement, its characters estimated.
+  start(first: { tokens: number } | { chars: number }): void {
+    this.#measured = "tokens" in first ? first.tokens : Math.ceil(first.chars / CHARS_PER_TOKEN);
     this.#added = 0;
   }
 

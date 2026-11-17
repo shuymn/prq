@@ -171,6 +171,28 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
   // job keeps the number of its turn, which the turn's workspace calls carry.
   "ALTER TABLE prq_session ADD COLUMN turn_seq INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE prq_jobs ADD COLUMN turn_seq INTEGER",
+  // Context compaction (docs/design.md, Model context). The analysis notes: their text (NULL until the first compaction
+  // is adopted), their revision (advanced by each adopted compaction), the cut (the message and the step within it
+  // where the kept part starts), the head when they were made, and the files read (a JSON array of paths).
+  `CREATE TABLE prq_notes (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    text TEXT,
+    rev INTEGER NOT NULL DEFAULT 0,
+    cut_message_id TEXT,
+    cut_step INTEGER,
+    target_sha TEXT,
+    read_files TEXT NOT NULL DEFAULT '[]',
+    updated_at INTEGER)`,
+  "INSERT INTO prq_notes (id) VALUES (1)",
+  // The context count: the last committed turn's last model call (input and output tokens; NULL when the provider
+  // reported none), the result it ended with, and the notes revision its context was built on; and the projection's
+  // last message when a compaction failed, so a turn's start does not repeat it.
+  "ALTER TABLE prq_session ADD COLUMN context_tokens INTEGER",
+  "ALTER TABLE prq_session ADD COLUMN context_through TEXT",
+  "ALTER TABLE prq_session ADD COLUMN context_notes_rev INTEGER",
+  "ALTER TABLE prq_session ADD COLUMN compaction_failed_through TEXT",
+  // Whether a run was re-run after a context-length refusal: once per run.
+  "ALTER TABLE prq_job_usage ADD COLUMN overflow_rerun INTEGER NOT NULL DEFAULT 0 CHECK (overflow_rerun IN (0, 1))",
 ];
 
 export const WORKSPACE_SCHEMA: SchemaSteps = [

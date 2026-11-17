@@ -527,6 +527,27 @@ export function restartTurn(sql: SqlStorage, row: JobRow, turnId: string, now: n
   return restarted;
 }
 
+// A running job whose turn the provider refused for the context's length → running under a new turn (the re-run after
+// a compaction), its run marked as re-run. Not a start: a run's starts count the interruptions only. Only while the job
+// is still the refused turn's.
+export function rerunTurn(sql: SqlStorage, row: JobRow, turnId: string, now: number): JobRow | undefined {
+  const rerun = sql
+    .exec<JobRow>(
+      `UPDATE prq_jobs SET rev = rev + 1, turn_id = ?, turn_seq = ${NEXT_TURN_SEQ}, updated_at = ?
+       WHERE job_id = ? AND state = 'running' AND turn_id IS ? RETURNING *`,
+      turnId,
+      now,
+      row.job_id,
+      row.turn_id,
+    )
+    .toArray()[0];
+  if (rerun !== undefined) {
+    sql.exec("UPDATE prq_session SET turn_seq = ? WHERE id = 1", rerun.turn_seq);
+    sql.exec("UPDATE prq_job_usage SET overflow_rerun = 1 WHERE job_id = ? AND run = ?", rerun.job_id, rerun.run);
+  }
+  return rerun;
+}
+
 // How a running job's turn ended: its result stored as the message, or a failure with the reason.
 export type TurnEnd = { done: string } | { failed: string };
 
@@ -550,13 +571,14 @@ export type JobUsage = {
   output_tokens: number;
   cached_input_tokens: number;
   started_at: number;
+  overflow_rerun: number;
 };
 
 export function jobUsage(sql: SqlStorage, row: Pick<JobRow, "job_id" | "run">): JobUsage | undefined {
   return sql
     .exec<JobUsage>(
-      `SELECT starts, steps, input_tokens, output_tokens, cached_input_tokens, started_at FROM prq_job_usage
-       WHERE job_id = ? AND run = ?`,
+      `SELECT starts, steps, input_tokens, output_tokens, cached_input_tokens, started_at, overflow_rerun
+       FROM prq_job_usage WHERE job_id = ? AND run = ?`,
       row.job_id,
       row.run,
     )

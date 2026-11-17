@@ -18,3 +18,9 @@ export function contextBudget(window: number): ContextBudget {
     notesOutput: Math.min(8_192, Math.floor(window / 5)),
   };
 }
+
+// The most tokens the context may take before it is compacted, and before a turn's tools are withdrawn: the window less
+// the reserve.
+export function contextLimit(window: number): number {
+  return window - contextBudget(window).reserve;
+}
