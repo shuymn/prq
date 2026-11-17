@@ -172,11 +172,14 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
   "ALTER TABLE prq_session ADD COLUMN turn_seq INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE prq_jobs ADD COLUMN turn_seq INTEGER",
   // Context compaction (docs/design.md, Model context). The analysis notes: their text (NULL until the first compaction
-  // is adopted), their revision (advanced by each adopted compaction), the cut (the message and the step within it
-  // where the kept part starts), the head when they were made, and the files read (a JSON array of paths).
+  // is adopted) and the two summaries it is assembled from (the history's, and the checkpoint of a turn the cut falls
+  // inside), their revision (advanced by each adopted compaction), the cut (the message and the step within it where
+  // the kept part starts), the head when they were made, and the files read (a JSON array of paths).
   `CREATE TABLE prq_notes (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     text TEXT,
+    history TEXT,
+    turn_context TEXT,
     rev INTEGER NOT NULL DEFAULT 0,
     cut_message_id TEXT,
     cut_step INTEGER,

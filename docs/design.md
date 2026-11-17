@@ -790,8 +790,9 @@ never summarized, and once answered it enters the kept part with its answer, whe
   tokens). The cut falls at a question, at an analysis's first step (an analysis stores no request), or at a step
   boundary inside a result; a tool call and its result are one part of a step, so they are never separated. If the cut
   falls inside a turn, the first half of that turn is summarized separately; this step is required, because it happens
-  every time when the amount kept is smaller than one turn. The cut never moves back: the next one starts from it, and
-  the projection only grows at its end.
+  every time when the amount kept is smaller than one turn. While later cuts stay inside the same turn, the steps each
+  one removes update that turn's summary, not the history's; it folds into the history's summary once a cut leaves the
+  turn. The cut never moves back: the next one starts from it, and the projection only grows at its end.
 - **Analysis notes.** Everything before the cut point is summarized into fixed sections. If notes already exist, they are
   updated, not rewritten: keep, add, and drop what became stale. Pi's Goal / Constraints / Progress / Key Decisions /
   Next Steps / Critical Context become, for PRs: purpose, overview of the change, decisions, the user's interests and
@@ -806,8 +807,9 @@ never summarized, and once answered it enters the kept part with its answer, whe
   holds for the expected use (a conversation about one PR, a few compactions at real window sizes), and it is checked on
   real PRs after deployment, looking at answer quality after compaction.
 - **Reasoning.** When a turn ends, the model's reasoning is removed from the context.
-- **Storage and insertion.** PrSession stores the notes apart from the history (`prq_notes`), with the target SHA, a
-  revision, the cut (the message and the step within it) and the files read. Notes are adopted only at the revision they
+- **Storage and insertion.** PrSession stores the notes apart from the history (`prq_notes`): the history's summary,
+  the summary of a turn the cut falls inside, the notes assembled from them, the target SHA, a revision, the cut (the
+  message and the step within it) and the files read. Notes are adopted only at the revision they
   were built from, so a compaction that another one overtook is discarded. The model receives them, after the system
   prompt, as a message that says the conversation before this point was compacted into the following summary (Pi's
   notice), then the projection's kept part (a split turn's kept steps as a partial assistant message), then the job's

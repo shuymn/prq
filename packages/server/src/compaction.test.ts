@@ -4,7 +4,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { prSessionStub } from "./names.ts";
-import { notesText } from "./pr-session/compaction.ts";
+import { assembleNotes, notesText, TURN_PREFIX_UPDATE_PROMPT } from "./pr-session/compaction.ts";
 import { PrSession } from "./pr-session/index.ts";
 import { CHARS_PER_TOKEN } from "./pr-session/room.ts";
 import { captureLogs, events } from "./test/access.ts";
@@ -13,6 +13,7 @@ import { cloudSession, expectAppended, messageRows, untilState, usageOf } from "
 import {
   cloudAnswer,
   contextRow,
+  fourStepAnswer,
   isSummaryCall,
   notesRow,
   seedHistory,
@@ -238,6 +239,50 @@ describe("failed summaries", () => {
     expect([await first, second]).toEqual(["discarded", "adopted"]);
     expect(await notesRow(stub)).toMatchObject({ text: "second notes", rev: 1, cut_message_id: "q2", cut_step: 0 });
     expect(events(logs, "prq.compaction.discarded")).toMatchObject([{ jobId: "first", notesRev: 0 }]);
+  });
+});
+
+describe("a cut that stays inside a split turn", () => {
+  it("updates that turn's checkpoint with the steps it removed, and leaves the history as it was", async () => {
+    captureLogs();
+    const session = await cloudSession("compaction", sockets);
+    const { stub } = session;
+    // The notes were made with the cut at the third step of Q1's answer: the history before Q1, and Q1's turn up to
+    // that step in its checkpoint.
+    const a1 = fourStepAnswer();
+    await seedHistory(stub, [Q1, a1, Q2, cloudAnswer("q2", [{ type: "text", text: sized("answer two", 3334) }])]);
+    await sessionSql(
+      stub,
+      `UPDATE prq_notes SET text = ?, history = ?, turn_context = ?, rev = 1, cut_message_id = ?, cut_step = 2
+       WHERE id = 1`,
+      assembleNotes("the history", "the checkpoint", []),
+      "the history",
+      "the checkpoint",
+      a1.id,
+    );
+    const model = new ScriptedModel().add(notes("the checkpoint, read on"));
+    useCloudModel(model);
+
+    const result = await runInDurableObject(stub, (instance) =>
+      prSessionSeams(instance).compactContext(model.model, WINDOW, { jobId: "job" }),
+    );
+
+    expect(result).toBe("adopted");
+    const [call] = model.calls.filter(isSummaryCall);
+    expect(model.calls).toHaveLength(1);
+    const prompt = call === undefined ? "" : summaryPrompt(call);
+    expect(prompt).toContain("<previous-summary>\nthe checkpoint\n</previous-summary>");
+    expect(prompt).toContain('read_file(path="src/2.ts"); read_file(path="src/3.ts")');
+    expect(prompt).not.toContain("src/1.ts");
+    expect(prompt.endsWith(TURN_PREFIX_UPDATE_PROMPT)).toBe(true);
+    expect(await notesRow(stub)).toMatchObject({
+      text: assembleNotes("the history", "the checkpoint, read on", ["src/2.ts", "src/3.ts"]),
+      history: "the history",
+      turn_context: "the checkpoint, read on",
+      rev: 2,
+      cut_message_id: a1.id,
+      cut_step: 3,
+    });
   });
 });
 

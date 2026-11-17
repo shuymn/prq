@@ -35,6 +35,8 @@ export function summaryPrompt(call: CallOptions): string {
 
 export type NotesRow = {
   text: string | null;
+  history: string | null;
+  turn_context: string | null;
   rev: number;
   cut_message_id: string | null;
   cut_step: number | null;
@@ -44,7 +46,9 @@ export type NotesRow = {
 export async function notesRow(stub: DurableObjectStub<PrSession>): Promise<NotesRow> {
   return runInDurableObject(stub, (_, state) =>
     state.storage.sql
-      .exec<NotesRow>("SELECT text, rev, cut_message_id, cut_step, read_files FROM prq_notes WHERE id = 1")
+      .exec<NotesRow>(
+        "SELECT text, history, turn_context, rev, cut_message_id, cut_step, read_files FROM prq_notes WHERE id = 1",
+      )
       .one(),
   );
 }
@@ -77,6 +81,33 @@ export function cloudAnswer(questionId: string, parts: UIMessage["parts"]): UIMe
     by: { kind: "cloud", model: "scripted-model" },
   };
   return { id: `answer-job-${questionId}`, role: "assistant", metadata, parts };
+}
+
+// A read of 9,000 characters (3,000 estimated tokens), settled.
+function fileRead(index: number) {
+  return {
+    type: "tool-read_file" as const,
+    toolCallId: `call-${index}`,
+    state: "output-available" as const,
+    input: { path: `src/${index}.ts` },
+    output: "x".repeat(9000),
+  };
+}
+
+// A cloud answer to Q1 in four steps: a read, a read, two reads in one step, then its text of 9,000 characters. The
+// kept tail of the test window reaches into it at its third step.
+export function fourStepAnswer(): UIMessage {
+  return cloudAnswer("q1", [
+    { type: "step-start" },
+    fileRead(0),
+    { type: "step-start" },
+    fileRead(1),
+    { type: "step-start" },
+    fileRead(2),
+    fileRead(3),
+    { type: "step-start" },
+    { type: "text", text: "y".repeat(9000) },
+  ]);
 }
 
 // Messages stored as they are, without intake or jobs: a conversation the commits made earlier.

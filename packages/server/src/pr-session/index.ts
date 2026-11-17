@@ -1689,17 +1689,26 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const calls: SummaryCalls = { calls: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
     const started = Date.now();
     const files = readFiles([...cut.toSummarize, ...cut.turnPrefix], notes.readFiles);
-    let text: string;
+    let summaries: { history: string; turnContext: string | null };
     try {
+      // The history: updated with the steps the cut removed before its turn (the previous notes fold into it, with the
+      // checkpoint of a turn the previous cut fell inside), or left as it was; "No prior history." (Pi's) before any.
       const history =
-        cut.toSummarize.length === 0
-          ? (notes.text ?? NO_PRIOR_HISTORY)
-          : await this.#summary(model, notesRequest(cut.toSummarize, notes.text), notesOutput, signal, calls);
-      const prefix =
+        cut.toSummarize.length > 0
+          ? await this.#summary(model, notesRequest(cut.toSummarize, notes.text), notesOutput, signal, calls)
+          : (notes.history ?? NO_PRIOR_HISTORY);
+      // The checkpoint of the turn the cut falls inside, updated when the previous cut fell inside it too.
+      const turnContext =
         cut.turnPrefix.length === 0
           ? null
-          : await this.#summary(model, turnPrefixRequest(cut.turnPrefix), notesOutput, signal, calls);
-      text = assembleNotes(history, prefix, files);
+          : await this.#summary(
+              model,
+              turnPrefixRequest(cut.turnPrefix, cut.turnContinues ? notes.turnContext : null),
+              notesOutput,
+              signal,
+              calls,
+            );
+      summaries = { history, turnContext };
     } catch (error) {
       // A compaction its turn's abort ended did not fail: the next start may run it.
       if (signal?.aborted !== true) {
@@ -1709,10 +1718,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       log("prq.compaction.failed", { ...fields, reason, ...calls, ms: Date.now() - started }, "warn");
       return "failed";
     }
+    const text = assembleNotes(summaries.history, summaries.turnContext, files);
     const adopted = this.ctx.storage.transactionSync(() =>
       adoptNotes(
         this.#sql,
-        { text, cut: cut.cut, readFiles: files, targetSha: readHead(this.#sql).headSha },
+        { text, ...summaries, cut: cut.cut, readFiles: files, targetSha: readHead(this.#sql).headSha },
         notes.rev,
         Date.now(),
       ),

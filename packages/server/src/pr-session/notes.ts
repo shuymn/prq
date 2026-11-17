@@ -6,13 +6,16 @@ import type { CutPosition } from "./compaction.ts";
 // (docs/design.md, Model context).
 
 // The notes the model reads in place of the projection before the cut; none until a compaction is adopted. rev counts
-// the adopted compactions.
+// the adopted compactions. The text is assembled from the history's summary and, when the cut falls inside a turn,
+// that turn's checkpoint, both kept for the next compaction to update.
 export type Notes =
-  | { text: string; rev: number; cut: CutPosition; readFiles: string[] }
-  | { text: null; rev: number; cut: null; readFiles: string[] };
+  | { text: string; history: string; turnContext: string | null; rev: number; cut: CutPosition; readFiles: string[] }
+  | { text: null; history: null; turnContext: null; rev: number; cut: null; readFiles: string[] };
 
 type NotesRow = {
   text: string | null;
+  history: string | null;
+  turn_context: string | null;
   rev: number;
   cut_message_id: string | null;
   cut_step: number | null;
@@ -23,29 +26,48 @@ const ReadFiles = v.array(v.string());
 
 export function readNotes(sql: SqlStorage): Notes {
   const row = sql
-    .exec<NotesRow>("SELECT text, rev, cut_message_id, cut_step, read_files FROM prq_notes WHERE id = 1")
+    .exec<NotesRow>(
+      `SELECT text, history, turn_context, rev, cut_message_id, cut_step, read_files FROM prq_notes
+       WHERE id = 1`,
+    )
     .one();
   const readFiles = v.parse(ReadFiles, JSON.parse(row.read_files));
-  if (row.text === null || row.cut_message_id === null || row.cut_step === null) {
-    return { text: null, rev: row.rev, cut: null, readFiles };
+  if (row.text === null || row.history === null || row.cut_message_id === null || row.cut_step === null) {
+    return { text: null, history: null, turnContext: null, rev: row.rev, cut: null, readFiles };
   }
-  return { text: row.text, rev: row.rev, cut: { messageId: row.cut_message_id, step: row.cut_step }, readFiles };
+  return {
+    text: row.text,
+    history: row.history,
+    turnContext: row.turn_context,
+    rev: row.rev,
+    cut: { messageId: row.cut_message_id, step: row.cut_step },
+    readFiles,
+  };
 }
 
 // New notes, adopted only while no other compaction has been adopted since they were built from the notes at `rev`;
 // an adoption also ends the failed compaction's mark. Returns the new revision, or null when not adopted.
 export function adoptNotes(
   sql: SqlStorage,
-  notes: { text: string; cut: CutPosition; readFiles: readonly string[]; targetSha: string | null },
+  notes: {
+    text: string;
+    history: string;
+    turnContext: string | null;
+    cut: CutPosition;
+    readFiles: readonly string[];
+    targetSha: string | null;
+  },
   rev: number,
   now: number,
 ): number | null {
   const adopted = sql
     .exec<{ rev: number }>(
-      `UPDATE prq_notes SET text = ?, rev = rev + 1, cut_message_id = ?, cut_step = ?, target_sha = ?, read_files = ?,
-         updated_at = ?
+      `UPDATE prq_notes SET text = ?, history = ?, turn_context = ?, rev = rev + 1, cut_message_id = ?, cut_step = ?,
+         target_sha = ?, read_files = ?, updated_at = ?
        WHERE id = 1 AND rev = ? RETURNING rev`,
       notes.text,
+      notes.history,
+      notes.turnContext,
       notes.cut.messageId,
       notes.cut.step,
       notes.targetSha,

@@ -90,20 +90,37 @@ ${NOTES_FORMAT}
 
 Keep each section concise.`;
 
-export const TURN_PREFIX_SUMMARIZATION_PROMPT = `The messages above are earlier context from an ongoing conversation. Later messages are stored separately and do not need to be reconstructed.
-
-Create a concise checkpoint of the user's request and the progress shown above. This checkpoint will be placed before the later messages so the conversation can continue with the necessary context.
-
-## Original Request
+const TURN_PREFIX_FORMAT = `## Original Request
 [What did the user ask for? Keep any decision or preference the user stated, in the user's own words.]
 
 ## Progress So Far
 - [Files read and facts found in these messages]
 
 ## Context Needed to Continue
-- [Information from these messages needed to understand the later work]
+- [Information from these messages needed to understand the later work]`;
+
+export const TURN_PREFIX_SUMMARIZATION_PROMPT = `The messages above are earlier context from an ongoing conversation. Later messages are stored separately and do not need to be reconstructed.
+
+Create a concise checkpoint of the user's request and the progress shown above. This checkpoint will be placed before the later messages so the conversation can continue with the necessary context.
+
+${TURN_PREFIX_FORMAT}
 
 Only summarize information explicitly present above. Do not infer or recreate later messages.`;
+
+// The same turn's checkpoint, updated when a later cut falls further inside that turn (Pi has no such prompt: its
+// update prompt, applied to a turn's checkpoint).
+export const TURN_PREFIX_UPDATE_PROMPT = `The messages above are more of the same turn's earlier context, to incorporate into the existing checkpoint provided in <previous-summary> tags. Later messages are stored separately and do not need to be reconstructed.
+
+Update the checkpoint with the new messages. RULES:
+- PRESERVE everything in the existing checkpoint, especially the user's request and every decision or preference the user stated
+- ADD the files read, facts found and context from the new messages
+- PRESERVE exact file paths, function names, option names, error names, numbers and dates
+
+Use this EXACT format:
+
+${TURN_PREFIX_FORMAT}
+
+Only summarize information explicitly present above or in the existing checkpoint. Do not infer or recreate later messages.`;
 
 // How the model is told that the notes stand for the conversation before the kept part (Pi's notice).
 const NOTES_PREFIX =
@@ -231,10 +248,14 @@ export function contextCount(
 export type Cut = {
   // The step the kept part starts at.
   cut: CutPosition;
-  // The steps summarized into the notes, from the previous cut on.
+  // The steps summarized into the notes' history, from the previous cut on.
   toSummarize: Step[];
-  // A turn the cut falls inside: its steps before the cut, summarized apart (empty when the cut is at a turn's start).
+  // A turn the cut falls inside: its steps before the cut not yet summarized, summarized apart into the turn's
+  // checkpoint (empty when the cut is at a turn's start).
   turnPrefix: Step[];
+  // Whether the previous cut fell inside the same turn: its checkpoint is then updated with turnPrefix, and the
+  // history is left as it was.
+  turnContinues: boolean;
 };
 
 function stepIndex(steps: readonly Step[], at: CutPosition | null): number {
@@ -248,8 +269,9 @@ function stepIndex(steps: readonly Step[], at: CutPosition | null): number {
 // The cut over the projection from the previous cut on: going back from the newest step, at least keptTail estimated
 // tokens are kept (the characters summed, then rounded once, as the context count is), and the cut falls at the start
 // of the step where they are reached (a question, or a step of a result). A cut inside a turn sets the turn's earlier
-// steps apart. Null when nothing before the cut is left to summarize. The cut never moves back: the walk starts at the
-// previous cut, and the projection only grows at its end.
+// steps apart, and while later cuts stay inside that turn, its newly removed steps go to its checkpoint too; they reach
+// the history only once a cut leaves the turn. Null when nothing before the cut is left to summarize. The cut never
+// moves back: the walk starts at the previous cut, and the projection only grows at its end.
 export function findCut(projection: readonly Projected[], previous: CutPosition | null, keptTail: number): Cut | null {
   const steps = projectionSteps(projection);
   const start = stepIndex(steps, previous);
@@ -264,26 +286,32 @@ export function findCut(projection: readonly Projected[], previous: CutPosition 
     }
   }
   const at = steps[cut];
-  if (at === undefined) {
+  if (at === undefined || cut <= start) {
     return null;
   }
+  const position = { messageId: at.message.id, step: at.step };
+  // The start of the turn the cut falls inside, searched before the previous cut too: a turn the previous cut also
+  // fell inside started before it.
   let turnStart = -1;
   if (!at.turnStart) {
-    for (let index = cut; index >= start; index -= 1) {
+    for (let index = cut; index >= 0; index -= 1) {
       if (steps[index]?.turnStart === true) {
         turnStart = index;
         break;
       }
     }
   }
-  if (cut <= start && turnStart < 0) {
-    return null;
+  if (turnStart < 0) {
+    return { cut: position, toSummarize: steps.slice(start, cut), turnPrefix: [], turnContinues: false };
   }
-  const end = turnStart < 0 ? cut : turnStart;
+  if (turnStart < start) {
+    return { cut: position, toSummarize: [], turnPrefix: steps.slice(start, cut), turnContinues: true };
+  }
   return {
-    cut: { messageId: at.message.id, step: at.step },
-    toSummarize: steps.slice(start, end),
-    turnPrefix: turnStart < 0 ? [] : steps.slice(turnStart, cut),
+    cut: position,
+    toSummarize: steps.slice(start, turnStart),
+    turnPrefix: steps.slice(turnStart, cut),
+    turnContinues: false,
   };
 }
 
@@ -394,18 +422,24 @@ export function notesRequest(toSummarize: readonly Step[], previous: string | nu
   return { kind: "notes", prompt };
 }
 
-export function turnPrefixRequest(turnPrefix: readonly Step[]): SummaryRequest {
+// A split turn's first steps, summarized into its checkpoint, or added to the checkpoint `previous` when a later cut
+// falls further inside the same turn.
+export function turnPrefixRequest(turnPrefix: readonly Step[], previous: string | null = null): SummaryRequest {
+  const conversation = `# Conversation\n${serializeSteps(turnPrefix)}\n\n`;
   return {
     kind: "turn-prefix",
-    prompt: `# Conversation\n${serializeSteps(turnPrefix)}\n\n# Instructions\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`,
+    prompt:
+      previous === null
+        ? `${conversation}# Instructions\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`
+        : `${conversation}<previous-summary>\n${previous}\n</previous-summary>\n\n# Instructions\n${TURN_PREFIX_UPDATE_PROMPT}`,
   };
 }
 
-// The notes from the summaries: the history's (or the previous notes when nothing before the turn was summarized), a
-// split turn's prefix after it, and the list of files read, made again each time.
-export function assembleNotes(history: string, turnPrefix: string | null, files: readonly string[]): string {
+// The notes from the summaries: the history's, a split turn's checkpoint after it, and the list of files read, made
+// again each time.
+export function assembleNotes(history: string, turnContext: string | null, files: readonly string[]): string {
   const summary =
-    turnPrefix === null ? history : `${history}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefix}`;
+    turnContext === null ? history : `${history}\n\n---\n\n**Turn Context (split turn):**\n\n${turnContext}`;
   const list = files.length === 0 ? "" : `\n\n<read-files>\n${files.join("\n")}\n</read-files>`;
   return `${summary.replace(READ_FILES_BLOCK, "\n").trimEnd()}${list}`;
 }

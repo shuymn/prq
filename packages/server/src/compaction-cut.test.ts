@@ -12,13 +12,14 @@ import {
   SUMMARIZATION_PROMPT,
   SUMMARIZATION_SYSTEM_PROMPT,
   TURN_PREFIX_SUMMARIZATION_PROMPT,
+  TURN_PREFIX_UPDATE_PROMPT,
   turnPrefixRequest,
   UPDATE_SUMMARIZATION_PROMPT,
 } from "./pr-session/compaction.ts";
 import { contextBudget } from "./pr-session/context-budget.ts";
 import { NO_ROOM } from "./pr-session/tools.ts";
 import { question } from "./test/chat.ts";
-import { cloudAnswer, sized, WINDOW } from "./test/compaction.ts";
+import { cloudAnswer, fourStepAnswer, sized, WINDOW } from "./test/compaction.ts";
 
 // The cut over built projections, with the kept tail of the test window (6,000 estimated tokens).
 
@@ -124,6 +125,34 @@ describe("the cut", () => {
     expect(cut?.turnPrefix.map((step) => step.message.id)).toEqual(["q4"]);
   });
 
+  it("keeps a split turn's checkpoint while later cuts stay inside the turn, and folds it into the history once one leaves", () => {
+    const a1 = fourStepAnswer();
+    const first = findCut([Q1, a1], null, keptTail);
+    expect(first?.cut).toEqual({ messageId: a1.id, step: 2 });
+    expect(first?.turnPrefix.map((step) => [step.message.id, step.step])).toEqual([
+      ["q1", 0],
+      [a1.id, 0],
+      [a1.id, 1],
+    ]);
+
+    const grown = [Q1, a1, Q2, answer("q2", 3334)];
+    const second = findCut(grown, first?.cut ?? null, keptTail);
+    expect(second?.cut).toEqual({ messageId: a1.id, step: 3 });
+    expect(second?.toSummarize).toEqual([]);
+    expect(second?.turnPrefix.map((step) => [step.message.id, step.step])).toEqual([[a1.id, 2]]);
+    expect(second?.turnContinues).toBe(true);
+
+    const third = findCut([...grown, Q3, answer("q3", 6000)], second?.cut ?? null, keptTail);
+    expect(third?.cut).toEqual({ messageId: "answer-job-q3", step: 0 });
+    expect(third?.toSummarize.map((step) => [step.message.id, step.step])).toEqual([
+      [a1.id, 3],
+      ["q2", 0],
+      ["answer-job-q2", 0],
+    ]);
+    expect(third?.turnPrefix.map((step) => step.message.id)).toEqual(["q3"]);
+    expect(third?.turnContinues).toBe(false);
+  });
+
   it("sums the kept part's characters and rounds once, as the context count does", () => {
     // Rounded per step, the last answer (17,996 characters: 5,999) and its one-character question (1) would reach 6,000
     // and the cut would keep 17,997 characters, 5,999 estimated tokens.
@@ -195,6 +224,7 @@ describe("the prompts", () => {
       SUMMARIZATION_PROMPT,
       UPDATE_SUMMARIZATION_PROMPT,
       TURN_PREFIX_SUMMARIZATION_PROMPT,
+      TURN_PREFIX_UPDATE_PROMPT,
     ];
     for (const prompt of prompts) {
       expect(prompt).not.toMatch(/language|japanese|english|日本語/i);
@@ -204,6 +234,9 @@ describe("the prompts", () => {
       "<previous-summary>\nearlier\n</previous-summary>",
     );
     expect(turnPrefixRequest(projectionSteps([Q1])).prompt.endsWith(TURN_PREFIX_SUMMARIZATION_PROMPT)).toBe(true);
+    const update = turnPrefixRequest(projectionSteps([Q1]), "the checkpoint").prompt;
+    expect(update).toContain("<previous-summary>\nthe checkpoint\n</previous-summary>");
+    expect(update.endsWith(TURN_PREFIX_UPDATE_PROMPT)).toBe(true);
   });
 
   it("name the six sections, the decisions in the user's own words and only the preferences the user stated", () => {
