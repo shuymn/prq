@@ -59,6 +59,10 @@ export const OUTPUT_CAP_BYTES = 4 * TOOL_RESULT_CHARS;
 // The most of a prepare step's stdout kept (a SHA, a token).
 const STEP_STDOUT_CHARS = 1000;
 const SIGKILL = 9;
+// The cleanup after a reset: every process the Workspace starts in the container, by its exact name (git and its
+// helpers, rm, cat, and the sh that writes the ready token), so none of an earlier instance's prepare goes on. The
+// container's own process (sleep, the image's CMD) is not among them.
+const CLEANUP_ARGV = ["pkill", "-KILL", "-x", "git|git-.*|rm|cat|sh"];
 
 // What the Workspace uses of its container.
 export type WorkspaceContainer = Pick<
@@ -303,7 +307,7 @@ export class Workspace extends DurableObject<Env> {
       return null;
     }
     const kill = async (): Promise<string | null> => {
-      const process = await container.exec(["pkill", "-KILL", "git"], { env: EXEC_ENV });
+      const process = await container.exec(CLEANUP_ARGV, { env: EXEC_ENV });
       const code = await process.exitCode;
       // 0: killed, 1: none was running.
       return code === 0 || code === 1 ? null : `pkill exited with ${code}`;

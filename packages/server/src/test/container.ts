@@ -62,7 +62,7 @@ export class FakeContainer implements WorkspaceContainer {
   destroyReply: () => Promise<void> = async () => this.stop();
   readonly #holds: PendingHold[] = [];
   // The processes that have not exited, by their argv.
-  readonly #live = new Set<{ argv: string[]; kill(signal?: number): void }>();
+  readonly #live = new Set<{ argv: string[]; kill(signal?: number): void; orphan(): void }>();
   #exited = Promise.withResolvers<void>();
 
   get running(): boolean {
@@ -142,6 +142,14 @@ export class FakeContainer implements WorkspaceContainer {
     };
   }
 
+  // The running processes outlive the instance that started them, which a test is about to reset: that instance's
+  // code is gone, so a later kill ends a process without resuming any of it.
+  orphanProcesses(): void {
+    for (const live of this.#live) {
+      live.orphan();
+    }
+  }
+
   // The commands logged since a point, which contain the word.
   commands(word: string, from = 0): string[] {
     return this.log.slice(from).filter((entry) => entry.split(" ").includes(word));
@@ -169,8 +177,8 @@ export class FakeContainer implements WorkspaceContainer {
     if (early?.reject !== undefined) {
       throw early.reject;
     }
-    const child = fakeProcess(call, hold, () => early ?? this.#simulate(call.argv));
-    const live = { argv: call.argv, kill: (signal?: number) => child.kill(signal) };
+    const { process: child, orphan } = fakeProcess(call, hold, () => early ?? this.#simulate(call.argv));
+    const live = { argv: call.argv, kill: (signal?: number) => child.kill(signal), orphan };
     this.#live.add(live);
     void child.exitCode.then(() => this.#live.delete(live));
     return child;
@@ -180,12 +188,14 @@ export class FakeContainer implements WorkspaceContainer {
   #simulate(argv: string[]): Reply {
     const [program, ...args] = argv;
     if (program === "pkill") {
-      // pkill -KILL git: every git process still running.
-      const git = [...this.#live].filter((live) => live.argv[0] === "git");
-      for (const live of git) {
+      // pkill -KILL [-x] PATTERN: every process still running whose name matches (the whole name with -x).
+      const source = args.at(-1) ?? "";
+      const pattern = new RegExp(args.includes("-x") ? `^(?:${source})$` : source);
+      const matched = [...this.#live].filter((live) => pattern.test(live.argv[0] ?? ""));
+      for (const live of matched) {
         live.kill(9);
       }
-      return { exitCode: git.length > 0 ? 0 : 1 };
+      return { exitCode: matched.length > 0 ? 0 : 1 };
     }
     if (program === "rm") {
       this.disk = null;
@@ -255,11 +265,16 @@ export class FakeContainer implements WorkspaceContainer {
 
 // A process that answers once its hold lets it go: the reply is made then (a held command changes the simulated disk
 // only when it goes on), its output streams in chunks, and it exits. kill() ends it at once with 137, its streams
-// closed, and a held command then never answers.
-function fakeProcess(call: ExecCall, hold: Promise<void>, respond: () => Reply): ExecProcess {
+// closed, and a held command then never answers; an orphaned process's kill settles nothing its starter waits on.
+function fakeProcess(
+  call: ExecCall,
+  hold: Promise<void>,
+  respond: () => Reply,
+): { process: ExecProcess; orphan: () => void } {
   const exit = Promise.withResolvers<number>();
   const answered = Promise.withResolvers<Reply | null>();
   let killed = false;
+  let orphaned = false;
   void hold.then(() => {
     if (killed) {
       return;
@@ -293,7 +308,7 @@ function fakeProcess(call: ExecCall, hold: Promise<void>, respond: () => Reply):
       },
     });
   };
-  return {
+  const process: ExecProcess = {
     stdin: null,
     stdout: stream(
       (reply) => (typeof reply.stdout === "string" ? encoder.encode(reply.stdout) : (reply.stdout ?? new Uint8Array())),
@@ -307,10 +322,18 @@ function fakeProcess(call: ExecCall, hold: Promise<void>, respond: () => Reply):
     kill: (signal?: number) => {
       call.kills.push(signal ?? 15);
       killed = true;
-      answered.resolve(null);
-      exit.resolve(137);
+      if (!orphaned) {
+        answered.resolve(null);
+        exit.resolve(137);
+      }
     },
     resize: () => undefined,
+  };
+  return {
+    process,
+    orphan: () => {
+      orphaned = true;
+    },
   };
 }
 

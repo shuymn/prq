@@ -61,7 +61,7 @@ function rebuildLog(commit: string, token: string): string[] {
 const SETUP = ["intercept http", "intercept https *", `idle ${IDLE_STOP_MS}`];
 const STARTED = ["start", ...SETUP];
 // The cleanup after a reset.
-const PKILL = "pkill -KILL git";
+const PKILL = "pkill -KILL -x git|git-.*|rm|cat|sh";
 
 // The token the last prepare wrote.
 function tokenOf(container: FakeContainer): string {
@@ -479,7 +479,7 @@ describe("rebuild ownership", () => {
 });
 
 describe("after a reset", () => {
-  it("still refuses a released turn, and kills the old git before the next turn's first command", async () => {
+  it("still refuses a released turn, and kills the old processes before the next turn's first command", async () => {
     captureLogs();
     const { name, stub: before, container } = await prepared("reset");
     await before.release(1);
@@ -493,6 +493,34 @@ describe("after a reset", () => {
     expect(await stub.prepare(target(2, "b"))).toEqual({ ok: true, value: { sha: sha("b"), mergeBase: BASE } });
     // The new instance sets the running container up again before its first command.
     expect(container.log.slice(from, from + 5)).toEqual([PKILL, ...SETUP, `cat -- ${DIR}/.git/prq-ready`]);
+  });
+
+  it("kills an earlier instance's rm, so it cannot remove the next prepare's checkout", async () => {
+    captureLogs();
+    const { name, stub: before, container } = await prepared("cleanup-rm");
+    // The token file is gone, so the next prepare rebuilds; its rm is held when the Workspace resets.
+    await runInDurableObject(before, () => {
+      if (container.disk !== null) {
+        container.disk.token = null;
+      }
+    });
+    const wipe = container.holdNext((argv) => argv[0] === "rm");
+    void before.prepare(target(2)).catch(() => undefined);
+    await untilHeld(wipe);
+    const old = container.execs.at(-1);
+    container.orphanProcesses();
+    const stub = await reset(name);
+
+    expect(await stub.prepare(target(3, "b"))).toEqual({ ok: true, value: { sha: sha("b"), mergeBase: BASE } });
+    expect(old?.argv[0]).toBe("rm");
+    expect(old?.kills).toEqual([9]);
+    // Let the old rm go on, as a process the cleanup missed would: the new checkout stays.
+    await runInDurableObject(stub, async () => {
+      wipe.open();
+      await scheduler.wait(10);
+    });
+    expect(container.disk?.head).toBe(sha("b"));
+    expect(container.disk?.token).toBe(tokenOf(container));
   });
 
   it("starts no container operation of two concurrent calls before the one cleanup ends", async () => {
