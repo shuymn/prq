@@ -31,7 +31,7 @@ jobs:
       - name: Set up mise
         uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
-          install_args: node pnpm
+          install_args: node pnpm bun
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -41,6 +41,7 @@ jobs:
         run: |
           node --version
           pnpm --version
+          bun --version
 
       - name: Run linter
         run: pnpm run lint
@@ -54,5 +55,6 @@ jobs:
       - name: Run type checker
         run: pnpm run typecheck
 
+      # The CLI's tests first compile the prq binary with Bun (packages/cli/src/test/build.ts), then run it.
       - name: Run tests
         run: pnpm run test
