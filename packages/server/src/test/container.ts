@@ -287,6 +287,8 @@ function fakeProcess(
   });
   const stream = (bytesOf: (reply: Reply) => Uint8Array, counted: boolean): ReadableStream<Uint8Array> => {
     let offset = 0;
+    // Encoded once, at the first pull after the reply.
+    let encoded: Uint8Array | null = null;
     return new ReadableStream<Uint8Array>({
       async pull(controller) {
         const reply = await answered.promise;
@@ -294,7 +296,8 @@ function fakeProcess(
           controller.close();
           return;
         }
-        const bytes = bytesOf(reply);
+        encoded ??= bytesOf(reply);
+        const bytes = encoded;
         if (offset >= bytes.length) {
           controller.close();
           return;
