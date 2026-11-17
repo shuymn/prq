@@ -20,7 +20,8 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
 - A test runs git only through `FixtureGit` (`packages/cli/src/test/git.ts`): on fixtures in a fresh directory of the
   OS temp directory, outside every repository, with an environment built from nothing, so a `GIT_DIR` a hook exported
   cannot reach the repository. A canary (`packages/cli/src/test/canary.ts`) fails the CLI's test run when the
-  repository's refs, `HEAD`, worktrees, config or index, or the user's git identity, changed during it.
+  repository's refs (other than T3 Code's checkpoints under `refs/t3/`), `HEAD`, worktrees, config, index entries or
+  hooks, or the user's git identity, changed during it.
 - lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows,
   and commitlint on the message.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
