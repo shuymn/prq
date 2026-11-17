@@ -339,6 +339,8 @@ UI, webhook and CLI input all enter through PrSession.
   - The agent ID: `--agent-id`, else `PRQ_AGENT_ID`, else the host name, as `AgentId` (printable ASCII without spaces,
     at most 128 characters). An invalid one, such as a host name with other characters, asks for `--agent-id`.
   - `PRQ_HOME`: the state root (below); without it `$XDG_STATE_HOME/prq`, else `~/.local/state/prq`.
+  - `PRQ_CLONE_ROOTS`: the directories that hold the host's clones as `<owner>/<repo>` or `github.com/<owner>/<repo>`,
+    absolute and separated by `:`; only `checkout` reads it (see Checkout below).
   - `PRQ_VERSION_NOTICE=0` turns the version notice off (see [Versions](#versions)).
 - **Output.** stdout carries one JSON line, the command's result, or nothing when the command failed (exit 1 or 3).
   Every result has `next`, the step the AI takes next, so each command restates the procedure at the moment it
@@ -351,8 +353,10 @@ UI, webhook and CLI input all enter through PrSession.
   | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
   | `prq wait [--timeout <seconds>]` (default 1500) | Polls `/cli/wait`, each poll asking for the time left up to 25 s, until it answers `ready`: `{"status":"ready","next":"claim"}`, 0. When the deadline passes after an answered poll, `{"status":"timeout","next":"wait"}`, 2; while the server was unavailable, 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
   | `prq claim`                                     | Calls `/cli/claim`. A job: saves the claim as the agent's record, then prints the server's answer with `dir` (the claim's job directory), `answer` (`<dir>/answer.md`), `saved` (whether that file exists) and `next` (`answer` when it does, else `context`), 0. No job: removes the record and prints `{"job":null,"next":"wait"}`, 0. A record of another directory that the claim replaced or removed gets a stderr line: that claim ended, and its answer must not be submitted                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-  | `prq context`                                   | Reads `/cli/context` under the agent's record, from no cursor until `nextCursor` is null, and joins each message sent in parts: a part continues where the text collected so far ends, with the same whole length, and pages that do not join that way end with exit 1. Writes `context.json` (the pull request, the details, the job and the whole messages) into the claim's directory and, for an answer job, `question.md`: the text of the user message `job.target.messageId` names. Prints `dir`, `pr`, `details`, `job`, `messages` (their count), `context`, `question` (its path, or null), `answer` and `next` (`answer`), 0. When the claim no longer holds (409 `stale_claim`, 404 `unknown_job`): `{"status":"stale_claim","next":"claim"}`, 4, the record kept for the next claim to replace                                                                                                                                                                                                                                                                                                                                                                                         |
+  | `prq context`                                   | Reads `/cli/context` under the agent's record, from no cursor until `nextCursor` is null, and joins each message sent in parts: a part continues where the text collected so far ends, with the same whole length, and pages that do not join that way end with exit 1. Writes `context.json` (the pull request, the details, the job and the whole messages) into the claim's directory and, for an answer job, `question.md`: the text of the user message `job.target.messageId` names. Prints `dir`, `pr`, `details`, `job`, `messages` (their count), `context`, `question` (its path, or null), `answer` and `next` (`checkout` when the job has a workspace, `workspaceSha`, else `answer`), 0. When the claim no longer holds (409 `stale_claim`, 404 `unknown_job`): `{"status":"stale_claim","next":"claim"}`, 4, the record kept for the next claim to replace                                                                                                                                                                                                                                                                                                                           |
+  | `prq checkout [--clone <dir>]`                  | Adds a detached worktree of the job's workspace (`workspaceSha`) at `<dir>/worktree`, from the host's clone (see Checkout below), first reading the context as `prq context` does when `context.json` is missing. Prints `path`, `sha`, `base` (the base commit, or null with a stderr notice when it could not be fetched), `clone` and `next` (`answer`), 0. A job without a workspace (a question before any push): `{"path":null,"sha":null,"base":null,"next":"answer"}`, 0, and no git runs. No clone found, a commit that cannot be fetched, git failing or not finishing in time, the worktree moved off the job's commit, or a worktree path holding what prq did not make: exit 1, the files left as they are. The claim no longer holds while it reads the context: as `prq context`, 4                                                                                                                                                                                                                                                                                                                                                                                                  |
   | `prq submit`                                    | Sends `answer.md` of the record's directory, as written, under the record's claim and run; a missing or blank answer, or one over `MAX_ANSWER_CHARS` UTF-16 code units, is exit 1 before any request. Accepted, or `duplicate` for a resend after a lost response: removes the record and prints `{"status":…,"messageId":…,"next":"wait"}`, 0. 409 `stale_claim`: claims once (as `prq claim` does, its claim becoming the record) and resubmits under the new `claimId` with the original run only when the claim returns the same job in the same run at the same `workspaceSha` (a resume fixes the workspace again, and the stored answer is labelled with it; see [Owner and jobs](#owner-and-jobs)); otherwise drops the answer and prints `{"status":"dropped","reason":…,"claim":…,"next":…}`, 4, with `reason` `workspace_moved` when only the workspace moved, else the refusal's code, and `claim` and `next` as `prq claim` gives them (`claim` null for no job). 404 `unknown_job` or 409 `target_mismatch`: dropped without a claim, the record removed. 500 or a server unavailable past the retry window: exit 1, the record and the answer kept, so a rerun sends the same answer |
+  | `prq reconcile`                                 | For the start of a session. With a record, reads the first page of its context (a read; a claim would take new work): the claim holds, and `next` is `answer` when an answer is saved in its directory, else `context`; 409 `stale_claim`, and the record and its directory stay with `next` `claim`, since a late claim of the same agent replaces the `claimId` as a retry does, and the next claim tells whether it resumed the same run (same directory, its saved answer found again); 404 `unknown_job`, and the record is removed with `next` `wait`. No record: `next` `wait`, no request; an unreadable one: a stderr line and `next` `claim`. Then cleans up (see Cleanup below). Prints `claim` (the record's claim with `dir`, `answer` and `saved` as `prq claim` prints them, or null), `removed` (the paths removed), `kept` (`{agentId, dir}` for each directory another agent's record names, `{dir, reason}` for each whose worktree path holds what prq did not make, and for `jobs/` itself when it is a symlink) and `next`, 0                                                                                                                                                 |
 
 - **Requests.** Every request is a JSON `POST` with the service token headers, no redirect followed, and a timeout. Its
   body is built through the route's `@prq/protocol` schema, so a bad local value fails before it is sent. A 2xx body
@@ -374,6 +378,73 @@ UI, webhook and CLI input all enter through PrSession.
   requests the attempt is for (a context's pages, a submit's claim and resubmit), and then ends with exit 1, within
   60 s plus one request's timeout, under the 120 s a foreground command gets by default in Claude Code; the record and
   any answer are kept, so a rerun continues. `wait` retries until its deadline.
+- **Checkout.**
+  - **The clone** is the first of `--clone <dir>`, the repository holding the working directory, and, for each
+    `PRQ_CLONE_ROOTS` entry, `<root>/<owner>/<repo>` and `<root>/github.com/<owner>/<repo>` (directory names matched
+    without case; `PRQ_CLONE_ROOTS=$(ghq root)/github.com` covers a ghq layout) that has a remote naming the job's
+    repository. A remote is read by its URL as configured (`remote.<name>.url`, not rewritten by `insteadOf`):
+    `https://github.com/<owner>/<repo>`, `git@github.com:<owner>/<repo>` or `ssh://git@github.com/<owner>/<repo>`, with
+    or without `.git`, compared without case. `origin` when it names the repository, else the first such remote by
+    name, so a fork clone whose `upstream` is the repository works. None: exit 1 naming each place tried and how to
+    point prq at the clone. prq never clones: a clone of a large or private repository into a place the host did not
+    choose is the host's decision.
+  - **The fetch** runs only when the clone lacks the commit (`git cat-file -e`): `git fetch --no-tags
+    --no-write-fetch-head --refmap= --no-prune --no-recurse-submodules --no-auto-maintenance <remote>
+    pull/<n>/head`, then the same fetch by the commit's SHA (an answer's workspace may be a head that a force-push left
+    behind `pull/<n>/head`). It brings objects and changes nothing else in the clone: the empty `--refmap=` keeps a
+    configured refspec such as `+refs/pull/*/head:refs/remotes/origin/pr/*` from updating a remote-tracking ref, and
+    the other options keep tags (`remote.<name>.tagOpt`), `FETCH_HEAD`, pruning (`fetch.prune`; with an explicit
+    refspec git prunes nothing anyway), submodules (`fetch.recurseSubmodules`) and automatic maintenance (which can
+    prune the host's worktree registrations) out of it. The base is fetched the same way by its SHA; one that cannot be
+    is a stderr notice and `base` null, since the AI can still read the code. No ref, `HEAD` or `FETCH_HEAD` of the
+    clone changes; the fetched commits stay reachable from the worktree's `HEAD`, which gc counts.
+  - **The worktree.** `checkout.json` (the clone and the SHA) is written into the job directory, then `git worktree
+    add --detach <dir>/worktree <sha>` runs in the clone. A rerun reuses the worktree there, with whatever the AI wrote
+    in it, when it is still the recorded clone's (as Cleanup below checks) and its `HEAD` is detached at the job's
+    commit; the directory's name does not keep the AI from moving `HEAD`, so a worktree moved off the commit, detached
+    elsewhere or on a branch, is exit 1 naming where it is, its files left alone. Anything else at the path (a symlink,
+    another repository's worktree) is exit 1 too, with nothing removed. prq writes
+    nothing inside a worktree: its files (the context, the question, the answer, later the prompts and skills) live in
+    the job directory beside it, so a commit that makes `.prq` a symlink out of the tree, or tracks a file prq would
+    write, cannot redirect or overwrite anything, and `git status` in the tree is the commit's own. Outside the clone,
+    job files stay out of the host's `git status` and IDE; one tree per claim directory keeps concurrent agents apart.
+  - **git as prq runs it.** Always `git -C <clone>` on the clone it resolved, without the variables that point git at
+    another repository (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+    `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_NAMESPACE` and the rest of what `git rev-parse
+    --local-env-vars` lists): git sets them for a hook, so a `prq` run from inside one would otherwise act on the
+    hook's repository. None of the clone's hooks runs (`core.hooksPath` names the empty `git-hooks/` of the state
+    root): they are the host's tooling for its own checkouts and commits, not for a job's. The clone's config still
+    applies, so filters such as Git LFS's and credential helpers work. `GIT_TERMINAL_PROMPT=0`: a missing credential
+    fails instead of waiting for input the AI cannot give.
+  - **Timeouts.** A fetch or a worktree add gets 25 min (it depends on the repository's size and the network; under
+    the 30 min Claude Code gives a background command), a local query 60 s. Each git runs in a process group of its
+    own with the programs it starts (a filter such as Git LFS's smudge, a credential helper, ssh). A git that does not
+    end in time gets SIGTERM to its group, then SIGKILL 5 s later, and the command ends with exit 1. A worktree add that
+    failed or did not finish is removed by its exact path, with whatever it left in the directory. Since a signal to
+    `prq` does not reach a group of its own, `prq` passes SIGINT, SIGTERM or SIGHUP on to each running group as it
+    came, stops the group as a timeout does (SIGKILL to what is left of it 5 s later), waits for git to exit, and then
+    ends by that signal, with nothing printed; a SIGKILL to `prq` leaves its git running.
+- **Cleanup**, by `reconcile` and by `checkout` before it adds a worktree, removes the job directories no record names.
+  It lists `jobs/` and then reads every agent's record: a job directory is created only after the record that names it,
+  so one listed first is never newer than its record. The records it reads must be those of the job directories it
+  lists, so nothing is removed while `jobs/` is a symlink (a stderr line and `jobs/` in `kept`), and no command creates
+  or writes a job directory through one: `claim` (`submit`'s too, when a `stale_claim` makes it claim again), `context`
+  and `checkout` end with exit 1 before any request, saving nothing. A `jobs/` leading to another state root's would let
+  this root's cleanup remove the directories, answers and worktrees of the agents whose records are there, and that
+  root's cleanup remove this root's. Each entry no record names is removed unless
+  it holds the working directory: a symlink is unlinked, never followed; a job directory's worktree is removed from the
+  clone its `checkout.json` names by its exact path (`git -C <clone> worktree remove --force --force <dir>/worktree`,
+  which also removes one whose directory is gone, or one a stopped add left locked), then the directory. The worktree is
+  removed only when it is that clone's: `<dir>/worktree` is not a symlink (never followed), the clone registers exactly
+  that path, and the directory's git uses the clone's common git directory (`git rev-parse --git-common-dir`), so a
+  symlink to a host worktree, or another repository's worktree at a path prq's used to have, is never touched. Such a
+  directory is kept, with a stderr line and an entry in `reconcile`'s `kept` giving the reason. An entry whose name is
+  not a job directory's is left alone. Never `git worktree prune`: it would also drop the host's registrations of
+  worktrees that are only unreachable, such as one on an unmounted volume. A worktree that cannot be removed keeps its
+  directory the same way, and an unreadable record (it may name any directory) stops all removal until it is replaced.
+  What stays is one directory per agent ID with a record; a record left by an agent ID that never runs again keeps its
+  directory until the host deletes the record, and `reconcile` lists other agents' directories under `kept`. Another
+  agent's claim is never probed: a context under its ID would count as its contact (see [Presence](#presence)).
 - **Local state**, under the state root:
 
   ```
@@ -381,6 +452,9 @@ UI, webhook and CLI input all enter through PrSession.
   jobs/<jobId>-r<run>-<workspaceSha|none>/  one claim's work: its job, run and workspace
     context.json  question.md               written by prq context (question.md for an answer job)
     answer.md                               written by the AI, read by prq submit
+    checkout.json                           written by prq checkout before it adds the worktree: {clone, sha}
+    worktree/                               the git worktree; prq writes nothing inside it
+  git-hooks/                                empty: the hooks directory of every git call prq makes
   ```
 
   The record is the one place a `claimId` lives between processes, one per agent ID, since an agent ID is one AI
@@ -392,7 +466,8 @@ UI, webhook and CLI input all enter through PrSession.
   `submit` reads the answer only from the record's directory, so an answer is bound to its run and workspace by where
   it is: it is never sent under a later run or labelled with a later workspace, even when the AI runs `prq claim` in
   the middle of a job. The record, `context.json` and `question.md` are written through a temporary file and a rename,
-  so a reader sees a whole file.
+  so a reader sees a whole file. The state moves as a whole, by pointing `PRQ_HOME` elsewhere: the records and the job
+  directories they name stay under one root, which Cleanup relies on.
 
 ### Versions
 
@@ -547,10 +622,12 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
   pre-approved tools, and prq has no interactive approval step, so a skill that declares none cannot run scripts: it
   contributes instructions and references only. The pinned SHA means a skill's code does not change under the host.
 - **Local runner.** `prq context` returns the two prompts and materializes the registered skills into the job's
-  worktree (for example `.prq/skills/<name>/`), so the local AI reads them as files. It reads the conversation page by
-  page, following `nextCursor`, joins a message sent in parts, finds an answer's question there by the message ID its
-  job names (see [Owner and jobs](#owner-and-jobs)), and writes the context and the question into the job's directory
-  (see [Local CLI](#local-cli-prq)). A local agent may also use skills it already has on its own machine.
+  directory beside its worktree (for example `skills/<name>/`), so the local AI reads them as files. Never inside the
+  worktree: a commit controls every path in its tree (see Checkout in [Local CLI](#local-cli-prq)), and the files do
+  not depend on whether `checkout` ran first. It reads the conversation page by page, following `nextCursor`, joins a
+  message sent in parts, finds an answer's question there by the message ID its job names (see
+  [Owner and jobs](#owner-and-jobs)), and writes the context and the question into the job's directory (see
+  [Local CLI](#local-cli-prq)). A local agent may also use skills it already has on its own machine.
 
 What is left out on purpose:
 
@@ -817,7 +894,9 @@ Only a deployment can show these.
 - **Real GitHub.** App installation, webhook delivery, and token injection for a private repository (only a public
   repository was reached in the prototype, with the injection written but not exercised). What the webhook handling
   takes from GitHub's documentation is checked on a deployment too: that `pull_request.updated_at` advances with each
-  push and `synchronize` carries `before`, that a redelivery repeats `X-GitHub-Delivery`, and the 10 s limit.
+  push and `synchronize` carries `before`, that a redelivery repeats `X-GitHub-Delivery`, and the 10 s limit. And
+  fetching by SHA a commit that a force-push left behind `pull/<n>/head`, as `prq checkout` does for an answer's
+  workspace: when GitHub refuses it, `checkout` exits 1 naming the commit.
 - **Sandbox in production.** Start and rebuild times, and checkout time of a large repository. The local Docker
   numbers are not production values.
 - **Bundling by wrangler.** That the PKCS#8-only crypto path of `@octokit/auth-app` is the one wrangler bundles was
@@ -829,6 +908,6 @@ Only a deployment can show these.
   real context length, and how often it runs, are not measured.
 - **Skills.** Not built in the prototype: fetching a skill at a pinned commit and storing it in the Hub (and its size
   against Durable Object storage limits), whether models choose to activate a skill from its description alone, running
-  a script under `allowed-tools` in the Sandbox, and materializing skills into a local worktree.
+  a script under `allowed-tools` in the Sandbox, and materializing skills into a local job directory.
 - **Browser client.** `useAgentChat` with a local owner (an appended answer, reconnection) was exercised through a Node
   client speaking the same WebSocket protocol, not in a browser.

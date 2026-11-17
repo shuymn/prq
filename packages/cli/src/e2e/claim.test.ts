@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { ClaimResponse } from "@prq/protocol";
@@ -63,6 +63,26 @@ describe("prq claim", () => {
 
     const record: unknown = JSON.parse(await readFile(recordPath("laptop"), "utf8"));
     expect(record).toEqual({ agentId: "laptop", claim: { job, claimId, resumed }, savedAt: expect.any(String) });
+  });
+
+  it("a jobs directory that is a symlink: exit 1 before any request, no record and no directory", async () => {
+    await jobFor("laptop");
+    // jobs/ leading to another state root's.
+    const elsewhere = join(stack.dir(), "elsewhere-jobs");
+    const jobs = join(stack.home(), "jobs");
+    await mkdir(elsewhere);
+    await mkdir(stack.home(), { recursive: true });
+    await symlink(elsewhere, jobs);
+
+    const exit = await stack.run(["claim", "--agent-id", "laptop"]);
+    expect(exit.code).toBe(1);
+    expect(exit.stdout).toBe("");
+    expect(stderrLines(exit)).toEqual([
+      `prq: ${jobs} is a symlink, not followed; nothing is written through it (set PRQ_HOME to keep prq's state elsewhere)`,
+    ]);
+    expect(await exists(recordPath("laptop"))).toBe(false);
+    expect(await readdir(elsewhere)).toEqual([]);
+    expect(stack.access().log.filter((entry) => entry.route === "/cli/claim")).toEqual([]);
   });
 
   it("prints nothing for a claim it could not save; the next claim resumes it", async () => {

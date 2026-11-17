@@ -29,7 +29,7 @@ export async function claim(
 
 // One claim, adopted as the agent's record: a job is saved as the record and its directory created; with no job the
 // record is removed. A record replaced by a claim on another directory, or removed, ended that claim: its answer must
-// not be submitted, which a stderr line says.
+// not be submitted, which a stderr line says. Nothing is claimed while jobs/ is a symlink (State.assertJobsDir).
 export async function claimJob(
   client: Client,
   state: State,
@@ -37,6 +37,7 @@ export async function claimJob(
   previous: Claim | null,
   stderr: (line: string) => void,
 ): Promise<ClaimResult> {
+  await state.assertJobsDir();
   const response = await client.call("/cli/claim", v.parse(ClaimRequest, { agentId }), ClaimResponse);
   if (response.job === null) {
     await state.removeRecord();
@@ -52,8 +53,14 @@ export async function claimJob(
   if (previous !== null && state.jobDir(previous.job) !== dir) {
     stderr(ended(state, previous));
   }
+  return describeClaim(state, response);
+}
+
+// A claim with its directory, its answer file and whether an answer is saved there.
+export async function describeClaim(state: State, held: Claim): Promise<ClaimResult> {
+  const dir = state.jobDir(held.job);
   const answer = join(dir, "answer.md");
-  return { ...response, dir, answer, saved: await exists(answer) };
+  return { ...held, dir, answer, saved: await exists(answer) };
 }
 
 // The step after a claim: wait with no job; answer when an answer is saved in the claim's directory (a claim that

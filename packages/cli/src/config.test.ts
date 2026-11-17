@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readConfig } from "./config.ts";
+import { cloneRoots, readConfig } from "./config.ts";
 import { CliError } from "./errors.ts";
 
 const system = { hostname: "host-name", homedir: "/home/someone" };
@@ -124,5 +124,20 @@ describe("readConfig", () => {
     expect(readConfig(valid, undefined, system).versionNotice).toBe(true);
     expect(readConfig({ ...valid, PRQ_VERSION_NOTICE: "1" }, undefined, system).versionNotice).toBe(true);
     expect(readConfig({ ...valid, PRQ_VERSION_NOTICE: "0" }, undefined, system).versionNotice).toBe(false);
+  });
+});
+
+describe("cloneRoots", () => {
+  it("splits at ':', skipping empty entries; none when unset", () => {
+    expect(cloneRoots("/src/github.com:/work::")).toEqual(["/src/github.com", "/work"]);
+    expect(cloneRoots(undefined)).toEqual([]);
+    expect(cloneRoots("")).toEqual([]);
+  });
+
+  it("refuses a relative entry", () => {
+    expect(failure(() => cloneRoots("/src:work"))).toEqual({
+      exitCode: 1,
+      message: "PRQ_CLONE_ROOTS must list absolute paths, separated by ':'",
+    });
   });
 });

@@ -18,7 +18,7 @@ let clock = Date.UTC(2026, 10, 1);
 
 // A pull_request delivery as GitHub signs and sends it, of a pull request the host authored; then the session takes it
 // in, as the wake its inbox armed would. With a local agent present, a new head is an analysis job for it.
-export async function push(worker: Worker, pr: PrRef, head: string): Promise<void> {
+export async function push(worker: Worker, pr: PrRef, head: string, base = sha("base")): Promise<void> {
   clock += 1000;
   const fullName = `${pr.owner}/${pr.repo}`;
   const body = JSON.stringify({
@@ -33,7 +33,7 @@ export async function push(worker: Worker, pr: PrRef, head: string): Promise<voi
       html_url: `https://github.com/${fullName}/pull/${pr.number}`,
       user: { id: HOST_ID, login: "host" },
       head: { sha: head, ref: "topic" },
-      base: { sha: sha("base"), ref: "main" },
+      base: { sha: base, ref: "main" },
     },
     repository: { name: pr.repo, full_name: fullName, owner: { login: pr.owner } },
     sender: { id: HOST_ID, login: "host" },

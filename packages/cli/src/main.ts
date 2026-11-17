@@ -5,11 +5,13 @@ import { homedir, hostname } from "node:os";
 import { parseArgs } from "node:util";
 
 import { Client, VersionNotice } from "./client.ts";
+import { checkout } from "./commands/checkout.ts";
 import { claim } from "./commands/claim.ts";
 import { context } from "./commands/context.ts";
+import { reconcile } from "./commands/reconcile.ts";
 import { submit } from "./commands/submit.ts";
 import { wait } from "./commands/wait.ts";
-import { readConfig } from "./config.ts";
+import { cloneRoots, readConfig } from "./config.ts";
 import { CliError, EXIT, type ExitCode } from "./errors.ts";
 import { systemClock } from "./retry.ts";
 import { State } from "./state.ts";
@@ -21,7 +23,9 @@ commands:
   wait [--timeout <seconds>]  wait until the agent may have a job (default 1500 seconds)
   claim                       claim the agent's job and save it
   context                     write the claimed job's context and question into its directory
+  checkout [--clone <dir>]    add a worktree of the claimed job's commit from the host's clone
   submit                      submit the answer saved in the claimed job's directory
+  reconcile                   check the saved claim and remove the job directories no claim names
 
 options:
   --agent-id <id>  the agent ID (default: PRQ_AGENT_ID, else the host name)
@@ -34,6 +38,7 @@ environment:
   PRQ_ACCESS_CLIENT_SECRET   the Access service token's client secret
   PRQ_AGENT_ID               the agent ID
   PRQ_HOME                   the state directory (default: $XDG_STATE_HOME/prq, else ~/.local/state/prq)
+  PRQ_CLONE_ROOTS            directories holding <owner>/<repo> clones, separated by ':'
   PRQ_VERSION_NOTICE=0       no notice when the server's version differs
 
 exit codes: 0 done, 1 error, 2 wait timed out, 3 authentication failure, 4 claim mismatch
@@ -41,7 +46,7 @@ exit codes: 0 done, 1 error, 2 wait timed out, 3 authentication failure, 4 claim
 
 const DEFAULT_WAIT_S = 1500;
 
-const COMMANDS = ["wait", "claim", "context", "submit"] as const;
+const COMMANDS = ["wait", "claim", "context", "checkout", "submit", "reconcile"] as const;
 type Command = (typeof COMMANDS)[number];
 
 function isCommand(value: string): value is Command {
@@ -70,6 +75,7 @@ function parse(argv: string[]) {
       options: {
         "agent-id": { type: "string" },
         timeout: { type: "string" },
+        clone: { type: "string" },
         help: { type: "boolean" },
         version: { type: "boolean" },
       },
@@ -113,6 +119,9 @@ async function main(argv: string[]): Promise<ExitCode> {
   if (command !== "wait" && values.timeout !== undefined) {
     throw new UsageError("--timeout applies to wait only");
   }
+  if (command !== "checkout" && values.clone !== undefined) {
+    throw new UsageError("--clone applies to checkout only");
+  }
   const timeoutS = command === "wait" ? waitSeconds(values.timeout) : 0;
   const config = readConfig(process.env, values["agent-id"], { hostname: hostname(), homedir: homedir() });
   const client = new Client(config, new VersionNotice(CLI_VERSION, config.versionNotice, stderr), stderr, systemClock);
@@ -125,6 +134,13 @@ async function main(argv: string[]): Promise<ExitCode> {
   }
   if (command === "context") {
     return context(client, state, config.agentId, print);
+  }
+  if (command === "checkout") {
+    const search = { flag: values.clone, cwd: process.cwd(), roots: cloneRoots(process.env["PRQ_CLONE_ROOTS"]) };
+    return checkout(client, state, config.agentId, search, print, stderr);
+  }
+  if (command === "reconcile") {
+    return reconcile(client, state, config.agentId, process.cwd(), print, stderr);
   }
   return submit(client, state, config.agentId, print, stderr);
 }
