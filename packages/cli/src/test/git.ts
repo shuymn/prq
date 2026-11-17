@@ -385,13 +385,33 @@ function isExitFailure(error: unknown): error is Error & { code: number; stdout:
   );
 }
 
-// Whether argv is one of the workspace procedure's commands for the checkout directory: a git command in it, its
-// creation or removal, or a read or write of its ready token.
-function isCheckoutStep(argv: readonly string[], dir: string): boolean {
+// The `-c` settings the workspace procedure passes to git itself: its fetch's stall bound and its checkout's advice.
+const PROCEDURE_CONFIG = new Set(
+  [...prepareArgv.fetch(".", []), ...prepareArgv.checkout(".", "")].filter((_, index, all) => all[index - 1] === "-c"),
+);
+
+// Whether git's global options, up to its subcommand, are only the procedure's own `-c` settings: never another -C,
+// --git-dir, --work-tree, --exec-path, --config-env or another -c, each of which can move where git reads or writes.
+function onlyProcedureOptions(args: readonly string[]): boolean {
+  for (let index = 0; index < args.length; index += 2) {
+    const arg = args[index] ?? "";
+    if (!arg.startsWith("-")) {
+      return true;
+    }
+    if (arg !== "-c" || !PROCEDURE_CONFIG.has(args[index + 1] ?? "")) {
+      return false;
+    }
+  }
+  return false;
+}
+
+// Whether argv is one of the workspace procedure's commands for the checkout directory: a git command in it with only
+// the procedure's own global options, its creation or removal, or a read or write of its ready token.
+export function isCheckoutStep(argv: readonly string[], dir: string): boolean {
   const same = (expected: readonly string[]) =>
     expected.length === argv.length && expected.every((arg, index) => arg === argv[index]);
   if (argv[0] === "git" && argv[1] === "-C") {
-    return argv[2] === dir;
+    return argv[2] === dir && onlyProcedureOptions(argv.slice(3));
   }
   const token = argv[4] ?? "";
   return (
@@ -434,7 +454,9 @@ export class FixtureCheckout {
     const url = await this.#runner.remote(remote);
     const dir = await this.#runner.dir();
     const token = randomBytes(16).toString("hex");
-    return prepareCheckout((argv) => this.#run(argv), store, dir, { remote: url, ...target }, token);
+    // Built field by field: a remote the target object carries is never used.
+    const checked = { remote: url, sha: target.sha, baseSha: target.baseSha };
+    return prepareCheckout((argv) => this.#run(argv), store, dir, checked, token);
   }
 
   // The tools' reads at a commit.

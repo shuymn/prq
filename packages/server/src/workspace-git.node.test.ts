@@ -8,8 +8,8 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { FixtureGit, type FixtureRepo, fixtureRoot } from "../../cli/src/test/git.ts";
-import type { ReadyRecord, RecordStore } from "./workspace-git.ts";
+import { FixtureGit, type FixtureRepo, fixtureRoot, isCheckoutStep } from "../../cli/src/test/git.ts";
+import { opArgv, prepareArgv, type ReadyRecord, type RecordStore, toolArgv } from "./workspace-git.ts";
 
 type Commits = { base: string; b2: string; fork: string; h1: string; h2: string; head: string; next: string };
 
@@ -155,5 +155,35 @@ describe("the workspace's git procedure with real git", () => {
     expect(steps[2]).toContain(" fetch --quiet --depth=1 ");
     expect(steps.filter((entry) => entry.startsWith("rm ") || entry.startsWith("git init "))).toEqual([]);
     expect((await checkout.show(commits.h2, "rates.ts")).stdout).toContain("rate = 2");
+  });
+
+  it("fetches from the checked repository, never from a remote the target carries", async () => {
+    const { checkout, store } = await newCheckout();
+    // A target object with a remote of its own: the fixture builds the target from the checked repository.
+    const target = { sha: commits.h1, baseSha: commits.b2, remote: "file:///nonexistent/elsewhere.git" };
+
+    expect((await checkout.prepare(origin, target, store)).plan).toBe("rebuild");
+    expect(store.record?.remote).toBe(`file://${origin.path}`);
+  });
+});
+
+describe("the fixture's guard on the procedure's commands", () => {
+  it("runs the procedure's own git commands, and refuses global options that move where git reads or writes", () => {
+    const dir = join(root, "guarded");
+    expect(isCheckoutStep(prepareArgv.fetch(dir, [commits.head, commits.base]), dir)).toBe(true);
+    expect(isCheckoutStep(prepareArgv.checkout(dir, commits.head), dir)).toBe(true);
+    expect(isCheckoutStep(opArgv(dir, toolArgv.readFile(commits.head, "rates.ts")), dir)).toBe(true);
+    const escapes = [
+      ["-c", "core.worktree=/"],
+      ["-c", "http.lowSpeedLimit=1000", "-c", "include.path=/etc/gitconfig"],
+      ["--git-dir=/tmp/elsewhere"],
+      ["--git-dir", "/tmp/elsewhere"],
+      ["--work-tree=/"],
+      ["--exec-path=/tmp"],
+      ["-C", "/"],
+      ["--config-env=core.hooksPath=HOME"],
+    ];
+    const allowed = escapes.filter((options) => isCheckoutStep(["git", "-C", dir, ...options, "status"], dir));
+    expect(allowed).toEqual([]);
   });
 });
