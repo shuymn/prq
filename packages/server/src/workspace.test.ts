@@ -248,13 +248,14 @@ describe("commands", () => {
     expect(container.log.at(-1)).toBe(`git -C ${DIR} show --end-of-options ${sha("a")}:nope`);
   });
 
-  it("collects at most the page of a command's output, then kills it", async () => {
+  it("collects at most the cap of a command's output, however large a page it is asked for, then kills it", async () => {
     captureLogs();
     const { stub, container } = await prepared("cap");
     const size = 1_000_000;
     container.on = (argv) => (argv.includes("show") ? { stdout: "x".repeat(size) } : undefined);
+    const command = readFile("min.js");
 
-    const reply = await stub.run(target(1), readFile("min.js"));
+    const reply = await stub.run(target(1), { ...command, page: { ...command.page, capChars: size } });
 
     expect(reply.ok).toBe(true);
     const value = reply.ok ? reply.value : null;
@@ -546,10 +547,17 @@ describe("after a reset", () => {
     expect(await two.promise).toEqual({ ok: false, kind: "cleanup", reason });
     expect(container.log.slice(from)).toEqual(["pkill -KILL git", "destroy"]);
 
-    // The next turn tries again: pkill now answers that no git runs.
+    // The next turn tries again, and nothing runs before its cleanup ends: pkill now answers that no git runs.
     container.on = () => undefined;
+    const retry = container.holdNext((argv) => argv[0] === "pkill");
     vi.useRealTimers();
-    expect(await stub.prepare(target(3))).toEqual({ ok: true, value: { sha: sha("a"), mergeBase: BASE } });
+    const next = tracked(stub.prepare(target(3)));
+    await untilHeld(retry);
+    await scheduler.wait(50);
+    expect(container.log.slice(from + 2)).toEqual(["pkill -KILL git"]);
+    expect(next.settled()).toBe(false);
+    await runInDurableObject(stub, () => retry.open());
+    expect(await next.promise).toEqual({ ok: true, value: { sha: sha("a"), mergeBase: BASE } });
     expect(container.commands("pkill", from)).toHaveLength(2);
   });
 });
