@@ -826,9 +826,15 @@ answers what was decided earlier after compaction. See [spikes.md](spikes.md) fo
   and waits for it to settle; it never waits out the older one's bounds. When a turn ends, the session sends
   `release` (waited for at most 10 s, after the commit), which aborts only a prepare of that turn or an older one.
 - **After a reset.** The new instance's constructor starts one cleanup, and every container operation waits for it:
-  the old instance's fetch may still run. A container not running, or `pkill -KILL git` answering within 10 s, ends
-  it. Otherwise the container is stopped and confirmed stopped within 30 s; when that is not confirmed either, every
-  call fails `workspace: could not clean up after a restart: <reason>` until a newer turn tries again.
+  the old instance's prepare may still run. A container not running, or a `pkill -KILL -x` of every process the
+  Workspace starts (git and its helpers, `rm`, `cat`, and the `sh` that writes the ready token; never the image's own
+  process) answering within 10 s, ends it. Otherwise the container is stopped and confirmed stopped within 30 s; when
+  that is not confirmed either, every call fails `workspace: could not clean up after a restart: <reason>` until a
+  newer turn tries again.
+- **Setup per instance.** A running container does not show that it was set up: a prepare cut short after `start()`
+  (an abort, a failed call, a reset) leaves it without its interception or idle stop. Each instance therefore sets up
+  the running container before its first command, and again after a setup that did not complete or for another
+  installation. Each call sets a rule or a timeout, so a repeated setup replaces what an earlier one left.
 - **Egress.** The container has no internet. Every HTTP and HTTPS request it makes is intercepted and sent to
   `GitEgress` (`packages/server/src/egress.ts`), which lets through only the two requests of a git fetch from
   `github.com` (`GET …/info/refs?service=git-upload-pack` and `POST …/git-upload-pack`). It replaces any credentials
