@@ -3,7 +3,7 @@ import * as v from "valibot";
 
 import type { Config } from "./config.ts";
 import { CliError, EXIT } from "./errors.ts";
-import { CALL_TIMEOUT_MS, type Clock, Retryable, withRetry } from "./retry.ts";
+import { CALL_TIMEOUT_MS, type Clock, Retryable, RetryWindow, withRetry } from "./retry.ts";
 
 export type Route = "/cli/wait" | "/cli/claim" | "/cli/context" | "/cli/submit";
 
@@ -56,20 +56,21 @@ export class Client {
   readonly #config: Config;
   readonly #notice: VersionNotice;
   readonly #stderr: Stderr;
-  readonly #clock: Clock;
+  // One client serves one command, so its requests share one retry window.
+  readonly #window: RetryWindow;
 
   constructor(config: Config, notice: VersionNotice, stderr: Stderr, clock: Clock) {
     this.#config = config;
     this.#notice = notice;
     this.#stderr = stderr;
-    this.#clock = clock;
+    this.#window = new RetryWindow(clock);
   }
 
-  // One request, retried on 503 and network failures within the retry window.
+  // One request, retried on 503 and network failures within the command's retry window.
   call<S extends v.GenericSchema>(route: Route, body: unknown, schema: S): Promise<v.InferOutput<S>> {
     return withRetry(
       () => this.attempt(route, body, schema, CALL_TIMEOUT_MS),
-      this.#clock,
+      this.#window,
       (failure) => this.retrying(route, failure),
     );
   }
