@@ -312,7 +312,8 @@ UI, webhook and CLI input all enter through PrSession.
 
 ### Local CLI (`prq`)
 
-- **Install.** `pnpm link --global` in `packages/cli` puts `prq` on the host's `PATH`. Node 24 runs its TypeScript
+- **Install.** `pnpm add --global link:.` in `packages/cli` puts `prq` on the host's `PATH` as a link to the checkout
+  (pnpm 12 has no `pnpm link --global`), and `pnpm remove --global @prq/cli` removes it. Node 24 runs its TypeScript
   source directly (type stripping), so there is no build. `prq --version` prints `v` + `packages/cli/package.json`
   `version`, and `prq --help` the usage.
 - **Configuration**, from the environment the AI session runs the commands in. Environment variables rather than a

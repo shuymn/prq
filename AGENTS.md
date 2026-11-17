@@ -12,9 +12,10 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
 - `pnpm run lint` (oxlint, type-aware), `pnpm run fmt` (oxfmt check; `pnpm run fmt:fix` formats), `pnpm run knip`
   (unused files, dependencies and exports), `pnpm run typecheck` and `pnpm run test` are the checks CI's `Check` job
   runs.
-- `pnpm link --global` in `packages/cli` installs `prq`, which Node runs from its TypeScript source (no build). The
-  CLI's tests run in Node within `pnpm run test`: the real CLI as a child process against the real Worker, which
-  wrangler's test harness runs locally behind a stand-in for Access; nothing reaches the network.
+- `pnpm add --global link:.` in `packages/cli` installs `prq` as a link to the checkout (`pnpm remove --global @prq/cli`
+  removes it), and Node runs its TypeScript source (no build). The CLI's tests run in Node within `pnpm run test`: the
+  real CLI as a child process against the real Worker, which wrangler's test harness runs locally behind a stand-in for
+  Access; nothing reaches the network.
 - lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows,
   and commitlint on the message.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
