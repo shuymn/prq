@@ -17,6 +17,8 @@ export type StreamPart = StreamResult["stream"] extends ReadableStream<infer P> 
 // A step of a script: a part to stream, a gate to wait at, or an error to fail the stream with.
 type Step = StreamPart | { hold: Gate } | { fail: unknown };
 export type Script = Step[];
+// What one model call does: stream a script, or fail before any stream (a refusal).
+type Call = Script | { refuse: unknown };
 
 type Tokens = { input?: number; output?: number; cached?: number };
 
@@ -83,7 +85,7 @@ function scriptedStream(script: Script): ReadableStream<StreamPart> {
 
 export class ScriptedModel {
   readonly calls: CallOptions[] = [];
-  readonly #scripts: Script[] = [];
+  readonly #scripts: Call[] = [];
   readonly model: MockLanguageModelV4;
 
   constructor(modelId = "scripted-model") {
@@ -95,13 +97,16 @@ export class ScriptedModel {
         if (script === undefined) {
           throw new Error("no script left for this model call");
         }
+        if ("refuse" in script) {
+          throw script.refuse;
+        }
         return { stream: scriptedStream(script) };
       },
     });
   }
 
   // Scripts for the next model calls, in order.
-  add(...scripts: Script[]): this {
+  add(...scripts: Call[]): this {
     this.#scripts.push(...scripts);
     return this;
   }

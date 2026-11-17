@@ -20,6 +20,14 @@ declare global {
       WEBHOOK_SECRET: string;
       // The host's numeric GitHub user ID: only pull requests the host authored are taken in.
       HOST_GITHUB_ID: string;
+      // The cloud agent's model, all four or none (none: no cloud agent).
+      // The root of an OpenAI-compatible API, https://<host>/<path>.
+      MODEL_BASE_URL?: string;
+      MODEL_API_KEY?: string;
+      // The model's ID at the provider.
+      MODEL_ID?: string;
+      // The model's context window in tokens, at least 16,384.
+      MODEL_CONTEXT_TOKENS?: string;
     }
   }
 

@@ -18,6 +18,13 @@ export default defineConfig(async () => {
             // The secret of GitHub's documented signature example, which src/webhook.test.ts checks against.
             WEBHOOK_SECRET: "It's a Secret to Everybody",
             HOST_GITHUB_ID: "1001",
+            // No model, whatever .dev.vars holds (wrangler loads it, and it may hold a provider's key for a manual
+            // check): empty reads as not configured, so no test reaches a provider. Tests that need a model give the
+            // session one.
+            MODEL_BASE_URL: "",
+            MODEL_API_KEY: "",
+            MODEL_ID: "",
+            MODEL_CONTEXT_TOKENS: "",
           },
         },
       }),

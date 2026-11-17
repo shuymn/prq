@@ -8,6 +8,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "catalog:",
     "@cloudflare/ai-chat": "catalog:",
     "@hono/valibot-validator": "catalog:",
     "@octokit/webhooks-methods": "catalog:",

@@ -3,6 +3,7 @@ import { type FinishReason, isToolUIPart, type LanguageModel, type LanguageModel
 import * as v from "valibot";
 
 import type { JobRow, JobUsage } from "./jobs.ts";
+import { reasonText } from "./model.ts";
 
 // A cloud turn: what it is bound to, and how it ended as its callbacks recorded it in memory. prq commits it when the
 // SDK's turn has ended (docs/design.md, Owner and jobs).
@@ -30,18 +31,6 @@ export type TurnOutcome = {
 
 export function newOutcome(): TurnOutcome {
   return { reached: false, aborted: false };
-}
-
-// The longest failure reason kept: the job's failure and an incomplete message's reason.
-const MAX_REASON_CHARS = 500;
-
-export function reasonText(text: string): string {
-  return text.length > MAX_REASON_CHARS ? text.slice(0, MAX_REASON_CHARS) : text;
-}
-
-// An error the turn saw, as a failure reason.
-export function errorReason(error: unknown): string {
-  return reasonText(error instanceof Error ? error.message : String(error));
 }
 
 // The reason a turn that stopped normally fails when its result holds no answer text (reasoning only, or nothing): as
@@ -104,12 +93,15 @@ export function incompleteMessageId(row: Pick<JobRow, "kind" | "job_id" | "run">
   return `${row.kind}-${row.job_id}-r${row.run}-incomplete`;
 }
 
-// One model call's tokens as the usage log counts them.
+// One model call's tokens as the usage log counts them. Cached input tokens are the adapter's (from
+// prompt_tokens_details); a provider that reports them only as prompt_cache_hit_tokens is read from its raw usage.
 export function stepTokens(usage: LanguageModelUsage): { input: number; output: number; cachedInput: number } {
+  const cacheRead = usage.inputTokenDetails.cacheReadTokens ?? 0;
+  const cacheHit = usage.raw?.["prompt_cache_hit_tokens"];
   return {
     input: usage.inputTokens ?? 0,
     output: usage.outputTokens ?? 0,
-    cachedInput: usage.inputTokenDetails.cacheReadTokens ?? 0,
+    cachedInput: cacheRead === 0 && typeof cacheHit === "number" ? cacheHit : cacheRead,
   };
 }
 

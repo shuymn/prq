@@ -1,8 +1,10 @@
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { readModelConfig } from "./config.ts";
 import app from "./index.ts";
 import { accessToken, captureLogs, envFor, freshTeamDomain, request, runKey, serveKeys } from "./test/access.ts";
+import { MODEL_ENV, TEST_KEY } from "./test/provider.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -81,5 +83,55 @@ describe("fails closed", () => {
     const res = await app.fetch(request("/api/x", await accessToken(key, { iss: teamDomain })), envFor(teamDomain));
 
     expect(res.status).toBe(404);
+  });
+});
+
+describe("the model group", () => {
+  it("is not configured while none of its variables is set, or each is empty", () => {
+    expect(readModelConfig(env)).toBeNull();
+    expect(
+      readModelConfig({ MODEL_BASE_URL: "", MODEL_API_KEY: "", MODEL_ID: "", MODEL_CONTEXT_TOKENS: "" }),
+    ).toBeNull();
+  });
+
+  it("accepts all four, the window as a number, from the floor up", () => {
+    expect(readModelConfig({ ...MODEL_ENV })).toEqual({
+      ok: true,
+      config: { ...MODEL_ENV, MODEL_CONTEXT_TOKENS: 131_072 },
+    });
+    expect(readModelConfig({ ...MODEL_ENV, MODEL_CONTEXT_TOKENS: "16384" })).toMatchObject({
+      ok: true,
+      config: { MODEL_CONTEXT_TOKENS: 16_384 },
+    });
+  });
+
+  const invalid: Record<string, [Record<string, unknown>, string[]]> = {
+    "a window below the floor": [
+      { ...MODEL_ENV, MODEL_CONTEXT_TOKENS: "16383" },
+      ["MODEL_CONTEXT_TOKENS is below 16,384"],
+    ],
+    "a window that is not a whole number": [
+      { ...MODEL_ENV, MODEL_CONTEXT_TOKENS: "131072.5" },
+      ["MODEL_CONTEXT_TOKENS is not a whole number of tokens"],
+    ],
+    "a missing model": [
+      { MODEL_BASE_URL: MODEL_ENV.MODEL_BASE_URL, MODEL_API_KEY: TEST_KEY, MODEL_CONTEXT_TOKENS: "131072" },
+      ["MODEL_ID is missing"],
+    ],
+    "an empty key": [{ ...MODEL_ENV, MODEL_API_KEY: "" }, ["MODEL_API_KEY is empty"]],
+    "an http base URL": [
+      { ...MODEL_ENV, MODEL_BASE_URL: "http://provider.example/v1" },
+      ["MODEL_BASE_URL is not an https URL"],
+    ],
+    "only the key": [
+      { MODEL_API_KEY: TEST_KEY },
+      ["MODEL_BASE_URL is missing", "MODEL_ID is missing", "MODEL_CONTEXT_TOKENS is missing"],
+    ],
+  };
+
+  it.for(Object.entries(invalid))("refuses %s, naming the variables without their values", ([, [vars, issues]]) => {
+    const result = readModelConfig(vars);
+    expect(result).toEqual({ ok: false, issues });
+    expect(JSON.stringify(result)).not.toContain(TEST_KEY);
   });
 });

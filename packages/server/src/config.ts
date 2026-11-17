@@ -33,6 +33,35 @@ const webhookSchema = v.object(
   "is missing",
 );
 
+// The smallest model window accepted: below it the system prompt, the tool definitions and one cut tool result leave no
+// room for a conversation, and every turn would compact.
+export const MIN_CONTEXT_TOKENS = 16_384;
+
+const modelSchema = v.object(
+  {
+    // The root of an OpenAI-compatible API (https://<host>/<path>), which chat completions are requested under.
+    MODEL_BASE_URL: v.pipe(
+      v.string("is not a string"),
+      v.check((value) => URL.parse(value)?.protocol === "https:", "is not an https URL"),
+    ),
+    MODEL_API_KEY: v.pipe(v.string("is not a string"), v.nonEmpty("is empty")),
+    // The model, as the provider names it; it also goes into each cloud result's author.
+    MODEL_ID: v.pipe(v.string("is not a string"), v.nonEmpty("is empty")),
+    // The model's context window in tokens: providers do not report it reliably.
+    MODEL_CONTEXT_TOKENS: v.pipe(
+      v.string("is not a string"),
+      v.regex(/^[1-9][0-9]*$/, "is not a whole number of tokens"),
+      v.transform(Number),
+      v.minValue(MIN_CONTEXT_TOKENS, "is below 16,384"),
+    ),
+  },
+  "is missing",
+);
+
+const MODEL_VARS = ["MODEL_BASE_URL", "MODEL_API_KEY", "MODEL_ID", "MODEL_CONTEXT_TOKENS"] as const;
+
+export type ModelConfig = v.InferOutput<typeof modelSchema>;
+
 type ConfigResult<T> = { ok: true; config: T } | { ok: false; issues: string[] };
 
 // Validates env once per env object: once per isolate in production. A request that needs an invalid value is
@@ -56,3 +85,12 @@ function configReader<S extends v.GenericSchema>(schema: S): (env: object) => Co
 export const readAccessConfig = configReader(accessSchema);
 // What the webhook needs.
 export const readWebhookConfig = configReader(webhookSchema);
+
+const readModelGroup = configReader(modelSchema);
+
+// What the cloud agent's model needs. Unlike the other groups it may be left out: with none of its variables set
+// (absent, or empty, as a local runtime's override leaves one) the cloud agent is not configured (null); with some set,
+// or any malformed, it is misconfigured.
+export function readModelConfig(env: object): ConfigResult<ModelConfig> | null {
+  return MODEL_VARS.every((name) => [undefined, ""].includes(Reflect.get(env, name))) ? null : readModelGroup(env);
+}
