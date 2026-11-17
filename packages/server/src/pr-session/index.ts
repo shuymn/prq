@@ -697,22 +697,26 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (client === undefined) {
       return;
     }
+    // One read at a time, from the request until its answer is judged.
     this.#reading = true;
-    let read: { answer: PullRequestState } | { error: unknown };
+    let outcome: ReadOutcome;
     try {
-      read = { answer: await client.pullRequest(state.installationId, this.#pr()) };
-    } catch (error) {
-      read = { error };
+      let read: { answer: PullRequestState } | { error: unknown };
+      try {
+        read = { answer: await client.pullRequest(state.installationId, this.#pr()) };
+      } catch (error) {
+        read = { error };
+      }
+      // An answer that would move the head arms the wake first, so its ledger entry and hand-over are finished by
+      // settle if this call stops after the adoption.
+      if ("answer" in read && read.answer.headSha !== readHead(this.#sql).headSha) {
+        await this.#armWake();
+      }
+      const now = Date.now();
+      outcome = this.ctx.storage.transactionSync(() => this.#judgeRead(state.pushGen, read, now));
     } finally {
       this.#reading = false;
     }
-    // An answer that would move the head arms the wake first, so its ledger entry and hand-over are finished by settle
-    // if this call stops after the adoption.
-    if ("answer" in read && read.answer.headSha !== readHead(this.#sql).headSha) {
-      await this.#armWake();
-    }
-    const now = Date.now();
-    const outcome = this.ctx.storage.transactionSync(() => this.#judgeRead(state.pushGen, read, now));
     this.#afterRead(outcome);
     if (outcome.kind === "adopted" && outcome.jobs !== null) {
       this.#afterHeadJobs(outcome.jobs);

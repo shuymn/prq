@@ -255,6 +255,37 @@ describe("pushes during a read", () => {
     expect(api.reads()).toHaveLength(2);
   });
 
+  it("reads no more while an answer waits for the wake it arms before it is judged", async () => {
+    const { ref, stub, api } = await session();
+    const answered = await gate(stub);
+    api.reply(held(answered, pull(sha("B"), second(100))), pull(sha("B"), second(100)));
+    await push(ref, "A", { at: second(100) });
+    await store(ref, "B", second(100));
+    const first = tracked(takeIn(ref));
+    await answered.reached();
+
+    // The answer moves the head, so the read arms the wake first; that wake's scheduling is held.
+    const arming = await gate(stub);
+    await runInDurableObject(stub, (instance) => {
+      const schedule = instance.schedule.bind(instance);
+      vi.spyOn(instance, "schedule").mockImplementationOnce(async (...args) => {
+        await arming.wait();
+        return schedule(...args);
+      });
+    });
+    await answered.open();
+    await arming.reached();
+
+    // Another settle meanwhile: the answer is not judged yet, so it reads nothing.
+    await within(takeIn(ref), 3000);
+    expect(api.reads()).toHaveLength(1);
+
+    await arming.open();
+    await within(first.promise, 3000);
+    expect(await reconcileRow(stub)).toMatchObject({ head_sha: sha("B"), reconcile_at: null, reconcile_tries: 0 });
+    expect(api.reads()).toHaveLength(1);
+  });
+
   it("makes one read per settle while same-second pushes keep discarding the answers", async () => {
     const { ref, stub, api } = await session();
     await push(ref, "A", { at: second(100) });
