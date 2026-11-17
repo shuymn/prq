@@ -8,11 +8,6 @@ import { log } from "./log.ts";
 import { SERVER_VERSION } from "./version.ts";
 import { WaitTimeout } from "./wait.ts";
 
-// How long a route waits for a call to a Durable Object, the object's start included. An application budget, not a
-// platform limit (a Worker may answer a connected client after any time): far above a start and a call, and short
-// enough that the agent or the UI soon tries again.
-export const ROUTE_CALL_MS = 30_000;
-
 // A call a route makes that did not take effect and may be made again: the route answers 503, which the caller retries.
 export class Unavailable extends Error {
   override readonly name = "Unavailable";

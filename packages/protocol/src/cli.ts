@@ -8,6 +8,20 @@ import { AgentId, MessageId, PrDetails, PrRef, Sha } from "./pr.ts";
 // frames that carry it.
 export const MAX_ANSWER_CHARS = 1_000_000;
 
+// How long a route waits for a call to a Durable Object, the object's start included. An application budget, not a
+// platform limit (a Worker may answer a connected client after any time): far above a start and a call, and short
+// enough that the agent or the UI soon tries again. The CLI waits longer than each route's bound, so the route's own
+// 503 arrives before the CLI gives up.
+export const ROUTE_CALL_MS = 30_000;
+
+// The longest a wait lasts; the agent then waits again.
+export const WAIT_MAX_MS = 25_000;
+
+// How long a wait asked for timeoutMs lasts at most.
+export function waitBoundMs(timeoutMs: number | undefined): number {
+  return Math.min(timeoutMs ?? WAIT_MAX_MS, WAIT_MAX_MS);
+}
+
 const Uuid = v.pipe(v.string(), v.uuid());
 
 // What a job produces: the analysis of a head, or the answer to a question.

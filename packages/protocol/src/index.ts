@@ -8,10 +8,13 @@ export {
   Job,
   JobTarget,
   MAX_ANSWER_CHARS,
+  ROUTE_CALL_MS,
   SubmitRequest,
   SubmitResponse,
+  WAIT_MAX_MS,
   WaitRequest,
   WaitResponse,
+  waitBoundMs,
 } from "./cli.ts";
 export { ErrorCode, ErrorResponse } from "./errors.ts";
 export { MessageMetadata } from "./messages.ts";
