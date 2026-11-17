@@ -96,6 +96,7 @@ import { analysisTask, systemPrompt } from "./prompt.ts";
 import {
   type Binding,
   type CloudModel,
+  failingWith,
   hasText,
   incompleteMessageId,
   newOutcome,
@@ -1048,6 +1049,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       return undefined;
     }
     const secret = this.#modelSecret();
+    // The turn's first error, classified with the key redacted, is its reason; what the client is shown is that reason.
+    const failWith = (error: unknown): string => {
+      outcome.error ??= classifyModelError(error, secret).reason;
+      return outcome.error;
+    };
     const result = streamText({
       model,
       system: systemPrompt({ pr: this.#pr(), details: readDetails(this.#sql), job }),
@@ -1055,7 +1061,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       ...(abortSignal === undefined ? {} : { abortSignal }),
       timeout: STREAM_TIMEOUT,
       onError: ({ error }) => {
-        outcome.error ??= classifyModelError(error, secret).reason;
+        failWith(error);
       },
       // A stalled stream ends as an abort whose reason is the AI SDK's timeout; any other abort is a cancel.
       onAbort: ({ reason }) => {
@@ -1073,18 +1079,16 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       },
     });
     const metadata = this.#resultMetadata(row, { kind: "cloud", model: model.modelId });
-    return result.toUIMessageStreamResponse({
+    const response = result.toUIMessageStreamResponse({
       generateMessageId: () => resultMessageId(row),
       messageMetadata: ({ part }) => (part.type === "start" ? metadata : undefined),
       onFinish: ({ responseMessage, isAborted }) => {
         outcome.message = responseMessage;
         outcome.aborted ||= isAborted;
       },
-      onError: (error) => {
-        outcome.error ??= classifyModelError(error, secret).reason;
-        return outcome.error;
-      },
+      onError: failWith,
     });
+    return failingWith(response, failWith);
   }
 
   // What the job's model reads after the system prompt: the projection, then its own question (by the job's target)
@@ -1119,7 +1123,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       await this.#recoverTurn(row);
       return;
     }
-    const failure = turnFailure(outcome);
+    const failure = turnFailure(outcome, this.#modelSecret());
     const metadata = this.#resultMetadata(row, { kind: "cloud", model: model.modelId }, jobUsage(this.#sql, row));
     const parts = resultParts(outcome.message?.parts ?? []);
     if (failure === null) {

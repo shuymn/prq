@@ -89,22 +89,49 @@ export function usageChunk(usage: Record<string, unknown>): Record<string, unkno
   return { id: "chunk", model: "served-model", choices: [], usage };
 }
 
-// A 200 event stream of the chunks, then [DONE]; with `open`, the stream stays open after them instead.
-export function sse(chunks: unknown[], { open = false } = {}): Reply {
-  return async () => {
-    const encoder = new TextEncoder();
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        for (const chunk of chunks) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-        }
-        if (!open) {
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+function event(chunk: unknown): Uint8Array {
+  return new TextEncoder().encode(`data: ${typeof chunk === "string" ? chunk : JSON.stringify(chunk)}\n\n`);
+}
+
+// A 200 event stream of the chunks, then [DONE].
+export function sse(chunks: unknown[]): Reply {
+  return async () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of [...chunks, "[DONE]"]) {
+            controller.enqueue(event(chunk));
+          }
           controller.close();
-        }
-      },
-    });
-    return new Response(body, { headers: { "content-type": "text/event-stream" } });
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    );
+}
+
+// A 200 event stream of the chunks that stays open after them until the test fails its body (a transport error
+// midway through an answer).
+export function heldSse(chunks: unknown[]): { reply: Reply; fail: (error: unknown) => void } {
+  let failBody: ((error: unknown) => void) | undefined;
+  return {
+    reply: async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const chunk of chunks) {
+              controller.enqueue(event(chunk));
+            }
+            failBody = (error) => controller.error(error);
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    fail: (error) => {
+      if (failBody === undefined) {
+        throw new Error("the held stream was not requested");
+      }
+      failBody(error);
+    },
   };
 }
 

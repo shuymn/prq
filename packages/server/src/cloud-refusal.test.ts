@@ -6,9 +6,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { captureLogs, events } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
-import { cloudSession, textOf, untilState } from "./test/cloud.ts";
+import { type CloudSession, cloudSession, textOf, untilState } from "./test/cloud.ts";
 import { ScriptedModel, text, useCloudModel } from "./test/model.ts";
-import { delta, errorBody, serveProvider, sse, TEST_KEY, useModelEnv } from "./test/provider.ts";
+import {
+  delta,
+  errorBody,
+  finishChunk,
+  heldSse,
+  serveProvider,
+  sse,
+  TEST_KEY,
+  until,
+  useModelEnv,
+} from "./test/provider.ts";
 import { hub, jobOf } from "./test/session.ts";
 
 // A provider that refuses a call (its spend limit, a bad key) fails the job with the provider's reason, never as done,
@@ -114,6 +124,11 @@ describe("redaction", () => {
       errorBody(400, { error: { message: STRADDLING } }),
       `${REFUSED_400}${"x".repeat(490 - REFUSED_400.length)}[redacted]`,
     ],
+    [
+      "an unknown finish reason",
+      sse([delta("partial answer"), finishChunk(`bad_key:${TEST_KEY}`)]),
+      "the model stopped with finish reason bad_key:[redacted]",
+    ],
   ] as const)(
     "keeps the API key out of every text the job leaves when the provider echoes it in %s",
     async ([, reply, failure]) => {
@@ -128,19 +143,72 @@ describe("redaction", () => {
       const job = await jobOf(session.stub, "q1");
       expect(job.failure).toBe(failure);
       expect(job.failure?.length).toBeLessThanOrEqual(500);
-      // The UI stream's error frame carries the same text.
+      // The client is shown the same text (the UI stream's error frame, the view's failure).
       expect(JSON.stringify(session.client.frames)).toContain("[redacted]");
-      const shown = [
-        JSON.stringify(session.client.frames),
-        JSON.stringify(await storedMessages(session.path, session.token)),
-        await allRows(session.stub),
-        await allRows(await hub()),
-        JSON.stringify(await session.stub.view()),
-        JSON.stringify(logs),
-      ];
-      for (const seen of shown) {
-        expect(seen).not.toContain(TEST_KEY.slice(0, 8));
-      }
+      await expectKeyNowhere(session, logs);
+    },
+  );
+
+  it.for([
+    [
+      "the provider's response body",
+      async (session: CloudSession) => {
+        const held = heldSse([delta("partial answer")]);
+        serveProvider().reply(held.reply);
+        await session.client.chat([Q1]);
+        await until(() => JSON.stringify(session.client.frames).includes("partial answer"), "the partial answer");
+        // Failed inside the session, as the runtime fails a response body there.
+        await runInDurableObject(session.stub, () =>
+          held.fail(new DOMException(`transport rejected ${TEST_KEY}`, "AbortError")),
+        );
+      },
+    ],
+    [
+      "a model's stream",
+      async (session: CloudSession) => {
+        useCloudModel(
+          new ScriptedModel().add([...text("partial answer"), { fail: new Error(`transport rejected ${TEST_KEY}`) }]),
+        );
+        await session.client.chat([Q1]);
+      },
+    ],
+  ] as const)(
+    "keeps the API key out of the SDK's terminal frame when %s fails midway with it",
+    async ([, failMidway]) => {
+      const logs = captureLogs();
+      const session = await cloudSession("redaction", sockets);
+      await useModelEnv(session.stub);
+
+      await failMidway(session);
+      await untilState(session.stub, "q1", "failed");
+
+      expect((await jobOf(session.stub, "q1")).failure).toBe("transport rejected [redacted]");
+      // The stream's exception reaches the client as the SDK's terminal error frame, with the job's reason.
+      expect(session.client.frames).toContainEqual(
+        expect.objectContaining({
+          type: "cf_agent_use_chat_response",
+          error: true,
+          done: true,
+          body: "transport rejected [redacted]",
+        }),
+      );
+      await expectKeyNowhere(session, logs);
     },
   );
 });
+
+// The key, or its first 8 characters, in nothing the job left: the client's frames, the stored history, any row of
+// the session or the hub, the view, the logs.
+async function expectKeyNowhere(session: CloudSession, logs: unknown): Promise<void> {
+  const shown = [
+    JSON.stringify(session.client.frames),
+    JSON.stringify(await storedMessages(session.path, session.token)),
+    await allRows(session.stub),
+    await allRows(await hub()),
+    JSON.stringify(await session.stub.view()),
+    JSON.stringify(logs),
+  ];
+  for (const seen of shown) {
+    expect(seen).not.toContain(TEST_KEY.slice(0, 8));
+  }
+}
