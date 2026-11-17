@@ -1,10 +1,11 @@
+import { runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import { cloudSession, untilState } from "./test/cloud.ts";
 import { answerScript, finish, ScriptedModel, text, useCloudModel, useWorkspace } from "./test/model.ts";
-import { gate, jobOf, retryIn } from "./test/session.ts";
+import { gate, hydrateRecent, jobOf, retryIn } from "./test/session.ts";
 import { push, sha } from "./test/webhook.ts";
 
 const sockets: AgentSocket[] = [];
@@ -66,5 +67,32 @@ describe("model context", () => {
       [S, "question q1", "answer one", "question q2", "answer two", "question q0"],
       [S, "question q1", "answer one", "question q2", "answer two", "question q0", "answer zero", "question q3"],
     ]);
+  });
+
+  it("reads the projection from storage, so a result outside the cached history is still in the context", async () => {
+    captureLogs();
+    const { stub, client } = await cloudSession("context", sockets);
+    const model = new ScriptedModel().add(answerScript("answer one"), answerScript("answer two"));
+    useCloudModel(model);
+    await client.chat([Q1]);
+    await untilState(stub, "q1", "done");
+    // Q2's turn is held before it starts; meanwhile the cache (this.messages) is cut to the history's most recent
+    // message, as a history over hydrationByteBudget leaves it.
+    const held = await gate(stub);
+    await runInDurableObject(stub, (instance) => {
+      const save = instance.saveMessages.bind(instance);
+      vi.spyOn(instance, "saveMessages").mockImplementationOnce(async (...args) => {
+        await held.wait();
+        return save(...args);
+      });
+    });
+    await client.chat([Q1, Q2]);
+    await held.reached();
+    expect(await hydrateRecent(stub, 1)).toEqual(["q2"]);
+
+    await held.open();
+    await untilState(stub, "q2", "done");
+
+    expect(model.prompts()[1]?.map((message) => message.text)).toEqual(["question q1", "answer one", "question q2"]);
   });
 });
