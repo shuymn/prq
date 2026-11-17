@@ -194,6 +194,29 @@ describe("prq submit", () => {
     expect(await answers()).toEqual([]);
   });
 
+  it("another job in the same run at the same workspace: no resubmit, exit 4 with that claim", async () => {
+    await present("laptop");
+    await push(stack.worker(), pr, sha("h1"));
+    const first = await claim("laptop");
+    await writeFile(first.answer, "the summary\n");
+    // A question, which the next claim takes before the analysis (the oldest waiting answer first): run 1, at the
+    // current head, as the analysis was.
+    await ask(stack.worker(), pr, "q1", "what changed?");
+    await retry(stack.worker(), pr, first.job.jobId);
+
+    const exit = await stack.run(["submit", "--agent-id", "laptop"]);
+    expect(exit.code).toBe(4);
+    const output = v.parse(Dropped, result(exit));
+    expect(output).toMatchObject({
+      reason: "stale_claim",
+      next: "context",
+      claim: { job: { target: { kind: "answer", messageId: "q1" }, run: 1, workspaceSha: sha("h1") } },
+    });
+    expect(output.claim?.job.jobId).not.toBe(first.job.jobId);
+    expect(submits()).toEqual([409]);
+    expect(await answers()).toEqual([]);
+  });
+
   it("answer file: a missing or blank answer is refused before any request", async () => {
     await present("laptop");
     await push(stack.worker(), pr, sha("h1"));
