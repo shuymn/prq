@@ -48,8 +48,8 @@ function at(second: number): number {
 type Shape = "r1" | "r2" | "r3" | "r4" | "r5a" | "r5b";
 const SHAPES: readonly Shape[] = ["r1", "r2", "r3", "r4", "r5a", "r5b"];
 
-// A read in flight: when it was sent, in truth events and in pushes taken in, and the session's head_at then.
-type Read = { truthLength: number; takenAtStart: number; headAt: number | null };
+// A read in flight: when it was sent, in pushes taken in, and the session's head_at then.
+type Read = { takenAtStart: number; headAt: number | null };
 
 // The truth so far, what the session was told of it, and what the oracle may conclude.
 class Oracle {
@@ -451,7 +451,7 @@ class Wake implements Command {
 }
 
 function startRead(oracle: Oracle, real: Real): void {
-  oracle.read = { truthLength: oracle.events.length, takenAtStart: oracle.taken.length, headAt: real.row().head_at };
+  oracle.read = { takenAtStart: oracle.taken.length, headAt: real.row().head_at };
 }
 
 // The answer to the read in flight: GitHub's state `lag` events before the current one (at least the first push's), or
@@ -491,7 +491,7 @@ class Answer implements Command {
     }
     const current = point === oracle.events.length;
     const headBefore = real.row();
-    this.shapes(oracle, { head, second, point, current, headAt: headBefore.head_at });
+    this.shapes(oracle, { head, second, current, headAt: headBefore.head_at });
     if (!current && !pushDuring && oracle.onCycle(second, head)) {
       oracle.laggingReturns.add(second);
     }
@@ -532,10 +532,7 @@ class Answer implements Command {
     return adopted;
   }
 
-  shapes(
-    oracle: Oracle,
-    answer: { head: Label; second: number; point: number; current: boolean; headAt: number | null },
-  ): void {
+  shapes(oracle: Oracle, answer: { head: Label; second: number; current: boolean; headAt: number | null }): void {
     const { head, second, current, headAt } = answer;
     if (headAt !== null && at(second) < headAt && oracle.markSeconds.has(at(second))) {
       oracle.shapes.add("r3");
@@ -745,21 +742,13 @@ async function runOracle(cmds: Iterable<Command>, logs: LogEntry[]): Promise<voi
     });
     vi.spyOn(seams, "deliver").mockResolvedValue();
     vi.spyOn(seams, "readPool").mockResolvedValue(true);
-    let oracle: Oracle | null = null;
-    let real: Real | null = null;
-    current = null;
-    await fc.asyncModelRun(() => {
-      oracle = new Oracle();
-      real = new Real(instance, state.storage.sql, logs);
-      current = real;
-      return { model: oracle, real };
-    }, cmds);
-    if (oracle === null || real === null) {
-      throw new Error("the run was not set up");
-    }
+    const oracle = new Oracle();
+    const real = new Real(instance, state.storage.sql, logs);
+    current = real;
+    await fc.asyncModelRun(() => ({ model: oracle, real }), cmds);
     await finish(oracle, real);
     const expected = corpusShape.get(cmds);
-    const shapes: Set<Shape> = (oracle as Oracle).shapes;
+    const { shapes } = oracle;
     if (expected !== undefined) {
       if (!shapes.has(expected)) {
         throw new Error(

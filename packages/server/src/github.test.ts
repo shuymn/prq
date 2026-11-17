@@ -5,6 +5,7 @@ import { readGithubAppConfig } from "./config.ts";
 import { GITHUB_CALL_MS, githubFor, githubStatus } from "./github.ts";
 import { appEnv, failure, hanging, pull, serveGithub, TEST_TOKEN } from "./test/github.ts";
 import { until } from "./test/provider.ts";
+import { tracked } from "./test/session.ts";
 import { sha } from "./test/webhook.ts";
 
 // The GitHub App's client against the served API (src/test/github.ts): installation tokens, pull request reads, and
@@ -27,19 +28,9 @@ function client() {
   return githubFor({}, config.config);
 }
 
-// A promise's state, without waiting for it.
-function track<T>(promise: Promise<T>) {
-  const state: { settled: boolean; error?: unknown } = { settled: false };
-  promise.then(
-    () => {
-      state.settled = true;
-    },
-    (error: unknown) => {
-      state.settled = true;
-      state.error = error;
-    },
-  );
-  return state;
+// A read's outcome, tracked without waiting for it: its answer, or the error it failed with.
+function outcome(github: ReturnType<typeof client>, installationId: number) {
+  return tracked(github.pullRequest(installationId, PR).catch((error: unknown) => error));
 }
 
 describe("installation tokens", () => {
@@ -74,23 +65,23 @@ describe("installation tokens", () => {
     api.tokenReply(hanging);
     const github = client();
 
-    const call = track(github.pullRequest(11, PR));
+    const call = outcome(github, 11);
     await until(() => api.tokens().length === 1, "the token request");
     await vi.advanceTimersByTimeAsync(GITHUB_CALL_MS - 1);
-    expect(call.settled).toBe(false);
+    expect(call.settled()).toBe(false);
     expect(api.tokens()[0]?.signal?.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    await until(() => call.settled, "the call's end");
-    expect(String(call.error)).toMatch(/took over 10000 ms/);
+    await until(() => call.settled(), "the call's end");
+    expect(String(await call.promise)).toMatch(/took over 10000 ms/);
     expect(api.tokens()[0]?.signal?.aborted).toBe(true);
     expect(api.reads()).toEqual([]);
 
     // The aborted request no longer stands for the installation's token: the next call mints one.
     api.tokenReply(async () => failure(503)(undefined));
-    const next = track(github.pullRequest(11, PR));
-    await until(() => next.settled, "the next call's end");
+    const next = outcome(github, 11);
+    await until(() => next.settled(), "the next call's end");
     expect(api.tokens()).toHaveLength(2);
-    expect(githubStatus(next.error)).toBe(503);
+    expect(githubStatus(await next.promise)).toBe(503);
   });
   it("ends a mint whose signing does not finish at the bound, and mints anew on the next call", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -99,26 +90,26 @@ describe("installation tokens", () => {
     const signing = vi.spyOn(crypto.subtle, "sign").mockReturnValue(new Promise(() => undefined));
     const github = client();
 
-    const call = track(github.pullRequest(15, PR));
+    const call = outcome(github, 15);
     await until(() => signing.mock.calls.length === 1, "the signing");
     await vi.advanceTimersByTimeAsync(GITHUB_CALL_MS - 1);
-    expect(call.settled).toBe(false);
+    expect(call.settled()).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    await until(() => call.settled, "the call's end");
-    expect(String(call.error)).toMatch(/the installation token took over 10000 ms/);
+    await until(() => call.settled(), "the call's end");
+    expect(String(await call.promise)).toMatch(/the installation token took over 10000 ms/);
     expect(api.requests).toEqual([]);
 
     // The hung signing no longer stands for the installation's token, which auth-app shares among concurrent mints of
     // one installation: once signing works, the next call mints one.
     signing.mockRestore();
-    const next = track(github.pullRequest(15, PR));
+    const next = outcome(github, 15);
     // It needs no timer, unless it waits on the hung signing: then the bound ends it.
-    for (let waited = 0; !next.settled && waited < 1000; waited += 20) {
+    for (let waited = 0; !next.settled() && waited < 1000; waited += 20) {
       await scheduler.wait(20);
     }
     await vi.advanceTimersByTimeAsync(GITHUB_CALL_MS);
-    await until(() => next.settled, "the next call's end");
-    expect(next.error).toBeUndefined();
+    await until(() => next.settled(), "the next call's end");
+    expect(await next.promise).toEqual({ headSha: sha("A"), updatedAt: AT });
     expect(api.tokens().map((request) => request.path)).toEqual(["/app/installations/15/access_tokens"]);
   });
 });
@@ -130,14 +121,14 @@ describe("pull request reads", () => {
     api.reply(hanging);
     const github = client();
 
-    const call = track(github.pullRequest(12, PR));
+    const call = outcome(github, 12);
     await until(() => api.reads().length === 1, "the read");
     await vi.advanceTimersByTimeAsync(GITHUB_CALL_MS - 1);
-    expect(call.settled).toBe(false);
+    expect(call.settled()).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    await until(() => call.settled, "the read's end");
+    await until(() => call.settled(), "the read's end");
     expect(api.reads()[0]?.signal?.aborted).toBe(true);
-    expect(githubStatus(call.error)).toBe(500);
+    expect(githubStatus(await call.promise)).toBe(500);
   });
 
   it("ends a read whose body does not finish at the bound, though the request ignores its abort", async () => {
@@ -146,11 +137,11 @@ describe("pull request reads", () => {
     api.reply(async () => new Response(new ReadableStream({ start: () => undefined }), { status: 200 }));
     const github = client();
 
-    const call = track(github.pullRequest(13, PR));
+    const call = outcome(github, 13);
     await until(() => api.reads().length === 1, "the read");
     await vi.advanceTimersByTimeAsync(GITHUB_CALL_MS);
-    await until(() => call.settled, "the read's end");
-    expect(githubStatus(call.error)).toBe(500);
+    await until(() => call.settled(), "the read's end");
+    expect(githubStatus(await call.promise)).toBe(500);
   });
 
   it("names GitHub's status for a refusal, and none for an answer outside the expected shape", async () => {
