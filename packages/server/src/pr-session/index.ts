@@ -20,7 +20,8 @@ import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import * as v from "valibot";
 
 import { refuseSubAgent, sendServerVersion } from "../agents.ts";
-import { readModelConfig } from "../config.ts";
+import { readGithubAppConfig, readModelConfig } from "../config.ts";
+import { type GithubClient, githubFor, githubStatus, type PullRequestState } from "../github.ts";
 import { errorName, log } from "../log.ts";
 import { hubStub } from "../names.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
@@ -93,6 +94,7 @@ import {
 import { classifyModelError, modelFor, OUTPUT_STALLED, STREAM_TIMEOUT } from "./model.ts";
 import { projection } from "./projection.ts";
 import { analysisTask, systemPrompt } from "./prompt.ts";
+import { adoptAnswer, clearMark, failTry, isLagging, notePush, readReconcile } from "./reconcile.ts";
 import {
   type Binding,
   type CloudModel,
@@ -140,6 +142,25 @@ function wholeSecondFrom(ms: number): Date {
 type CloudOutcome = { failed: JobRow[]; started: { row: JobRow; agent: CloudAgent } | null };
 const NO_CLOUD_OUTCOME: CloudOutcome = { failed: [], started: null };
 
+// What a head becoming current did to the analyses (ingestHeadJobs).
+type HeadJobs = { folded: JobRow[]; created: JobRow | undefined; revived: JobRow | undefined };
+
+// What a read of GitHub's head came to: discarded (a push was taken in since it was requested; marked: whether the
+// session is still marked), refused by GitHub (the mark cleared), a failed try (cleared: the last one), or adopted
+// (jobs: what moving the head did, null when the head stayed).
+type ReadOutcome =
+  | { kind: "discarded"; marked: boolean }
+  | { kind: "refused"; status: number }
+  | {
+      kind: "retry";
+      reason: "lagging" | "unavailable";
+      status: number | null;
+      error: string | null;
+      tries: number;
+      cleared: boolean;
+    }
+  | { kind: "adopted"; answer: PullRequestState; jobs: (HeadJobs & { cloud: CloudOutcome }) | null };
+
 const BAD_CURSOR: ErrorResponse = { error: "bad_request", detail: "the cursor names no place in this conversation" };
 
 // A question from the UI: a user message the server did not add (server messages carry metadata).
@@ -185,6 +206,9 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   readonly #liveTurns = new Set<string>();
   // The binding a job's turn made in its exclusive slot, until that turn's onChatMessage takes it.
   #bound: Binding | null = null;
+  // Whether a read of GitHub's head is in flight: one at a time, so every answer is judged against the pushes taken in
+  // since it was requested.
+  #reading = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -586,9 +610,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       }
       const before = readHead(this.#sql);
       const moved = moveHead(this.#sql, delivery);
+      notePush(this.#sql, delivery, before, moved);
       // A push is an event when it changes the head: the first push, or a newer head. A push of the current head is
       // not one.
-      if (moved && (!before.pushed || before.headSha !== delivery.details.headSha)) {
+      if (moved && (before.headAt === null || before.headSha !== delivery.details.headSha)) {
         recordEvent(this.#sql, "push", now);
       }
       writeDetails(this.#sql, delivery);
@@ -603,6 +628,12 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       return;
     }
     this.#logTaken(delivery, change.moved);
+    this.#afterHeadJobs(change);
+    await this.#deliverOutbox();
+  }
+
+  // After a step that made a head current: its jobs' logs, the hand-over and the view.
+  #afterHeadJobs(change: HeadJobs & { cloud: CloudOutcome }): void {
     for (const row of change.folded) {
       log("prq.job.superseded", { ...this.#jobFields(row), from: "pending", to: "superseded" });
     }
@@ -617,7 +648,6 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       log("prq.job.revived", { ...this.#jobFields(change.revived), from: "superseded", to });
     }
     this.#afterNewWork(change.cloud);
-    await this.#deliverOutbox();
   }
 
   // An edit or a close, taken in once: the pull request's details, when no later webhook has given them. No job. Its
@@ -634,6 +664,124 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (taken) {
       this.#logTaken(delivery, false);
       this.#publishView();
+    }
+  }
+
+  // --- Head reconciliation ---
+
+  // The GitHub App's client (spied on in tests): none while the App is not configured, or misconfigured (named by its
+  // variables, never their values).
+  protected github(): GithubClient | undefined {
+    const config = readGithubAppConfig(this.env);
+    if (config === null) {
+      return undefined;
+    }
+    if (!config.ok) {
+      log("prq.config.invalid", { issues: config.issues }, "error");
+      return undefined;
+    }
+    return githubFor(this.env, config.config);
+  }
+
+  // settle's reconcile step (docs/design.md, Intake): with the session marked for a tie, an installation and the App,
+  // one read of GitHub's head, judged in one transaction against the session as it is when it lands. A push taken in
+  // since the read was requested discards the answer, which is no failed try. An answer older than the head is a failed
+  // try. Any other answer is adopted. A failed try, or a discarded answer under a mark, waits for settle's retry wake:
+  // a settle never reads twice.
+  async #reconcile(): Promise<void> {
+    const state = readReconcile(this.#sql);
+    if (state.mark === null || state.installationId === null || this.#reading) {
+      return;
+    }
+    const client = this.github();
+    if (client === undefined) {
+      return;
+    }
+    // One read at a time, from the request until its answer is judged.
+    this.#reading = true;
+    let outcome: ReadOutcome;
+    try {
+      let read: { answer: PullRequestState } | { error: unknown };
+      try {
+        read = { answer: await client.pullRequest(state.installationId, this.#pr()) };
+      } catch (error) {
+        read = { error };
+      }
+      // An answer that would move the head arms the wake first, so its ledger entry and hand-over are finished by
+      // settle if this call stops after the adoption.
+      if ("answer" in read && read.answer.headSha !== readHead(this.#sql).headSha) {
+        await this.#armWake();
+      }
+      const now = Date.now();
+      outcome = this.ctx.storage.transactionSync(() => this.#judgeRead(state.pushGen, read, now));
+    } finally {
+      this.#reading = false;
+    }
+    this.#afterRead(outcome);
+    if (outcome.kind === "adopted" && outcome.jobs !== null) {
+      this.#afterHeadJobs(outcome.jobs);
+    }
+    if ((outcome.kind === "retry" && !outcome.cleared) || (outcome.kind === "discarded" && outcome.marked)) {
+      await this.#armRetry();
+    }
+  }
+
+  // Inside the read's transaction.
+  #judgeRead(pushGen: number, read: { answer: PullRequestState } | { error: unknown }, now: number): ReadOutcome {
+    const current = readReconcile(this.#sql);
+    if (current.pushGen !== pushGen) {
+      return { kind: "discarded", marked: current.mark !== null };
+    }
+    if ("error" in read) {
+      const status = githubStatus(read.error);
+      if (status !== null && status >= 400 && status < 500 && status !== 429) {
+        clearMark(this.#sql);
+        return { kind: "refused", status };
+      }
+      return { kind: "retry", reason: "unavailable", status, error: errorName(read.error), ...failTry(this.#sql) };
+    }
+    const { answer } = read;
+    const head = readHead(this.#sql);
+    if (isLagging(this.#sql, head, answer)) {
+      return { kind: "retry", reason: "lagging", status: null, error: null, ...failTry(this.#sql) };
+    }
+    adoptAnswer(this.#sql, answer);
+    if (head.headSha === answer.headSha) {
+      return { kind: "adopted", answer, jobs: null };
+    }
+    // A different head becomes current as a push would make it.
+    recordEvent(this.#sql, "push", now);
+    writeLedger(this.#sql);
+    const jobs = ingestHeadJobs(this.#sql, answer.headSha, now);
+    const waiting = jobs.created ?? jobs.revived;
+    const cloud = waiting === undefined ? NO_CLOUD_OUTCOME : this.#newWork(this.#storedOwner(), now);
+    return { kind: "adopted", answer, jobs: { ...jobs, cloud } };
+  }
+
+  #afterRead(outcome: ReadOutcome): void {
+    const pr = this.name;
+    switch (outcome.kind) {
+      case "discarded":
+        log("prq.head.reconcile_discarded", { pr, marked: outcome.marked });
+        return;
+      case "refused":
+        log("prq.head.reconcile_failed", { pr, reason: "refused", status: outcome.status }, "warn");
+        return;
+      case "retry": {
+        const { reason, status, error, tries } = outcome;
+        log("prq.head.reconcile_retry", { pr, reason, status, error, tries });
+        if (outcome.cleared) {
+          log("prq.head.reconcile_failed", { pr, reason: "tries", tries }, "warn");
+        }
+        return;
+      }
+      case "adopted":
+        log("prq.head.reconciled", {
+          pr,
+          headSha: outcome.answer.headSha,
+          updatedAt: outcome.answer.updatedAt,
+          headMoved: outcome.jobs !== null,
+        });
     }
   }
 
@@ -1227,6 +1375,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   // left. Each step is idempotent, and a failing step does not stop the others.
   async settle(): Promise<void> {
     await this.#attempt("inbox", () => this.#drainInbox());
+    await this.#attempt("reconcile", () => this.#reconcile());
     await this.#attempt("create_jobs", () => this.createJobs());
     await this.#attempt("sweep", () => this.#writes.run(() => this.#sweepFinalizing()));
     await this.#attempt("cloud", () => this.#settleCloud());

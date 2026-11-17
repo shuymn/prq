@@ -16,17 +16,29 @@ export function sha(label: string): string {
 
 let clock = Date.UTC(2026, 10, 1);
 
-// A pull_request delivery as GitHub signs and sends it, of a pull request the host authored; then the session takes it
-// in, as the wake its inbox armed would. With a local agent present, a new head is an analysis job for it.
-export async function push(worker: Worker, pr: PrRef, head: string, base = sha("base")): Promise<void> {
-  clock += 1000;
+type DeliveryOptions = {
+  action: "opened" | "synchronize";
+  head: string;
+  base?: string;
+  // pull_request.updated_at, whole seconds (ISO 8601).
+  at: string;
+  // The head a synchronize moved from.
+  before?: string;
+  // The GitHub App installation the delivery names; none when left out.
+  installation?: number;
+};
+
+// A pull_request delivery as GitHub signs and sends it, of a pull request the host authored, accepted by the Worker.
+export async function deliver(worker: Worker, pr: PrRef, options: DeliveryOptions): Promise<void> {
+  const { action, head, base = sha("base"), at, before, installation } = options;
   const fullName = `${pr.owner}/${pr.repo}`;
   const body = JSON.stringify({
-    action: "opened",
+    action,
     number: pr.number,
+    ...(before === undefined ? {} : { before, after: head }),
     pull_request: {
       number: pr.number,
-      updated_at: new Date(clock).toISOString().replace(/\.\d{3}Z$/, "Z"),
+      updated_at: at,
       title: "A change",
       state: "open",
       merged: false,
@@ -37,6 +49,7 @@ export async function push(worker: Worker, pr: PrRef, head: string, base = sha("
     },
     repository: { name: pr.repo, full_name: fullName, owner: { login: pr.owner } },
     sender: { id: HOST_ID, login: "host" },
+    ...(installation === undefined ? {} : { installation: { id: installation } }),
   });
   const signature = `sha256=${createHmac("sha256", WEBHOOK_SECRET).update(body).digest("hex")}`;
   const res = await fetch(new URL("/webhook", worker.url()), {
@@ -52,6 +65,14 @@ export async function push(worker: Worker, pr: PrRef, head: string, base = sha("
   if (res.status !== 200) {
     throw new Error(`the webhook answered ${res.status}: ${await res.text()}`);
   }
+}
+
+// An opened delivery a second after the last one; then the session takes it in, as the wake its inbox armed would.
+// With a local agent present, a new head is an analysis job for it.
+export async function push(worker: Worker, pr: PrRef, head: string, base = sha("base")): Promise<void> {
+  clock += 1000;
+  const at = new Date(clock).toISOString().replace(/\.\d{3}Z$/, "Z");
+  await deliver(worker, pr, { action: "opened", head, base, at });
   const session = await worker.durableObject("PrSession", sessionName(pr));
   await session["settle"]?.();
 }

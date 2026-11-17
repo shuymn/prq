@@ -1,10 +1,12 @@
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
-import { exportJWK, generateKeyPair } from "jose";
+import { exportJWK, exportPKCS8, generateKeyPair } from "jose";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig(async () => {
   // The Access signing key for this run; tests serve its public half as the team's key set (src/test/access.ts).
   const { privateKey } = await generateKeyPair("RS256", { extractable: true });
+  // The GitHub App's key for tests that give a session the App (src/test/github.ts), PKCS#8 as the secret is stored.
+  const appKey = await generateKeyPair("RS256", { extractable: true });
   return {
     plugins: [
       cloudflareTest({
@@ -25,6 +27,10 @@ export default defineConfig(async () => {
             MODEL_API_KEY: "",
             MODEL_ID: "",
             MODEL_CONTEXT_TOKENS: "",
+            // No GitHub App either, so no test reaches GitHub; tests that need the App give the session one.
+            GITHUB_APP_ID: "",
+            GITHUB_APP_PRIVATE_KEY: "",
+            TEST_GITHUB_APP_KEY: await exportPKCS8(appKey.privateKey),
           },
         },
       }),

@@ -19,6 +19,9 @@ export function sha(label: string): string {
 
 export const BASE = sha("base");
 
+// The GitHub App installation deliveries come through unless a test names another (or none).
+export const INSTALLATION_ID = 77;
+
 // GitHub's clock as the events tell it: each event made without a time is a second after the one made before it.
 let clock = Date.UTC(2026, 10, 1);
 
@@ -41,6 +44,8 @@ type EventOptions = {
   merged?: boolean;
   author?: number;
   sender?: number;
+  // The App installation the delivery names; null leaves it out.
+  installation?: number | null;
 };
 
 // A pull_request event for the pull request, as GitHub sends it (the fields prq reads, and the sender).
@@ -65,6 +70,7 @@ export function pullRequestEvent(pr: PrRef, options: EventOptions = {}) {
     },
     repository: { name: pr.repo, full_name: fullName, owner: { login: pr.owner } },
     sender: { id: options.sender ?? HOST_ID, login: "sender" },
+    ...(options.installation === null ? {} : { installation: { id: options.installation ?? INSTALLATION_ID } }),
   };
 }
 

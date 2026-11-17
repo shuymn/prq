@@ -22,8 +22,14 @@ catalog:
   ai: 7.0.172
   # The cloud agent's model: any provider with an OpenAI-compatible chat completions API.
   "@ai-sdk/openai-compatible": 3.0.92
+  # The GitHub App: installation tokens (the App's JWT signed by auth-app's own signer), and the REST reads made with
+  # them.
+  "@octokit/auth-app": 8.3.1
+  "@octokit/request": 10.0.16
+  universal-github-app-jwt: 2.2.2
 
-  # Tests and TypeScript.
+  # Tests and TypeScript; fast-check generates the interleavings of the head reconciliation's oracle test.
+  fast-check: 4.10.2
   typescript: 7.0.2
   vitest: 5.1.0
 

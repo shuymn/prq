@@ -42,6 +42,8 @@ const PullRequestEvent = v.object({
     full_name: PrDetails.entries.fullName,
     owner: v.object({ login: PrRef.entries.owner }),
   }),
+  // The App installation the delivery came through, whose token reads the pull request.
+  installation: v.optional(v.object({ id: v.pipe(v.number(), v.safeInteger(), v.minValue(1)) })),
 });
 
 // A push: the head may have moved. An edit or a close changes the details only.
@@ -88,7 +90,7 @@ export function webhookRoutes(bound: CallBound) {
       log("prq.webhook.rejected", { reason: "payload" }, "warn");
       return errorResponse(c, "bad_request", "not a pull_request event payload");
     }
-    const { action, pull_request: pull, repository } = parsed.output;
+    const { action, pull_request: pull, repository, installation } = parsed.output;
     if (String(pull.user.id) !== host) {
       log("prq.webhook.ignored", { action, reason: "author" });
       return c.json({ status: "ignored" });
@@ -109,6 +111,7 @@ export function webhookRoutes(bound: CallBound) {
       push: PUSHES.has(action),
       at: pull.updated_at,
       before: parsed.output.before ?? null,
+      installationId: installation?.id ?? null,
       details: {
         fullName: repository.full_name,
         title: pull.title,

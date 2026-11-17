@@ -6,23 +6,28 @@
   "scripts": {
     "typecheck": "tsc",
     "test": "vitest run",
-    "check:provider": "node --env-file-if-exists=.dev.vars scripts/provider-check.ts"
+    "check:provider": "node --env-file-if-exists=.dev.vars scripts/provider-check.ts",
+    "check:github": "node --env-file-if-exists=.dev.vars scripts/github-check.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "catalog:",
     "@cloudflare/ai-chat": "catalog:",
     "@hono/valibot-validator": "catalog:",
+    "@octokit/auth-app": "catalog:",
+    "@octokit/request": "catalog:",
     "@octokit/webhooks-methods": "catalog:",
     "@prq/protocol": "workspace:*",
     "agents": "catalog:",
     "ai": "catalog:",
     "hono": "catalog:",
     "jose": "catalog:",
+    "universal-github-app-jwt": "catalog:",
     "valibot": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "catalog:",
     "@cloudflare/workers-types": "catalog:",
+    "fast-check": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

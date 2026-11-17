@@ -15,6 +15,7 @@ import {
   deliveryRequest,
   HOST_ID,
   inbox,
+  nextAt,
   OTHER_ID,
   pullRequestEvent,
   push,
@@ -205,6 +206,45 @@ describe("deliveries that reach no session", () => {
       without("WEBHOOK_SECRET"),
     );
     expect(res.status).toBe(401);
+  });
+});
+
+// The installation IDs of a session's inbox rows and the one it keeps.
+async function installations(pr: PrRef) {
+  return runInDurableObject(await prSessionStub(env, pr), (_, state) => ({
+    inbox: state.storage.sql
+      .exec<{ installation_id: number | null }>("SELECT installation_id FROM prq_inbox ORDER BY seq")
+      .toArray()
+      .map((row) => row.installation_id),
+    session: state.storage.sql
+      .exec<{ installation_id: number | null }>("SELECT installation_id FROM prq_session WHERE id = 1")
+      .one().installation_id,
+  }));
+}
+
+describe("installation", () => {
+  it("stores the App installation with each delivery, and the session keeps the latest by GitHub's time", async () => {
+    captureLogs();
+    await setPool([]);
+    const pr = newPr();
+    const earlier = nextAt();
+    await push(pr, "A", { installation: 9 });
+    expect(await installations(pr)).toEqual({ inbox: [9], session: 9 });
+
+    await push(pr, "B", { installation: 10 });
+    // A delivery that names none keeps the one stored, and an older webhook's does not replace it.
+    await send(pr, { action: "edited", head: sha("B"), installation: null });
+    await send(pr, { action: "edited", head: sha("A"), at: earlier, installation: 11 });
+    expect(await installations(pr)).toEqual({ inbox: [9, 10, null, 11], session: 10 });
+  });
+
+  it("refuses a payload whose installation ID is not a positive integer with 400", async () => {
+    captureLogs();
+    const event = pullRequestEvent(newPr());
+    for (const id of [0, 1.5, "9"]) {
+      const body = JSON.stringify({ ...event, installation: { id } });
+      expect(await refused(deliver({ body }))).toEqual({ status: 400, error: "bad_request" });
+    }
   });
 });
 
