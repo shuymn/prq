@@ -2,8 +2,9 @@
 // it reads passed in. Its fetch of Access's key set is served here: the harness sends the Worker's outbound requests to
 // this process's globalThis.fetch, which a wrapper answers for the key set URL and passes on for anything else, its
 // response decoded once.
-// The harness also loads packages/server/.dev.vars, which may hold a model provider's settings for a manual check: the
-// Worker gets a model only when the caller passes one, so the tests never reach a provider.
+// The harness also loads packages/server/.dev.vars, which may hold a model provider's or the GitHub App's settings for a
+// manual check: the Worker gets a model or the App only when the caller passes one, so the tests never reach a provider
+// or GitHub.
 
 import { fileURLToPath } from "node:url";
 
@@ -40,6 +41,8 @@ export type Worker = {
   durableObject(binding: "Hub" | "PrSession", name: string): Promise<Stub>;
   // SQL in a Durable Object's storage, for test setup.
   sql(className: "Hub" | "PrSession", name: string, query: string, ...bindings: unknown[]): Promise<unknown[]>;
+  // The Worker's log lines since it started or was last reset.
+  logs(): string[];
 };
 
 // The content codings Node's fetch decodes. Their responses arrive decoded with the content-encoding header kept, and
@@ -71,10 +74,16 @@ export type ModelSettings = Record<"MODEL_BASE_URL" | "MODEL_API_KEY" | "MODEL_I
 // Empty settings override any the harness loaded from .dev.vars: the Worker reads them as no model configured.
 const NO_MODEL: ModelSettings = { MODEL_BASE_URL: "", MODEL_API_KEY: "", MODEL_ID: "", MODEL_CONTEXT_TOKENS: "" };
 
-// Likewise no GitHub App, so no test reaches GitHub through credentials in .dev.vars.
-const NO_GITHUB_APP = { GITHUB_APP_ID: "", GITHUB_APP_PRIVATE_KEY: "" };
+// The GitHub App's settings (packages/server/src/env.d.ts).
+export type GithubAppSettings = Record<"GITHUB_APP_ID" | "GITHUB_APP_PRIVATE_KEY", string>;
 
-export async function startWorker({ model = NO_MODEL }: { model?: ModelSettings } = {}): Promise<Worker> {
+// Likewise no GitHub App, so no test reaches GitHub through credentials in .dev.vars.
+const NO_GITHUB_APP: GithubAppSettings = { GITHUB_APP_ID: "", GITHUB_APP_PRIVATE_KEY: "" };
+
+export async function startWorker({
+  model = NO_MODEL,
+  githubApp = NO_GITHUB_APP,
+}: { model?: ModelSettings; githubApp?: GithubAppSettings } = {}): Promise<Worker> {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const jwk: JWK = { ...(await exportJWK(publicKey)), kid: KEY_ID, alg: "RS256", use: "sig" };
   let fetches = 0;
@@ -103,7 +112,7 @@ export async function startWorker({ model = NO_MODEL }: { model?: ModelSettings 
           ACCESS_AUD: AUDIENCE,
           WEBHOOK_SECRET,
           HOST_GITHUB_ID: String(HOST_ID),
-          ...NO_GITHUB_APP,
+          ...githubApp,
           ...model,
         },
       },
@@ -162,5 +171,6 @@ export async function startWorker({ model = NO_MODEL }: { model?: ModelSettings 
       const storage = await worker.getDurableObjectStorage(className, { name });
       return storage.exec(query, ...bindings);
     },
+    logs: () => harness.getLogs().map((entry) => entry.message),
   };
 }
