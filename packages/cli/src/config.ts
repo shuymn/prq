@@ -76,6 +76,17 @@ function workerOrigin(value: string | undefined): string {
   return url.origin;
 }
 
+// PRQ_CLONE_ROOTS: the directories prq checkout looks in for <owner>/<repo> clones, separated by ':', each absolute,
+// since the commands of one job may run from different directories. Read by checkout alone, so a wrong value does not
+// stop the other commands.
+export function cloneRoots(value: string | undefined): string[] {
+  const roots = (value ?? "").split(":").filter((root) => root !== "");
+  if (!roots.every((root) => isAbsolute(root))) {
+    throw new CliError(EXIT.error, "PRQ_CLONE_ROOTS must list absolute paths, separated by ':'");
+  }
+  return roots;
+}
+
 // --agent-id, else PRQ_AGENT_ID, else the host name, as the protocol's AgentId.
 function agentId(flag: string | undefined, env: string | undefined, hostname: string): string {
   const [id, source] =

@@ -41,7 +41,7 @@ describe("retries", () => {
 
     const context = await stack.run(["context", "--agent-id", "laptop"]);
     expect(context.code).toBe(0);
-    expect(result(context)).toMatchObject({ next: "answer" });
+    expect(result(context)).toMatchObject({ next: "checkout" });
     expect(stderrLines(context)).toEqual(["prq: /cli/context is unavailable (HTTP 503); retrying"]);
 
     const { dir } = v.parse(v.object({ dir: v.string() }), result(claimed));

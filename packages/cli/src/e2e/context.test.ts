@@ -56,7 +56,7 @@ describe("prq context", () => {
       context: contextPath,
       question: null,
       answer: join(claimed.dir, "answer.md"),
-      next: "answer",
+      next: "checkout",
     });
     const written: unknown = JSON.parse(await readFile(contextPath, "utf8"));
     expect(written).toEqual({
