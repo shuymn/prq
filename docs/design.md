@@ -125,12 +125,16 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   fail as a stale claim; a retry while the job is `finalizing` is refused, and a resume does not return it. A submit
   that fails on the way leaves the job `claimed` for the agent to submit again. A local agent cannot report a failure:
   an unfinished job stays claimed until the host retries it.
-- When a submit gets 409 `stale_claim`, `prq` shall claim again once and, if that claim returns the same `jobId`,
-  resubmit the answer under the new `claimId` with the run the answer was produced under. The server accepts it only if
-  no retry came since; otherwise (another job, no job, or 409 `stale_claim` again) `prq` shall drop the answer and work
-  on what the claim returned. A claim that lands after its route answered 503 can replace the `claimId` the agent
-  holds (see [Notification and wait](#notification-and-wait-prq-wait)), and this recovers it without accepting an
-  answer from before a retry, whichever order the retry and the late claim came in.
+- When a submit gets 409 `stale_claim`, `prq` shall claim again once and, only if that claim returns the same job in
+  the same run at the same `workspaceSha`, resubmit the answer under the new `claimId` with the run the answer was
+  produced under; the server accepts it only if no retry came since. When the claim returns the same job and run at
+  another `workspaceSha`, `prq` shall keep the claim and drop the answer: a resume fixes the workspace again, and the
+  stored answer would be labelled with the new commit though it was written at the old one. Otherwise (another job, a
+  newer run, no job, or 409 `stale_claim` again) `prq` shall drop the answer and work on what the claim returned. A
+  claim that lands after its route answered 503 can replace the `claimId` the agent holds (see
+  [Notification and wait](#notification-and-wait-prq-wait)), and this recovers it without accepting an answer from
+  before a retry, whichever order the retry and the late claim came in, or one labelled with a workspace it was not
+  written at.
 - `context` gives a local agent what it works on its claimed job from: the pull request (canonical), its details
   (null before its first webhook), the job as its claim fixed it, and the conversation. The job's `workspaceSha` is
   fixed at the claim: an analysis's head; for an answer, the head of the latest completed analysis, else the current
@@ -295,10 +299,11 @@ UI, webhook and CLI input all enter through PrSession.
   `prq` and the UI take as a reason to try again, and the call keeps running; nothing orders where it lands against
   what the client does after the 503. A late submit stores its answer once, and the agent's resend gets `duplicate`. A
   claim that reaches the Hub after the 503 is a newer attempt than the agent's resend, so it can take the job under
-  another `claimId`; the agent's submit then gets 409 `stale_claim`, and the agent claims again and resubmits under the
-  run its answer was produced under, which the server accepts only if no retry came since (see
-  [Owner and jobs](#owner-and-jobs)). A late retry applies only if nothing changed the job after the view it came
-  from, and otherwise gets 409 `stale_job`. A `wait` is aborted, which ends it in the Hub. A late `context` only reads.
+  another `claimId`; the agent's submit then gets 409 `stale_claim`, and the agent claims again and, when that claim
+  returns the same job in the same run at the same workspace, resubmits under the run its answer was produced under,
+  which the server accepts only if no retry came since (see [Owner and jobs](#owner-and-jobs)). A late retry applies
+  only if nothing changed the job after the view it came from, and otherwise gets 409 `stale_job`. A `wait` is
+  aborted, which ends it in the Hub. A late `context` only reads.
   A contact the Hub could not record (see [Presence](#presence)) is not acknowledged either: the route answers 503
   `unavailable` before it calls the session, and `prq` tries again.
   The webhook route is bounded at 5 s instead, under GitHub's own limit (see [Intake](#intake)). A delivery its session
@@ -338,12 +343,15 @@ UI, webhook and CLI input all enter through PrSession.
   Every result has `next`, the step the AI takes next, so each command restates the procedure at the moment it
   applies. stderr carries notices (the version, a retry, an ended claim) and errors, each line starting `prq:`.
 - **Exit codes:** 0 done; 1 anything else; 2 `wait` timed out; 3 authentication failure, including no service token
-  configured (restarting cannot fix it); 4 claim mismatch, when the claim a command works under no longer holds.
+  configured (restarting cannot fix it); 4 claim mismatch, when the claim a command works under no longer holds (for
+  `submit`, the answer was dropped).
 
-  | Command                                         | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-  | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  | `prq wait [--timeout <seconds>]` (default 1500) | Polls `/cli/wait`, each poll asking for the time left up to 25 s, until it answers `ready`: `{"status":"ready","next":"claim"}`, 0. When the deadline passes after an answered poll, `{"status":"timeout","next":"wait"}`, 2; while the server was unavailable, 1                                                                                                                                                                                                                    |
-  | `prq claim`                                     | Calls `/cli/claim`. A job: saves the claim as the agent's record, then prints the server's answer with `dir` (the claim's job directory), `answer` (`<dir>/answer.md`), `saved` (whether that file exists) and `next` (`answer` when it does, else `context`), 0. No job: removes the record and prints `{"job":null,"next":"wait"}`, 0. A record of another directory that the claim replaced or removed gets a stderr line: that claim ended, and its answer must not be submitted |
+  | Command                                         | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+  | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `prq wait [--timeout <seconds>]` (default 1500) | Polls `/cli/wait`, each poll asking for the time left up to 25 s, until it answers `ready`: `{"status":"ready","next":"claim"}`, 0. When the deadline passes after an answered poll, `{"status":"timeout","next":"wait"}`, 2; while the server was unavailable, 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+  | `prq claim`                                     | Calls `/cli/claim`. A job: saves the claim as the agent's record, then prints the server's answer with `dir` (the claim's job directory), `answer` (`<dir>/answer.md`), `saved` (whether that file exists) and `next` (`answer` when it does, else `context`), 0. No job: removes the record and prints `{"job":null,"next":"wait"}`, 0. A record of another directory that the claim replaced or removed gets a stderr line: that claim ended, and its answer must not be submitted                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+  | `prq context`                                   | Reads `/cli/context` under the agent's record, from no cursor until `nextCursor` is null, and joins each message sent in parts: a part continues where the text collected so far ends, with the same whole length, and pages that do not join that way end with exit 1. Writes `context.json` (the pull request, the details, the job and the whole messages) into the claim's directory and, for an answer job, `question.md`: the text of the user message `job.target.messageId` names. Prints `dir`, `pr`, `details`, `job`, `messages` (their count), `context`, `question` (its path, or null), `answer` and `next` (`answer`), 0. When the claim no longer holds (409 `stale_claim`, 404 `unknown_job`): `{"status":"stale_claim","next":"claim"}`, 4, the record kept for the next claim to replace                                                                                                                                                                                                                                                                  |
+  | `prq submit`                                    | Sends `answer.md` of the record's directory, as written, under the record's claim and run; a missing or blank answer, or one over `MAX_ANSWER_CHARS` UTF-16 code units, is exit 1 before any request. Accepted, or `duplicate` for a resend after a lost response: removes the record and prints `{"status":…,"messageId":…,"next":"wait"}`, 0. 409 `stale_claim`: claims once (as `prq claim` does, its claim becoming the record) and resubmits under the new `claimId` with the original run only when the claim returns the same job in the same run at the same `workspaceSha`; otherwise drops the answer and prints `{"status":"dropped","reason":…,"claim":…,"next":…}`, 4, with `reason` `workspace_moved` when only the workspace moved, else the refusal's code, and `claim` and `next` as `prq claim` gives them (`claim` null for no job). 404 `unknown_job` or 409 `target_mismatch`: dropped without a claim, the record removed. 500 or a server unavailable past the retry window: exit 1, the record and the answer kept, so a rerun sends the same answer |
 
 - **Requests.** Every request is a JSON `POST` with the service token headers, no redirect followed, and a timeout. Its
   body is built through the route's `@prq/protocol` schema, so a bad local value fails before it is sent. A 2xx body
@@ -354,19 +362,23 @@ UI, webhook and CLI input all enter through PrSession.
   token it refuses. A 503, whatever its body (Access's keys unavailable, a Durable Object that did not answer, a contact
   the Hub could not record, an edge failure), a network failure and the client's timeout are retried: 503 is the
   server's one "try again", and every route is safe to send again (see
-  [Notification and wait](#notification-and-wait-prq-wait)). Any other status ends the command with exit 1.
+  [Notification and wait](#notification-and-wait-prq-wait)). 409 `stale_claim` and 404 `unknown_job`, and for a
+  submit 409 `target_mismatch`, say the claim no longer holds, which `context` and `submit` answer with exit 4 (above).
+  Any other status ends the command with exit 1.
 - **Timeouts and retries.** The client waits 5 s longer than a route's bound: `ROUTE_CALL_MS` (30 s) plus 5 s for
-  `claim`, and for `wait` the wait's bound plus `ROUTE_CALL_MS` plus 5 s, from the constants the server's routes use
-  (`@prq/protocol`). The route's own 503 then arrives before the client gives up, and a client timeout is a network or
-  edge failure. A retry comes 1 s after a failure, doubling to 15 s, with one stderr line per streak of failures. A
-  command other than `wait` starts no attempt later than 60 s after its first and then ends with exit 1, within 60 s
-  plus one request's timeout, under the 120 s a foreground command gets by default in Claude Code. `wait` retries until
-  its deadline.
+  `claim`, `context` and `submit`, and for `wait` the wait's bound plus `ROUTE_CALL_MS` plus 5 s, from the constants
+  the server's routes use (`@prq/protocol`). The route's own 503 then arrives before the client gives up, and a client
+  timeout is a network or edge failure. A retry comes 1 s after a failure, doubling to 15 s, with one stderr line per
+  streak of failures. A command other than `wait` starts no attempt later than 60 s after its first and then ends with
+  exit 1, within 60 s plus one request's timeout, under the 120 s a foreground command gets by default in Claude Code.
+  `wait` retries until its deadline.
 - **Local state**, under the state root:
 
   ```
   agents/<sha256(agentId) hex>.json         the agent's current claim: {agentId, claim, savedAt}
   jobs/<jobId>-r<run>-<workspaceSha|none>/  one claim's work: its job, run and workspace
+    context.json  question.md               written by prq context (question.md for an answer job)
+    answer.md                               written by the AI, read by prq submit
   ```
 
   The record is the one place a `claimId` lives between processes, one per agent ID, since an agent ID is one AI
@@ -375,6 +387,10 @@ UI, webhook and CLI input all enter through PrSession.
   agent IDs are case-sensitive while macOS file systems usually are not, and an ID can contain `/`. A claim that resumes
   the same job, run and workspace names the same directory, so an answer saved there before a restart is found again; a
   retry or a moved workspace names another, so an answer written under the earlier claim stays apart from the new one.
+  `submit` reads the answer only from the record's directory, so an answer is bound to its run and workspace by where
+  it is: it is never sent under a later run or labelled with a later workspace, even when the AI runs `prq claim` in
+  the middle of a job. The record, `context.json` and `question.md` are written through a temporary file and a rename,
+  so a reader sees a whole file.
 
 ### Versions
 
@@ -530,8 +546,9 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
   contributes instructions and references only. The pinned SHA means a skill's code does not change under the host.
 - **Local runner.** `prq context` returns the two prompts and materializes the registered skills into the job's
   worktree (for example `.prq/skills/<name>/`), so the local AI reads them as files. It reads the conversation page by
-  page, following `nextCursor`, and finds an answer's question there by the message ID its job names (see
-  [Owner and jobs](#owner-and-jobs)). A local agent may also use skills it already has on its own machine.
+  page, following `nextCursor`, joins a message sent in parts, finds an answer's question there by the message ID its
+  job names (see [Owner and jobs](#owner-and-jobs)), and writes the context and the question into the job's directory
+  (see [Local CLI](#local-cli-prq)). A local agent may also use skills it already has on its own machine.
 
 What is left out on purpose:
 
@@ -762,6 +779,8 @@ prq/
 │          ├─ client.ts          /cli/* over HTTP: the token headers, validation, authentication failures, the version notice
 │          ├─ retry.ts           client timeouts from the routes' bounds, retries and their window
 │          ├─ state.ts           the claim record and the job directories
+│          ├─ context.ts         the context's pages joined, an answer job's question
+│          ├─ answer.ts          the answer prq submit sends: answer.md, checked before any request
 │          ├─ commands/          one module per command
 │          ├─ e2e/               the compiled binary against the real Worker
 │          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process
