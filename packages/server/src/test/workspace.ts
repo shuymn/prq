@@ -164,6 +164,8 @@ export type FakeWorkspaceOptions = {
 export class FakeWorkspace implements WorkspaceClient {
   readonly prepares: WorkspaceTarget[] = [];
   readonly commands: (WorkspaceCommand & { target: WorkspaceTarget })[] = [];
+  // The sequences released, in order.
+  readonly releases: number[] = [];
   // A prepare that fails with this error, or never settles; a run that never settles.
   prepareFailure: Error | null = null;
   prepareHangs = false;
@@ -204,6 +206,10 @@ export class FakeWorkspace implements WorkspaceClient {
     const output = this.#git(command.argv);
     const page = await pageLines(this.#stream(output.stdout), command.page);
     return { exitCode: output.exitCode, page, stderr: output.stderr.slice(0, STDERR_CHARS) };
+  }
+
+  async release(seq: number): Promise<void> {
+    this.releases.push(seq);
   }
 
   #stream(bytes: Uint8Array): ReadableStream<Uint8Array> {

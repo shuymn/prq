@@ -40,7 +40,7 @@ afterEach(() => {
 
 const HEAD = sha("head");
 const BASE = sha("base");
-const TARGET: WorkspaceTarget = { sha: HEAD, baseSha: BASE };
+const TARGET: WorkspaceTarget = { fullName: "octo/rates", installationId: null, sha: HEAD, baseSha: BASE, seq: 1 };
 
 const RATES_BASE = ["export const rate = 1;", "export function total(n: number) {", "  return n * rate;", "}", ""].join(
   "\n",
@@ -72,7 +72,11 @@ async function tools(options: FakeWorkspaceOptions = {}, room = new ContextRoom(
 
 // A turn's tools over a workspace whose every command ends as `run` says, with the room given.
 function stubTools(run: WorkspaceClient["run"], room = new ContextRoom(1_048_576)) {
-  const workspace: WorkspaceClient = { prepare: async () => ({ sha: HEAD, mergeBase: BASE }), run };
+  const workspace: WorkspaceClient = {
+    prepare: async () => ({ sha: HEAD, mergeBase: BASE }),
+    run,
+    release: async () => undefined,
+  };
   return workspaceTools({ workspace, target: TARGET, prepared: { sha: HEAD, mergeBase: BASE }, room });
 }
 

@@ -39,7 +39,7 @@ import {
 } from "./test/model.ts";
 import { advance, until } from "./test/provider.ts";
 import { gate, jobOf, jobRows, prSessionSeams, retryIn, revOf, sessionSql } from "./test/session.ts";
-import { BASE, push, sha } from "./test/webhook.ts";
+import { BASE, INSTALLATION_ID, push, sha } from "./test/webhook.ts";
 import { FakeWorkspace } from "./test/workspace.ts";
 
 const sockets: AgentSocket[] = [];
@@ -691,7 +691,10 @@ describe("tools", () => {
 
     expect(model.calls[0]?.tools).toBeUndefined();
     expect(toolNames(model.calls[1])).toEqual(["diff", "grep", "list_files", "read_file"]);
-    expect(workspace.prepares).toEqual([{ sha: sha("a"), baseSha: BASE }]);
+    // The repository and installation of the pull request's webhooks, under the analysis turn's sequence (the second).
+    expect(workspace.prepares).toEqual([
+      { fullName: "octo/turn", installationId: INSTALLATION_ID, sha: sha("a"), baseSha: BASE, seq: 2 },
+    ]);
   });
 
   it("fails a job whose workspace cannot be prepared, calling no model", async () => {
@@ -707,7 +710,9 @@ describe("tools", () => {
     await untilState(stub, sha("a"), "failed");
 
     expect((await jobRows(stub))[0]?.failure).toBe("workspace: the fetch of the commit failed");
-    expect(workspace.prepares).toEqual([{ sha: sha("a"), baseSha: BASE }]);
+    expect(workspace.prepares).toEqual([
+      { fullName: "octo/turn", installationId: INSTALLATION_ID, sha: sha("a"), baseSha: BASE, seq: 1 },
+    ]);
     expect(model.calls).toHaveLength(0);
   });
 });

@@ -49,6 +49,8 @@ export type PullRequestState = { headSha: string; updatedAt: number };
 export interface GithubClient {
   // GitHub's pull request, read once with the installation's token.
   pullRequest(installationId: number, pr: PrRef): Promise<PullRequestState>;
+  // The installation's token, minted within GITHUB_CALL_MS or taken from the cache.
+  installationToken(installationId: number): Promise<string>;
 }
 
 function createClient(config: GithubAppConfig): GithubClient {
@@ -71,6 +73,7 @@ function createClient(config: GithubAppConfig): GithubClient {
     return (await withTimeout(minted, GITHUB_CALL_MS, "the installation token")).token;
   };
   return {
+    installationToken: token,
     pullRequest: async (installationId, pr) => {
       const response = await github("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
         owner: pr.owner,

@@ -12,10 +12,21 @@
     "bindings": [
       { "name": "Hub", "class_name": "Hub" },
       { "name": "PrSession", "class_name": "PrSession" },
+      { "name": "Workspace", "class_name": "Workspace" },
     ],
   },
-  // The Agents SDK keeps its state in SQLite, so both classes are SQLite-backed.
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub", "PrSession"] }],
+  // The Agents SDK keeps its state in SQLite, so both classes are SQLite-backed; the Workspace keeps its turn
+  // sequence and ready record there too.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Hub", "PrSession"] },
+    { "tag": "v2", "new_sqlite_classes": ["Workspace"] },
+  ],
+  // The cloud workspace's container (src/workspace.ts, Dockerfile): one per session, on the basic instance type.
+  "containers": [{ "class_name": "Workspace", "image": "./Dockerfile", "instance_type": "basic" }],
+  // Tests and `wrangler dev` run without Docker: the vitest pool and wrangler's test harness read this, and the
+  // Workspace then has no container. The owner's check (`pnpm run check:workspace` in packages/cli, AGENTS.md) runs it
+  // with Docker through an inline copy of this config that turns containers on (packages/cli/src/test/worker.ts).
+  "dev": { "enable_containers": false },
   "observability": {
     "enabled": true,
   },

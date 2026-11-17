@@ -16,12 +16,24 @@
 // where git follows what the checks do not read. The canary (canary.ts) guards the real repository against that.
 
 import { execFile } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import type { PrRef } from "@prq/protocol";
+
+import {
+  type Checkout,
+  opArgv,
+  prepareArgv,
+  prepareCheckout,
+  type RecordStore,
+  type StepResult,
+  tokenPath,
+  toolArgv,
+} from "../../../server/src/workspace-git.ts";
 
 const run = promisify(execFile);
 
@@ -177,6 +189,23 @@ export class FixtureGit {
     return clone;
   }
 
+  // A checkout the cloud workspace's git procedure makes (packages/server/src/workspace-git.ts), at a name in the root
+  // that does not exist yet. The procedure builds its own argv for the checkout's directory; the fixture runs only argv
+  // that touch that directory, after checking it again.
+  async workspaceCheckout(name: string): Promise<FixtureCheckout> {
+    const path = await this.#fresh(name);
+    const key = normalize(name);
+    return new FixtureCheckout(
+      {
+        dir: () => this.#checkoutDir(key),
+        run: (argv) => this.#step(key, argv),
+        remote: async (repo) => `file://${(await this.#check([repo]))[0] ?? ""}`,
+        path: (file) => this.#path(join(key, file)),
+      },
+      path,
+    );
+  }
+
   // The variables the installed git lists as local to a repository.
   async localEnvVars(): Promise<string[]> {
     return (await this.#git(this.root, ["rev-parse", "--local-env-vars"])).split("\n");
@@ -188,6 +217,50 @@ export class FixtureGit {
       env: this.env,
     });
     return stdout.trim();
+  }
+
+  // The checkout's directory, checked: inside the root, and once it has a .git entry, a directory whose git directory
+  // and common directory are inside the root.
+  async #checkoutDir(name: string): Promise<string> {
+    const dir = await this.#path(name);
+    const entry = await lstat(join(dir, ".git")).catch(() => null);
+    if (entry === null) {
+      return dir;
+    }
+    if (!entry.isDirectory()) {
+      throw new Error(`the .git of the checkout ${name} is not a directory`);
+    }
+    const found = await this.#git(dir, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--absolute-git-dir",
+      "--git-common-dir",
+    ]);
+    for (const location of found.split("\n")) {
+      if (!this.#inside(await this.#resolved(location))) {
+        throw new Error(`git places a git directory of the checkout ${name} outside the fixture root ${this.root}`);
+      }
+    }
+    return dir;
+  }
+
+  // One step of the workspace procedure in the checkout: only the procedure's own commands for its directory run, with
+  // the fixture's environment, and a failed one answers with its exit code as the container would.
+  async #step(name: string, argv: readonly string[]): Promise<StepResult> {
+    const dir = await this.#checkoutDir(name);
+    if (!isCheckoutStep(argv, dir)) {
+      throw new Error(`not a step of the workspace procedure for the checkout: ${argv.join(" ")}`);
+    }
+    const [program = "", ...args] = argv;
+    try {
+      const { stdout, stderr } = await run(program, args, { env: this.env, cwd: this.root });
+      return { exitCode: 0, stdout, stderr };
+    } catch (error) {
+      if (!isExitFailure(error)) {
+        throw error;
+      }
+      return { exitCode: error.code, stdout: error.stdout, stderr: error.stderr };
+    }
   }
 
   // The directories of repositories, each once its .git entry is checked to be of the kind recorded for it, and the
@@ -300,6 +373,129 @@ export class FixtureGit {
   #inside(path: string): boolean {
     return path === this.root || path.startsWith(`${this.root}${sep}`);
   }
+}
+
+// execFile's failure of a command that ran and exited with a status, its output with it.
+function isExitFailure(error: unknown): error is Error & { code: number; stdout: string; stderr: string } {
+  return (
+    error instanceof Error &&
+    typeof Reflect.get(error, "code") === "number" &&
+    typeof Reflect.get(error, "stdout") === "string" &&
+    typeof Reflect.get(error, "stderr") === "string"
+  );
+}
+
+// The `-c` settings the workspace procedure passes to git itself: its fetch's stall bound and its checkout's advice.
+const PROCEDURE_CONFIG = new Set(
+  [...prepareArgv.fetch(".", []), ...prepareArgv.checkout(".", "")].filter((_, index, all) => all[index - 1] === "-c"),
+);
+
+// Whether git's global options, up to its subcommand, are only the procedure's own `-c` settings: never another -C,
+// --git-dir, --work-tree, --exec-path, --config-env or another -c, each of which can move where git reads or writes.
+function onlyProcedureOptions(args: readonly string[]): boolean {
+  for (let index = 0; index < args.length; index += 2) {
+    const arg = args[index] ?? "";
+    if (!arg.startsWith("-")) {
+      return true;
+    }
+    if (arg !== "-c" || !PROCEDURE_CONFIG.has(args[index + 1] ?? "")) {
+      return false;
+    }
+  }
+  return false;
+}
+
+// Whether argv is one of the workspace procedure's commands for the checkout directory: a git command in it with only
+// the procedure's own global options, its creation or removal, or a read or write of its ready token.
+export function isCheckoutStep(argv: readonly string[], dir: string): boolean {
+  const same = (expected: readonly string[]) =>
+    expected.length === argv.length && expected.every((arg, index) => arg === argv[index]);
+  if (argv[0] === "git" && argv[1] === "-C") {
+    return argv[2] === dir && onlyProcedureOptions(argv.slice(3));
+  }
+  const token = argv[4] ?? "";
+  return (
+    same(prepareArgv.wipe(dir)) ||
+    same(prepareArgv.init(dir)) ||
+    same(prepareArgv.readToken(dir)) ||
+    (/^[0-9a-f]+$/.test(token) && same(prepareArgv.writeToken(dir, token)))
+  );
+}
+
+// What a FixtureCheckout reaches of its FixtureGit.
+type CheckoutRunner = {
+  dir(): Promise<string>;
+  run(argv: readonly string[]): Promise<StepResult>;
+  // A repository of the fixture as a file:// remote.
+  remote(repo: FixtureRepo): Promise<string>;
+  // A file in the checkout, checked to resolve inside the root.
+  path(file: string): Promise<string>;
+};
+
+// A checkout of the cloud workspace's procedure, and the reads the tools make in it. `log` holds every command the
+// procedure ran, in order, with the checkout's directory as <dir>; a test's record store may add its own entries.
+export class FixtureCheckout {
+  readonly path: string;
+  readonly log: string[] = [];
+  readonly #runner: CheckoutRunner;
+
+  constructor(runner: CheckoutRunner, path: string) {
+    this.#runner = runner;
+    this.path = path;
+  }
+
+  async #run(argv: readonly string[]): Promise<StepResult> {
+    this.log.push(argv.join(" ").replaceAll(this.path, "<dir>"));
+    return this.#runner.run(argv);
+  }
+
+  // The production prepare of the commit and the base from the remote, through the record store.
+  async prepare(remote: FixtureRepo, target: { sha: string; baseSha: string }, store: RecordStore): Promise<Checkout> {
+    const url = await this.#runner.remote(remote);
+    const dir = await this.#runner.dir();
+    const token = randomBytes(16).toString("hex");
+    // Built field by field: a remote the target object carries is never used.
+    const checked = { remote: url, sha: target.sha, baseSha: target.baseSha };
+    return prepareCheckout((argv) => this.#run(argv), store, dir, checked, token);
+  }
+
+  // The tools' reads at a commit.
+  async show(sha: string, path: string): Promise<StepResult> {
+    return this.#run(opArgv(await this.#runner.dir(), toolArgv.readFile(sha, path)));
+  }
+
+  async grep(sha: string, pattern: string): Promise<StepResult> {
+    return this.#run(opArgv(await this.#runner.dir(), toolArgv.grep(sha, pattern)));
+  }
+
+  async diff(base: string, sha: string, path?: string): Promise<StepResult> {
+    return this.#run(opArgv(await this.#runner.dir(), toolArgv.diff(base, sha, path)));
+  }
+
+  // What a deepen cut short by SIGKILL leaves: git's lock on the shallow file, and the file itself cut short.
+  async interruptDeepen(): Promise<void> {
+    const shallow = await this.#runner.path(join(".git", "shallow"));
+    const content = await readFile(shallow, "utf8");
+    await writeFile(shallow, content.slice(0, Math.floor(content.length / 2)));
+    await writeFile(await this.#runner.path(join(".git", "shallow.lock")), "");
+  }
+
+  // The ready token gone, as a stopped container's disk loses it.
+  async dropReadyToken(): Promise<void> {
+    await rm(await this.#runner.path(relativeToken()));
+  }
+
+  async has(file: string): Promise<boolean> {
+    return lstat(await this.#runner.path(file)).then(
+      () => true,
+      () => false,
+    );
+  }
+}
+
+// The ready token's path in a checkout.
+function relativeToken(): string {
+  return tokenPath(".").slice(2);
 }
 
 // A repository at a name in a fixture root, and what the tests do with it in git. A name an operation takes for a path

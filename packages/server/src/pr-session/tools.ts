@@ -10,6 +10,7 @@ import {
 } from "ai";
 import * as v from "valibot";
 
+import { toolArgv } from "../workspace-git.ts";
 import { STREAM_TIMEOUT } from "./model.ts";
 import { cutAt, fitPage, MIN_PAGE_CHARS, type Page, type PageRequest } from "./pages.ts";
 import { ContextRoom } from "./room.ts";
@@ -74,33 +75,6 @@ const DiffInput = v.object({
   startLine: v.optional(StartLine),
   startChar: v.optional(StartChar),
 });
-
-// The git command each tool runs, as argv after `git`.
-const toolArgv = {
-  listFiles: (sha: string, path?: string) => ["ls-tree", "-r", "--name-only", "--end-of-options", sha, ...opt(path)],
-  readFile: (sha: string, path: string) => ["show", "--end-of-options", `${sha}:${path}`],
-  grep: (sha: string, pattern: string, path?: string, ignoreCase?: boolean) => [
-    "grep",
-    "-n",
-    "-I",
-    "-E",
-    ...(ignoreCase === true ? ["-i"] : []),
-    "-e",
-    pattern,
-    "--end-of-options",
-    sha,
-    "--",
-    ...opt(path),
-  ],
-  diff: (base: string, sha: string, path?: string) =>
-    path === undefined
-      ? ["diff", "--numstat", "--end-of-options", base, sha, "--"]
-      : ["diff", "--end-of-options", base, sha, "--", path],
-};
-
-function opt(path: string | undefined): string[] {
-  return path === undefined ? [] : [path];
-}
 
 type ToolContext = {
   workspace: WorkspaceClient;

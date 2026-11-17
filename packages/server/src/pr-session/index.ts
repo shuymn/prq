@@ -23,7 +23,7 @@ import { refuseSubAgent, sendServerVersion } from "../agents.ts";
 import { readGithubAppConfig, readModelConfig } from "../config.ts";
 import { type GithubClient, githubFor, githubStatus, type PullRequestState } from "../github.ts";
 import { errorName, log } from "../log.ts";
-import { hubStub } from "../names.ts";
+import { hubStub, workspaceStub } from "../names.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
 import { SerialQueue, WaitTimeout, withTimeout } from "../wait.ts";
 import {
@@ -71,6 +71,7 @@ import {
   pendingInbox,
   readDetails,
   readHead,
+  readInstallation,
   readOwner,
   recordAttempt,
   recordEvent,
@@ -114,6 +115,8 @@ import {
   raceAbort,
   WORKSPACE_CALL_MS,
   type WorkspaceClient,
+  workspaceClient,
+  WorkspaceLost,
   type WorkspaceTarget,
 } from "./workspace.ts";
 
@@ -126,6 +129,8 @@ const RETRY_MAX_S = 60;
 const HUB_CALL_MS = 10_000;
 // How long a submit waits for the conversation to settle before entering the history queue.
 const STABLE_WAIT_MS = 30_000;
+// How long the release of a turn's workspace may take.
+export const RELEASE_MS = 10_000;
 
 // A local agent's answer to its claimed job (/cli/submit).
 export type Submission = {
@@ -200,6 +205,25 @@ function contextMessage(
 // A stored message as the AI SDK reads it: the session store keeps the UIMessages the SDK and prq wrote, untyped.
 function isUIMessage<M extends { role: string }>(message: M): message is M & UIMessage {
   return message.role === "user" || message.role === "assistant" || message.role === "system";
+}
+
+// The workspace as a turn's tools call it: a failure after which the turn cannot go on (WorkspaceLost) ends the turn
+// with that reason, rather than reaching the model as text it cannot act on.
+function endingTurnWhenLost(client: WorkspaceClient, end: (reason: string) => void): WorkspaceClient {
+  return {
+    prepare: (target, signal) => client.prepare(target, signal),
+    run: async (target, command, signal) => {
+      try {
+        return await client.run(target, command, signal);
+      } catch (error) {
+        if (error instanceof WorkspaceLost) {
+          end(error.message);
+        }
+        throw error;
+      }
+    },
+    release: (seq) => client.release(seq),
+  };
 }
 
 // One pull request's conversation (named by sessionName), its owner and its jobs. It is the only place job state
@@ -541,10 +565,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return config?.ok === true ? config.config.MODEL_API_KEY : undefined;
   }
 
-  // The workspace a job with a workspace commit reads its code from (spied on in tests); none until the Sandbox exists,
-  // so such a job fails rather than producing a result without the code it is about.
+  // The workspace a job with a workspace commit reads its code from (spied on in tests): the session's Workspace, which
+  // fetches through the GitHub App's installation token. None while the App is not configured, so such a job fails
+  // rather than producing a result without the code it is about.
   protected workspaceFor(_job: Job): WorkspaceClient | null {
-    return null;
+    return this.github() === undefined ? null : workspaceClient(workspaceStub(this.env, this.#pr()));
   }
 
   // The model's context window in tokens (spied on in tests), which the tools' room is measured against. Read only for
@@ -1184,6 +1209,8 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
         this.#bound = null;
       }
     }
+    // What the turn started in its workspace stops (a rebuild it no longer waits for); the commit does not wait for it.
+    const released = this.#release(binding);
     try {
       await this.#writes.run(() => this.#commitTurn(binding));
     } catch (error) {
@@ -1193,7 +1220,21 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     } finally {
       this.#liveTurns.delete(turnId);
     }
+    await released;
     await this.#deliverOutbox();
+  }
+
+  // Tells the turn's workspace that the turn has ended, best effort within RELEASE_MS: a release that is lost still
+  // leaves the Workspace's own bounds, and the next turn's newer sequence, to stop what it was doing.
+  async #release({ jobId, workspace }: Binding): Promise<void> {
+    if (workspace === undefined) {
+      return;
+    }
+    try {
+      await withTimeout(workspace.client.release(workspace.seq), RELEASE_MS, "the workspace's release");
+    } catch (error) {
+      log("prq.workspace.release_failed", { pr: this.name, jobId, error: errorName(error) }, "warn");
+    }
   }
 
   // The bound turn's model call, streamed: the job must still be running under this turn. A job with a workspace commit
@@ -1206,24 +1247,40 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       return undefined;
     }
     const job = this.#job(row);
-    const workspace = job.workspaceSha === null ? null : this.workspaceFor(job);
-    if (job.workspaceSha !== null && workspace === null) {
+    const client = job.workspaceSha === null ? null : this.workspaceFor(job);
+    if (job.workspaceSha !== null && client === null) {
       outcome.failure = WORKSPACE_NOT_AVAILABLE;
       return undefined;
     }
-    const signal = abortSignal ?? new AbortController().signal;
+    // The turn's own abort, besides the SDK's: a workspace that cannot go on ends the turn with its reason.
+    const lost = new AbortController();
+    const signal = abortSignal === undefined ? lost.signal : AbortSignal.any([abortSignal, lost.signal]);
     const details = readDetails(this.#sql);
     let code: { workspace: WorkspaceClient; target: WorkspaceTarget; prepared: PreparedWorkspace } | null = null;
-    if (workspace !== null && job.workspaceSha !== null) {
+    if (client !== null && job.workspaceSha !== null) {
       if (details === null) {
         outcome.failure = "workspace: the pull request's base is not known";
         return undefined;
       }
-      const target = { sha: job.workspaceSha, baseSha: details.baseSha };
-      const prepared = await this.#prepare(workspace, target, signal, outcome);
+      if (row.turn_seq === null) {
+        throw new Error("a running job has its turn's sequence");
+      }
+      const target = {
+        fullName: details.fullName,
+        installationId: readInstallation(this.#sql),
+        sha: job.workspaceSha,
+        baseSha: details.baseSha,
+        seq: row.turn_seq,
+      };
+      binding.workspace = { client, seq: target.seq };
+      const prepared = await this.#prepare(client, target, signal, outcome);
       if (prepared === null) {
         return undefined;
       }
+      const workspace = endingTurnWhenLost(client, (reason) => {
+        outcome.failure ??= reason;
+        lost.abort(new WorkspaceLost(reason));
+      });
       code = { workspace, target, prepared };
     }
     const messages = await this.#turnMessages(row);
@@ -1244,7 +1301,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       model,
       system,
       messages: modelMessages,
-      ...(abortSignal === undefined ? {} : { abortSignal }),
+      abortSignal: signal,
       ...TURN_LOOP,
       ...(loop === null
         ? {}

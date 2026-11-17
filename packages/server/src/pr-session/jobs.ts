@@ -30,6 +30,7 @@ export type JobRow = {
   unresolved_failure: 0 | 1;
   // The cloud turn a running job is bound to.
   turn_id: string | null;
+  turn_seq: number | null;
 };
 
 export function jobTarget(row: JobRow): JobTarget {
@@ -72,6 +73,12 @@ export function readDetails(sql: SqlStorage): PrDetails | null {
     return null;
   }
   return { fullName, title, state, url, headSha, baseSha };
+}
+
+// The GitHub App installation the latest webhook with details came through, null while none named one.
+export function readInstallation(sql: SqlStorage): number | null {
+  return sql.exec<{ installation_id: number | null }>("SELECT installation_id FROM prq_session WHERE id = 1").one()
+    .installation_id;
 }
 
 // A verified webhook delivery, as the route hands it to the session and the inbox keeps it. at is GitHub's time of the
@@ -460,13 +467,16 @@ export function failPending(sql: SqlStorage, failure: string, now: number): JobR
     .toSorted((a, b) => a.seq - b.seq);
 }
 
+// The sequence number of a turn being started: one more than the session's count, which addStart advances to it.
+const NEXT_TURN_SEQ = "(SELECT turn_seq + 1 FROM prq_session WHERE id = 1)";
+
 // The next pending job → running under a new turn, unless a job is running. Its workspace is fixed as a claim fixes
 // it, and its run's usage counts a start.
 export function startNext(sql: SqlStorage, turnId: string, now: number): JobRow | undefined {
   const row = sql
     .exec<JobRow>(
       `UPDATE prq_jobs SET rev = rev + 1, state = 'running', turn_id = ?, workspace_sha = ${WORKSPACE_SHA},
-         updated_at = ?
+         turn_seq = ${NEXT_TURN_SEQ}, updated_at = ?
        WHERE state = 'pending' AND job_id = (${NEXT_PENDING})
          AND NOT EXISTS (SELECT 1 FROM prq_jobs WHERE state = 'running')
        RETURNING *`,
@@ -480,8 +490,10 @@ export function startNext(sql: SqlStorage, turnId: string, now: number): JobRow 
   return row;
 }
 
-// A start of the job's current run; the first one also dates the run.
+// A start of the job's current run under its new turn: the session counts the turn (its sequence is the job's
+// turn_seq), and the run's usage counts the start; the first one also dates the run.
 function addStart(sql: SqlStorage, row: JobRow, now: number): void {
+  sql.exec("UPDATE prq_session SET turn_seq = ? WHERE id = 1", row.turn_seq);
   sql.exec(
     `INSERT INTO prq_job_usage (job_id, run, starts, started_at) VALUES (?, ?, 1, ?)
      ON CONFLICT (job_id, run) DO UPDATE SET starts = starts + 1`,
@@ -501,7 +513,7 @@ export function runningJobs(sql: SqlStorage): JobRow[] {
 export function restartTurn(sql: SqlStorage, row: JobRow, turnId: string, now: number): JobRow | undefined {
   const restarted = sql
     .exec<JobRow>(
-      `UPDATE prq_jobs SET rev = rev + 1, turn_id = ?, updated_at = ?
+      `UPDATE prq_jobs SET rev = rev + 1, turn_id = ?, turn_seq = ${NEXT_TURN_SEQ}, updated_at = ?
        WHERE job_id = ? AND state = 'running' AND turn_id IS ? RETURNING *`,
       turnId,
       now,

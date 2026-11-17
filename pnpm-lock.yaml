@@ -206,6 +206,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: 'catalog:'
         version: 5.20261113.1
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.2
       fast-check:
         specifier: 'catalog:'
         version: 4.10.2
