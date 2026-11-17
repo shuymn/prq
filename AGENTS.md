@@ -24,8 +24,8 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
   (`packages/cli/src/test/canary.ts`) fails the CLI's test run when the repository's refs (other than T3 Code's
   checkpoints under `refs/t3/`), `HEAD`, worktrees, config, index entries or hooks, or the user's git identity, changed
   during it.
-- lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows,
-  and commitlint on the message.
+- lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows, a
+  `fileToken` check on `design/prq.pen`, and commitlint on the message.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
   change, and `mise exec -- gh-infra apply .github/infra.yaml` applies it once the owner approves.
 
@@ -45,7 +45,7 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
   components in `design/components.md`. Anything missing is added to the design and the inventory first
   (`design/README.md`).
 - `design/prq.pen` is written only by the Pencil app, and oxfmt skips it. Commit it as Pencil saved it, minus its
-  top-level `fileToken` (`design/README.md`).
+  top-level `fileToken`, which the pre-commit hook rejects (`design/README.md`).
 - Commits, pull requests, docs and issues are public and in English. They describe the change and its reasons with
   repository-relative paths, and leave out absolute local paths, private account or infrastructure identifiers,
   internal domains, and how the work was done (sessions, agents, reviews).
@@ -53,4 +53,6 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
 ## Commits and pull requests
 
 - Commit subjects use Conventional Commits (commitlint checks them; the mise-update bot's "Update mise tools" is the
-  exception). Commits are signed. Pull requests merge with a merge commit.
+  exception). A commit message has no footer: commitlint fails a body line it parses as a footer token, such as a
+  wrapped line starting with `word:` or a `Closes #5` (pull request bodies close issues), and a breaking change uses `!`
+  in the subject. Commits are signed. Pull requests merge with a merge commit.
