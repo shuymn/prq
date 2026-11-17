@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { prSessionStub } from "./names.ts";
 import { TURN_INTERRUPTED } from "./pr-session/cloud.ts";
 import { PrSession } from "./pr-session/index.ts";
-import { captureLogs, type LogEntry } from "./test/access.ts";
+import { captureLogs, events } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import {
   type CloudSession,
@@ -38,10 +38,6 @@ afterEach(() => {
 });
 
 const Q1 = question("q1");
-
-function events(logs: LogEntry[], event: string): Record<string, unknown>[] {
-  return logs.map((log) => log.entry).filter((entry) => entry["event"] === event);
-}
 
 // A first turn held at a gate in its stream, after its text.
 function heldScript(held: Gate, answer = "first answer"): Script {
@@ -104,7 +100,7 @@ describe("restart after a reset", () => {
   });
 
   it("runs a job again whose turn was lost mid-stream, and stores only the second turn's result", async () => {
-    captureLogs();
+    const logs = captureLogs();
     const session = await cloudSession("recovery", sockets);
     const held = await gate(session.stub);
     const model = new ScriptedModel().add(heldScript(held));
@@ -122,6 +118,8 @@ describe("restart after a reset", () => {
     expectAppended(before, await messageRows(session), [`answer-${job.job_id}`]);
     const stored = await storedMessages(session.path, session.token);
     expect(textOf(stored.at(-1))).toBe("second answer");
+    // The SDK's write of the second turn's streamed message added nothing; the cut turn's added nothing either.
+    expect(events(logs, "prq.chat.dropped")).toMatchObject([{ role: "assistant", messages: 1 }]);
   });
 
   it("runs a job again whose turn ended but whose commit had not appended its result", async () => {

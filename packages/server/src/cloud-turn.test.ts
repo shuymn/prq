@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WORKSPACE_NOT_AVAILABLE } from "./pr-session/cloud.ts";
 import { PrSession } from "./pr-session/index.ts";
 import { NO_ANSWER_TEXT } from "./pr-session/turn.ts";
-import { captureLogs, type LogEntry } from "./test/access.ts";
+import { captureLogs, events } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import {
   cloudSession,
@@ -45,10 +45,6 @@ afterEach(() => {
 const Q1 = question("q1");
 const Q2 = question("q2");
 const Q3 = question("q3");
-
-function events(logs: LogEntry[], event: string): Record<string, unknown>[] {
-  return logs.map((log) => log.entry).filter((entry) => entry["event"] === event);
-}
 
 async function stored(session: { path: string; token: string }, id: string): Promise<UIMessage | undefined> {
   return (await storedMessages(session.path, session.token)).find((message) => message.id === id);

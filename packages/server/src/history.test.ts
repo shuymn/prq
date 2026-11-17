@@ -517,26 +517,6 @@ describe("cloud turns", () => {
     expect(dropped(logs)).toEqual([{ role: "assistant", messages: 1 }]);
   });
 
-  it("stores the restarted turn's result only, after a reset cut a turn mid-stream", async () => {
-    const logs = captureLogs();
-    const cloud = await cloudSession("history", sockets);
-    const held = await gate(cloud.stub);
-    const model = new ScriptedModel().add([...text("cut"), { hold: held }, finish()]);
-    useCloudModel(model);
-    await cloud.client.chat([Q1]);
-    await held.reached();
-    const before = await messageRows(cloud);
-
-    await abortAllDurableObjects();
-    model.add(answerScript("answer one"));
-    const stub = await prSessionStub(env, cloud.ref);
-    await untilState(stub, "q1", "done");
-
-    const job = await jobOf(stub, "q1");
-    expectAppended(before, await messageRows(cloud), [`answer-${job.job_id}`]);
-    expect(dropped(logs)).toEqual([{ role: "assistant", messages: 1 }]);
-  });
-
   it("stores nothing of a cut turn's stream that a connection resumes after a reset", async () => {
     const logs = captureLogs();
     const cloud = await cloudSession("history", sockets);
