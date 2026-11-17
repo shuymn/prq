@@ -42,8 +42,12 @@ export function errorReason(error: unknown): string {
   return reasonText(error instanceof Error ? error.message : String(error));
 }
 
-// Why a turn that reached the model failed, or null when it ended normally. Only a final `stop` commits a result: a
-// cut-short answer (the output limit, the content filter) or any other ending is not stored as done.
+// The reason a turn that stopped normally fails when its result holds no answer text (reasoning only, or nothing): as
+// done it would leave the author nothing, and a done job cannot be retried.
+export const NO_ANSWER_TEXT = "the model returned no answer text";
+
+// Why a turn that reached the model failed, or null when it ended normally. Only a final `stop` with answer text
+// commits a result: a cut-short answer (the output limit, the content filter) or any other ending is not stored as done.
 export function turnFailure(outcome: TurnOutcome): string | null {
   if (outcome.failure !== undefined) {
     return outcome.failure;
@@ -56,7 +60,7 @@ export function turnFailure(outcome: TurnOutcome): string | null {
   }
   switch (outcome.finishReason) {
     case "stop":
-      return outcome.message === undefined ? "the turn ended without a response" : null;
+      return outcome.message !== undefined && hasText(resultParts(outcome.message.parts)) ? null : NO_ANSWER_TEXT;
     case "length":
       return "the model stopped at its output limit";
     case "content-filter":
@@ -82,9 +86,9 @@ export function resultParts(parts: UIMessage["parts"]): UIMessage["parts"] {
     .map((part) => (part.type === "text" && part.state === "streaming" ? { ...part, state: "done" } : part));
 }
 
-// Whether a response holds text worth keeping as incomplete.
+// Whether parts hold text that is not blank: an answer worth committing, or text worth keeping as incomplete.
 export function hasText(parts: UIMessage["parts"]): boolean {
-  return parts.some((part) => part.type === "text" && part.text.length > 0);
+  return parts.some((part) => part.type === "text" && part.text.trim().length > 0);
 }
 
 // The message a failed run's text is kept as. Its own ID per run leaves <kind>-<jobId> for a later success.

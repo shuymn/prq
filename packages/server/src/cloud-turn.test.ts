@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WORKSPACE_NOT_AVAILABLE } from "./pr-session/cloud.ts";
 import { PrSession } from "./pr-session/index.ts";
+import { NO_ANSWER_TEXT } from "./pr-session/turn.ts";
 import { captureLogs, type LogEntry } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import {
@@ -403,6 +404,32 @@ describe("finish reasons", () => {
     expect(textOf(await stored(session, `answer-${job.job_id}-r1-incomplete`))).toBe("cut short");
     expect(await stored(session, `answer-${job.job_id}`)).toBeUndefined();
   });
+});
+
+describe("no answer text", () => {
+  it.for([
+    ["reasoning only", [...reasoning("thinking it over"), finish()]],
+    ["blank text", [...text(" \n"), finish()]],
+  ] satisfies [string, StreamPart[]][])(
+    "fails a turn that stopped with %s, storing nothing, so a retry can run it again",
+    async ([, script]) => {
+      captureLogs();
+      const session = await cloudSession("turn", sockets);
+      const { stub, client } = session;
+      useCloudModel(new ScriptedModel().add(script, answerScript("answer one")));
+      const before = await messageRows(session);
+
+      await client.chat([Q1]);
+      await untilState(stub, "q1", "failed");
+
+      const job = await jobOf(stub, "q1");
+      expect(job.failure).toBe(NO_ANSWER_TEXT);
+      expectAppended(before, await messageRows(session), ["q1"]);
+      expect(await retryIn(stub, job.job_id)).toEqual({ status: "retried" });
+      await untilState(stub, "q1", "done");
+      expect(textOf(await stored(session, `answer-${job.job_id}`))).toBe("answer one");
+    },
+  );
 });
 
 describe("no client tools", () => {
