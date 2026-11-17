@@ -1,6 +1,9 @@
 // The real Worker (packages/server/wrangler.jsonc) in a local runtime through wrangler's test harness, with the secrets
 // it reads passed in. Its fetch of Access's key set is served here: the harness sends the Worker's outbound requests to
-// this process's globalThis.fetch, which a wrapper answers for the key set URL and passes on for anything else.
+// this process's globalThis.fetch, which a wrapper answers for the key set URL and passes on for anything else, its
+// response decoded once.
+// The harness also loads packages/server/.dev.vars, which may hold a model provider's settings for a manual check: the
+// Worker gets a model only when the caller passes one, so the tests never reach a provider.
 
 import { fileURLToPath } from "node:url";
 
@@ -39,7 +42,36 @@ export type Worker = {
   sql(className: "Hub" | "PrSession", name: string, query: string, ...bindings: unknown[]): Promise<unknown[]>;
 };
 
-export async function startWorker(): Promise<Worker> {
+// The content codings Node's fetch decodes. Their responses arrive decoded with the content-encoding header kept, and
+// the harness hands them to the Worker as they are, so workerd would decode the body again and fail (a Brotli stream:
+// "Brotli decompression failed."). At this Node-to-workerd boundary, a body Node decoded is passed on without the
+// header, so it is decoded once; a response without a body is passed on unchanged.
+const DECODED_CODINGS = new Set(["gzip", "x-gzip", "deflate", "br", "zstd"]);
+
+function decodedOnce(response: Response): Response {
+  if (response.body === null) {
+    return response;
+  }
+  const codings = (response.headers.get("content-encoding") ?? "")
+    .split(",")
+    .map((coding) => coding.trim().toLowerCase())
+    .filter((coding) => coding !== "");
+  if (codings.length === 0 || !codings.every((coding) => DECODED_CODINGS.has(coding))) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  headers.delete("content-encoding");
+  headers.delete("content-length");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+// The cloud agent's model settings (packages/server/src/env.d.ts).
+export type ModelSettings = Record<"MODEL_BASE_URL" | "MODEL_API_KEY" | "MODEL_ID" | "MODEL_CONTEXT_TOKENS", string>;
+
+// Empty settings override any the harness loaded from .dev.vars: the Worker reads them as no model configured.
+const NO_MODEL: ModelSettings = { MODEL_BASE_URL: "", MODEL_API_KEY: "", MODEL_ID: "", MODEL_CONTEXT_TOKENS: "" };
+
+export async function startWorker({ model = NO_MODEL }: { model?: ModelSettings } = {}): Promise<Worker> {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const jwk: JWK = { ...(await exportJWK(publicKey)), kid: KEY_ID, alg: "RS256", use: "sig" };
   let fetches = 0;
@@ -48,7 +80,7 @@ export async function startWorker(): Promise<Worker> {
   globalThis.fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url !== CERTS_URL) {
-      return passThrough(input, init);
+      return decodedOnce(await passThrough(input, init));
     }
     fetches += 1;
     if (failures > 0) {
@@ -68,6 +100,7 @@ export async function startWorker(): Promise<Worker> {
           ACCESS_AUD: AUDIENCE,
           WEBHOOK_SECRET,
           HOST_GITHUB_ID: String(HOST_ID),
+          ...model,
         },
       },
     ],

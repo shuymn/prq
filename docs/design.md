@@ -79,6 +79,15 @@ UI:    React + Vite (Workers Static Assets), connected to PrSession with useAgen
   present), the notification queue for local agents, and the instructions (the two prompts and the skill registry). It
   does not hold job state; it asks PrSession (`peek`, `claim`). Each ledger entry keeps what a list row shows (see
   [PR ledger](#pr-ledger)).
+- **Model.** The cloud agent's model is any provider with an OpenAI-compatible chat completions API, through the AI
+  SDK's `@ai-sdk/openai-compatible`, built once per isolate from four secrets: `MODEL_BASE_URL` (the API's https
+  root), `MODEL_API_KEY`, `MODEL_ID` and `MODEL_CONTEXT_TOKENS` (the model's context window in tokens, since providers
+  do not report it reliably). The window is at least 16,384: below that the system prompt, the tool definitions and one
+  cut tool result leave no room for a conversation, and every turn would compact. With none of the four set (or all
+  four empty, as the tests' runtime sets them), a cloud job fails `cloud agent not configured`; with some set or one
+  malformed, it fails `cloud agent misconfigured: <each variable and what is wrong with it>`, never a value, and
+  `prq.config.invalid` is logged. `pnpm run check:provider`
+  in `packages/server` shows what a provider does with the requests a turn makes.
 - **prq CLI.** Runs on the host's machine, talks to the Worker over HTTP with a service token, and uses the host's own
   git and `gh`.
 - **Sandbox.** The cloud workspace of a PrSession: a container with a checkout of the PR that the agent searches and
@@ -848,19 +857,39 @@ Server:
 
 ### Billing limits
 
-These are enforced, not left to observation.
+Spending is capped at the model provider, with the spend limit or prepaid credit of the API key; prq keeps no budget of
+its own. A cloud job has no step, token or time limit for now: how much a job needs is unknown until prq is used, and a
+limit set before that could stop the very jobs prq exists for. Every cloud run's usage is logged (`prq.job.usage`, see
+[Observability](#observability)), so limits, possibly configurable, can come later from the observed numbers. Until
+then a model that keeps calling tools runs until the provider refuses a call.
 
-- A cloud turn has a step limit (for example, 20) and a job has a token limit (for example, 500,000). When a turn hits
-  either limit, the system shall make no further model or tool calls and end the job as `failed` with the reason. Text the
-  turn had already produced is kept in the conversation and marked incomplete.
-- A cloud job's run is started at most 3 times across restarts, and the SDK's own recovery is declined (see
-  [Owner and jobs](#owner-and-jobs)). A compaction is retried once.
-- Spending is capped at the model provider, with the spend limit or prepaid credit of the API key; prq keeps no budget
-  of its own. When the provider refuses a call, the job ends as `failed` with the provider's reason.
+- When the provider refuses a call (its spend limit, a key or a model it does not accept), the system shall end the job
+  as `failed` with the provider's reason: `provider refused the request (HTTP <status>): <its message>`, or, for an
+  error sent inside the stream, `provider error during the answer (<its code or type>): <its message>`. A 2xx whose body
+  cannot be read or decoded is no refusal: `provider response could not be read (HTTP <status>): <what failed>`. A 429
+  or 5xx is retried by the AI SDK first (twice, with exponential backoff), and the reason then says how many attempts
+  were made.
+  The API key is replaced by `[redacted]` in every reason built from what the provider sent (these, a finish reason,
+  a stream that fails midway) before it is cut to 500 characters, so a cut never leaves part of it. A stream that
+  fails midway shows the client the same reason in place of the error's own text.
+- When the provider ends an answer other than normally (its output limit, its content filter, any finish but `stop`),
+  the job ends as `failed` with that reason, never as `done`.
+- In every failure, the text the turn had already produced is kept in the conversation and marked incomplete.
 - A Sandbox stops after inactivity (for example, 30 minutes).
 - A `prq wait` long-poll keeps the Hub awake while it waits, and that time is Durable Object duration billed. One waiter
   should fit in the allowance included with Workers Paid; usage is checked after deployment, and if it is high the
   long-poll is replaced by short polls every few tens of seconds.
+
+Apart from these, bounds that keep a job from waiting forever (liveness, not spending):
+
+- Each model request ends when no response arrives within 120 s of sending it, and when no output arrives for 120 s
+  after that, before the first chunk or between chunks. The job then fails with `the provider sent no response for
+  120 s` or `the provider stopped sending output for 120 s`. The first bound is prq's (a middleware on the model, since
+  the AI SDK's bounds start only at the response); the second is the AI SDK's. Each request is bounded on its own, a
+  retry included, and also ends at once when its caller aborts it, whether or not the request honours the abort. A
+  job's total time is not bounded.
+- A cloud job's run is started at most 3 times across restarts, and the SDK's own recovery is declined (see
+  [Owner and jobs](#owner-and-jobs)). A compaction is retried once.
 
 ## Directory layout
 
@@ -904,13 +933,15 @@ prq/
 │  │   │   │   ├─ context.ts     the conversation's pages for /cli/context
 │  │   │   │   ├─ cloud.ts       the cloud agent seam and its failure reasons
 │  │   │   │   ├─ turn.ts        a cloud turn: its binding, how it ended, what its commit stores
+│  │   │   │   ├─ model.ts       the model provider, its response bound, a provider error as a failure reason
+│  │   │   │   ├─ context-budget.ts  the context parameters scaled to the model's window
 │  │   │   │   ├─ projection.ts  what a job's model reads of the conversation
 │  │   │   │   └─ prompt.ts      the system prompt and an analysis's task
 │  │   │   ├─ github/            App token; attaching the token to outbound git traffic
 │  │   │   ├─ instructions/      prompts, skill registry, activate_skill / read_skill_resource
 │  │   │   ├─ workspace.ts       Sandbox
-│  │   │   ├─ model.ts           model provider configuration
 │  │   │   └─ client/            React UI (Vite)
+│  │   ├─ scripts/           a manual check of a model provider (`pnpm run check:provider`), not part of the Worker
 │  │   ├─ wrangler.jsonc
 │  │   ├─ vite.config.ts
 │  │   └─ vitest.config.ts
@@ -925,7 +956,7 @@ prq/
 │          ├─ answer.ts          the answer prq submit sends: answer.md, checked before any request
 │          ├─ commands/          one module per command
 │          ├─ e2e/               the compiled binary against the real Worker
-│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`)
+│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`), a manual check of a cloud question (`pnpm run check:cloud`)
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
 ├─ .claude/skills/verify-prq/  running the local stack with scripted jobs for a local agent, and reading its request log
 ├─ docs/                   design.md, decisions.md, ui.md, spikes.md

@@ -3,6 +3,7 @@ import { type FinishReason, isToolUIPart, type LanguageModel, type LanguageModel
 import * as v from "valibot";
 
 import type { JobRow, JobUsage } from "./jobs.ts";
+import { reasonText } from "./model.ts";
 
 // A cloud turn: what it is bound to, and how it ended as its callbacks recorded it in memory. prq commits it when the
 // SDK's turn has ended (docs/design.md, Owner and jobs).
@@ -32,25 +33,14 @@ export function newOutcome(): TurnOutcome {
   return { reached: false, aborted: false };
 }
 
-// The longest failure reason kept: the job's failure and an incomplete message's reason.
-const MAX_REASON_CHARS = 500;
-
-export function reasonText(text: string): string {
-  return text.length > MAX_REASON_CHARS ? text.slice(0, MAX_REASON_CHARS) : text;
-}
-
-// An error the turn saw, as a failure reason.
-export function errorReason(error: unknown): string {
-  return reasonText(error instanceof Error ? error.message : String(error));
-}
-
 // The reason a turn that stopped normally fails when its result holds no answer text (reasoning only, or nothing): as
 // done it would leave the author nothing, and a done job cannot be retried.
 export const NO_ANSWER_TEXT = "the model returned no answer text";
 
 // Why a turn that reached the model failed, or null when it ended normally. Only a final `stop` with answer text
 // commits a result: a cut-short answer (the output limit, the content filter) or any other ending is not stored as done.
-export function turnFailure(outcome: TurnOutcome): string | null {
+// A finish reason the provider sent is reason text like any other: the API key (`secret`) is replaced before the cut.
+export function turnFailure(outcome: TurnOutcome, secret?: string): string | null {
   if (outcome.failure !== undefined) {
     return outcome.failure;
   }
@@ -68,8 +58,42 @@ export function turnFailure(outcome: TurnOutcome): string | null {
     case "content-filter":
       return "the provider's content filter stopped the answer";
     default:
-      return reasonText(`the model stopped with finish reason ${outcome.rawFinishReason ?? outcome.finishReason}`);
+      return reasonText(
+        `the model stopped with finish reason ${outcome.rawFinishReason ?? outcome.finishReason}`,
+        secret,
+      );
   }
+}
+
+// A turn's streamed response whose failure carries `reason(error)` in place of the error's own message. A stream that
+// fails midway (the provider's response body, a model's stream) ends the SDK's reply, which sends the error's message
+// to the client in its terminal frame; the reason is the job's, classified and with the key redacted. The original
+// error stays as its cause, where the SDK looks to tell a platform interruption from a failure.
+export function failingWith(response: Response, reason: (error: unknown) => string): Response {
+  const source = response.body?.getReader();
+  if (source === undefined) {
+    return response;
+  }
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      // Only a failed read is the stream's failure: a client's cancel cancels this stream first, and what fails after
+      // that (a close or enqueue on the cancelled stream) is no turn's failure.
+      let read: ReadableStreamReadResult<Uint8Array>;
+      try {
+        read = await source.read();
+      } catch (error) {
+        controller.error(new Error(reason(error), { cause: error }));
+        return;
+      }
+      if (read.done) {
+        controller.close();
+      } else {
+        controller.enqueue(read.value);
+      }
+    },
+    cancel: (why) => source.cancel(why),
+  });
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 // The parts of a cloud result as stored: no reasoning (it leaves the context when the turn ends), of tool parts only
@@ -104,12 +128,15 @@ export function incompleteMessageId(row: Pick<JobRow, "kind" | "job_id" | "run">
   return `${row.kind}-${row.job_id}-r${row.run}-incomplete`;
 }
 
-// One model call's tokens as the usage log counts them.
+// One model call's tokens as the usage log counts them. Cached input tokens are the adapter's (from
+// prompt_tokens_details); a provider that reports them only as prompt_cache_hit_tokens is read from its raw usage.
 export function stepTokens(usage: LanguageModelUsage): { input: number; output: number; cachedInput: number } {
+  const cacheRead = usage.inputTokenDetails.cacheReadTokens ?? 0;
+  const cacheHit = usage.raw?.["prompt_cache_hit_tokens"];
   return {
     input: usage.inputTokens ?? 0,
     output: usage.outputTokens ?? 0,
-    cachedInput: usage.inputTokenDetails.cacheReadTokens ?? 0,
+    cachedInput: cacheRead === 0 && typeof cacheHit === "number" ? cacheHit : cacheRead,
   };
 }
 

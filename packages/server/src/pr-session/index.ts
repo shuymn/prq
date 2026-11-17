@@ -20,11 +20,13 @@ import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import * as v from "valibot";
 
 import { refuseSubAgent, sendServerVersion } from "../agents.ts";
+import { readModelConfig } from "../config.ts";
 import { errorName, log } from "../log.ts";
 import { hubStub } from "../names.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
 import { SerialQueue, WaitTimeout, withTimeout } from "../wait.ts";
 import {
+  CLOUD_MISCONFIGURED,
   CLOUD_NOT_CONFIGURED,
   type CloudAgent,
   MAX_STARTS,
@@ -88,16 +90,16 @@ import {
   writeLedger,
   writeNotify,
 } from "./jobs.ts";
+import { classifyModelError, modelFor, OUTPUT_STALLED, STREAM_TIMEOUT } from "./model.ts";
 import { projection } from "./projection.ts";
 import { analysisTask, systemPrompt } from "./prompt.ts";
 import {
   type Binding,
   type CloudModel,
-  errorReason,
+  failingWith,
   hasText,
   incompleteMessageId,
   newOutcome,
-  reasonText,
   resultParts,
   stepTokens,
   storedFailure,
@@ -466,7 +468,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   #cloudSeam(now: number): CloudOutcome {
     const agent = this.cloudAgent();
     if (agent === undefined) {
-      return { failed: failPending(this.#sql, CLOUD_NOT_CONFIGURED, now), started: null };
+      return { failed: failPending(this.#sql, this.#noCloudAgent(), now), started: null };
     }
     const row = startNext(this.#sql, crypto.randomUUID(), now);
     return { failed: [], started: row === undefined ? null : { row, agent } };
@@ -483,9 +485,28 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return { start: (job, turnId) => void this.keepAliveWhile(() => this.#runTurn(job.jobId, turnId, model)) };
   }
 
-  // The model cloud turns run on (spied on in tests); none until a provider is configured.
+  // The model cloud turns run on (spied on in tests): the configured provider's, none while it is not configured or
+  // misconfigured.
   protected cloudModel(): CloudModel | undefined {
-    return undefined;
+    const config = readModelConfig(this.env);
+    return config?.ok === true ? modelFor(this.env, config.config) : undefined;
+  }
+
+  // Why a cloud session has no cloud agent: no model configured, or one misconfigured, named by its variables (never
+  // their values).
+  #noCloudAgent(): string {
+    const config = readModelConfig(this.env);
+    if (config === null || config.ok) {
+      return CLOUD_NOT_CONFIGURED;
+    }
+    log("prq.config.invalid", { issues: config.issues }, "error");
+    return `${CLOUD_MISCONFIGURED}: ${config.issues.join("; ")}`;
+  }
+
+  // The provider's API key, replaced in every failure text built from what the provider sent.
+  #modelSecret(): string | undefined {
+    const config = readModelConfig(this.env);
+    return config?.ok === true ? config.config.MODEL_API_KEY : undefined;
   }
 
   // The workspace a job with a workspace commit reads its code from (spied on in tests); none until the Sandbox exists,
@@ -985,7 +1006,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       });
       // An ending the turn's own callbacks did not see (the SDK failed or aborted the reply around them).
       if (outcome.reached && result.status === "error") {
-        outcome.error ??= reasonText(result.error ?? "the turn failed");
+        outcome.error ??= classifyModelError(result.error ?? "the turn failed", this.#modelSecret()).reason;
       } else if (outcome.reached && result.status === "aborted") {
         outcome.aborted = true;
       }
@@ -1027,16 +1048,27 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       outcome.failure = "the question is not stored";
       return undefined;
     }
+    const secret = this.#modelSecret();
+    // The turn's first error, classified with the key redacted, is its reason; what the client is shown is that reason.
+    const failWith = (error: unknown): string => {
+      outcome.error ??= classifyModelError(error, secret).reason;
+      return outcome.error;
+    };
     const result = streamText({
       model,
       system: systemPrompt({ pr: this.#pr(), details: readDetails(this.#sql), job }),
       messages: await convertToModelMessages(messages),
       ...(abortSignal === undefined ? {} : { abortSignal }),
+      timeout: STREAM_TIMEOUT,
       onError: ({ error }) => {
-        outcome.error ??= errorReason(error);
+        failWith(error);
       },
-      onAbort: () => {
+      // A stalled stream ends as an abort whose reason is the AI SDK's timeout; any other abort is a cancel.
+      onAbort: ({ reason }) => {
         outcome.aborted = true;
+        if (reason instanceof DOMException && reason.name === "TimeoutError") {
+          outcome.error ??= OUTPUT_STALLED;
+        }
       },
       onFinish: ({ finishReason, rawFinishReason }) => {
         outcome.finishReason = finishReason;
@@ -1047,18 +1079,16 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       },
     });
     const metadata = this.#resultMetadata(row, { kind: "cloud", model: model.modelId });
-    return result.toUIMessageStreamResponse({
+    const response = result.toUIMessageStreamResponse({
       generateMessageId: () => resultMessageId(row),
       messageMetadata: ({ part }) => (part.type === "start" ? metadata : undefined),
       onFinish: ({ responseMessage, isAborted }) => {
         outcome.message = responseMessage;
         outcome.aborted ||= isAborted;
       },
-      onError: (error) => {
-        outcome.error ??= errorReason(error);
-        return outcome.error;
-      },
+      onError: failWith,
     });
+    return failingWith(response, failWith);
   }
 
   // What the job's model reads after the system prompt: the projection, then its own question (by the job's target)
@@ -1093,7 +1123,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       await this.#recoverTurn(row);
       return;
     }
-    const failure = turnFailure(outcome);
+    const failure = turnFailure(outcome, this.#modelSecret());
     const metadata = this.#resultMetadata(row, { kind: "cloud", model: model.modelId }, jobUsage(this.#sql, row));
     const parts = resultParts(outcome.message?.parts ?? []);
     if (failure === null) {
@@ -1130,7 +1160,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     }
     const agent = this.cloudAgent();
     if (agent === undefined) {
-      this.#endRun(row, { failed: CLOUD_NOT_CONFIGURED }, null);
+      this.#endRun(row, { failed: this.#noCloudAgent() }, null);
       return;
     }
     if ((jobUsage(this.#sql, row)?.starts ?? 0) >= MAX_STARTS) {

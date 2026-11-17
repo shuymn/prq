@@ -20,6 +20,8 @@ catalog:
   "@cloudflare/ai-chat": 0.12.2
   agents: 0.33.0
   ai: 7.0.172
+  # The cloud agent's model: any provider with an OpenAI-compatible chat completions API.
+  "@ai-sdk/openai-compatible": 3.0.92
 
   # Tests and TypeScript.
   typescript: 7.0.2
