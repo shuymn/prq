@@ -50,8 +50,6 @@ const responseBound: LanguageModelMiddleware = {
     } finally {
       clearTimeout(timer);
       listening.abort();
-      // A request left at an abort rejects when the abort lands, or never; nothing waits for it.
-      request.catch(() => undefined);
     }
   },
 };
@@ -125,9 +123,6 @@ function errorMessage(error: unknown): string {
 }
 
 function classifyCause(cause: unknown): ModelFailure {
-  if (cause instanceof ProviderNoResponseError) {
-    return { reason: cause.message, contextLength: false };
-  }
   if (APICallError.isInstance(cause)) {
     const body = bodyError(cause);
     const message = body.message ?? (cause.responseBody || cause.message);
