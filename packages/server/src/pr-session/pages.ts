@@ -68,14 +68,13 @@ class PageCollector {
   inLine = false;
   #col = 0;
   // Whether the page is being collected, and the current line's characters so far (with its prefix, if any).
-  #collecting: boolean;
+  #collecting = false;
   #current = "";
   #cost = 0;
   done = false;
 
   constructor(request: PageRequest) {
     this.#request = request;
-    this.#collecting = request.start.line === 1 && request.start.char === 0;
   }
 
   part(text: string): void {
@@ -103,7 +102,8 @@ class PageCollector {
 
   lineEnd(): void {
     if (!this.done && !this.#collecting && this.line === this.#request.start.line) {
-      // The start's line ends before its character: the page starts at the line's end.
+      // The start's line ends before any part reached its character (an empty line, or one shorter than the
+      // character): the page starts at the line's end.
       this.#collecting = true;
     }
     if (this.done) {
@@ -119,18 +119,12 @@ class PageCollector {
     this.line += 1;
     this.inLine = false;
     this.#col = 0;
-    if (!this.done && !this.#collecting && this.line === this.#request.start.line && this.#request.start.char === 0) {
-      this.#collecting = true;
-    }
   }
 
-  // At the end of the output: the last line, when it has no newline after it.
+  // At the end of the output: the last line, when it has no newline after it. Its every part was checked to fit.
   end(): void {
     if (!this.done && this.#collecting && this.inLine) {
-      this.#checkFit();
-      if (!this.done) {
-        this.lines.push(this.#shown());
-      }
+      this.lines.push(this.#shown());
     }
   }
 
