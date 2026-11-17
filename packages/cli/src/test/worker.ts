@@ -44,11 +44,14 @@ export type Worker = {
 
 // The content codings Node's fetch decodes. Their responses arrive decoded with the content-encoding header kept, and
 // the harness hands them to the Worker as they are, so workerd would decode the body again and fail (a Brotli stream:
-// "Brotli decompression failed."). A response that went outside the runtime is passed on as a deployed Worker gets it:
-// decoded once, without the header.
+// "Brotli decompression failed."). At this Node-to-workerd boundary, a body Node decoded is passed on without the
+// header, so it is decoded once; a response without a body is passed on unchanged.
 const DECODED_CODINGS = new Set(["gzip", "x-gzip", "deflate", "br", "zstd"]);
 
 function decodedOnce(response: Response): Response {
+  if (response.body === null) {
+    return response;
+  }
   const codings = (response.headers.get("content-encoding") ?? "")
     .split(",")
     .map((coding) => coding.trim().toLowerCase())
