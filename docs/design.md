@@ -51,7 +51,7 @@ Worker (Hono)
    │    source of truth for the conversation (full history, AI SDK UIMessage)
    │    owner (cloud | local, fixed at the first job) and job state
    │    model context (after compaction) and the analysis notes
-   │    cloud owner: streamText with tools in onChatMessage; workspace is a Sandbox
+   │    cloud owner: streamText with tools in onChatMessage; reads the code in its Workspace
    │    local owner: input is only stored → notify Hub → prq claims → the answer is appended
    │
    └─ Hub (Agents SDK Agent, one instance)
@@ -91,8 +91,9 @@ UI:    React + Vite (Workers Static Assets), connected to PrSession with useAgen
   turn's tool loop against it over an in-memory repository, with a window small enough that the tools are withdrawn.
 - **prq CLI.** Runs on the host's machine, talks to the Worker over HTTP with a service token, and uses the host's own
   git and `gh`.
-- **Sandbox.** The cloud workspace of a PrSession: a container with a checkout of the PR that the agent searches and
-  reads with tools.
+- **Workspace.** The cloud workspace of a PrSession: a Durable Object driving a container with a checkout of the PR
+  that the agent searches and reads with tools. Its only way out is `GitEgress`, a Worker entrypoint that lets git
+  fetches from github.com through with the installation token.
 - **UI.** A React app served by the same Worker. State lives on the server; the `useAgentChat` and `useAgent` hooks
   keep the client in sync, and screen-only state is local `useState`.
 
@@ -692,7 +693,7 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
   whether or not they are used.
 - **When a skill is used is the model's decision**, made from the descriptions and the two prompts. The core has no
   dedicated step for any skill.
-- **Scripts run in the cloud workspace.** A skill's script runs in the Sandbox (its image includes `python3`) and only
+- **Scripts run in the cloud workspace.** A skill's script runs in the workspace container (its image includes `python3`) and only
   as far as the skill's `allowed-tools` frontmatter permits. In the Agent Skills format `allowed-tools` lists
   pre-approved tools, and prq has no interactive approval step, so a skill that declares none cannot run scripts: it
   contributes instructions and references only. The pinned SHA means a skill's code does not change under the host.
@@ -795,19 +796,56 @@ answers what was decided earlier after compaction. See [spikes.md](spikes.md) fo
 
 ### Workspace (cloud)
 
-- One Sandbox per PrSession. It stops after inactivity (for example, 30 minutes), and a stopped Sandbox loses its disk.
-- It always starts from empty: `git init`, fetch the PR's head and base commits by SHA (shallow first, deeper only when
-  a merge-base is needed), and check out the target SHA.
-- A question is answered in the workspace of the last analyzed head SHA, and the answer records that SHA so the UI can
-  show it. To ask about an earlier version, the user names the SHA.
-- Git traffic to GitHub goes through the Worker: outbound HTTPS from the container is intercepted by the Worker, which
-  adds an installation token. The only allowed destination is `github.com`; which repositories are reachable follows
-  from the installation token's scope, so there is no per-repository allow list. The token never enters the container.
+- **One Workspace per PrSession.** A Durable Object (`Workspace`, named as its session) drives its own container
+  (`basic`, image from `packages/server/Dockerfile`: Alpine pinned by digest, `git`, `ca-certificates`, `python3`). The
+  container stops after 30 minutes without a request, and a stopped container loses its disk. `/agents/workspace/…` is
+  not served: only the session reaches it.
+- **Prepare.** A job's checkout is made at its workspace commit: `git init`, `fetch --depth=1 --no-tags` of the commit
+  and its base by SHA, `checkout --detach` of the commit, then deepen (doubling, at most 8 rounds) until `merge-base`
+  answers. A `HEAD` that is not the commit fails the prepare. The steps are data (argv lists in
+  `packages/server/src/workspace-git.ts`), so the Workspace runs them in the container and a Node test runs them with
+  real git. A prepare ends after 30 minutes, and a fetch that moves under 1,000 bytes/s for 60 s ends sooner.
+- **Reuse only through a ready record.** A checkout is reused only when the Workspace's stored ready record names the
+  commit and the record's random token is in `.git/prq-ready` in the checkout (a stopped container loses the file).
+  The record is written last, after the token file, once everything above completed; it is cleared before any change.
+  A ready checkout of another commit keeps its objects and fetches what is missing. Anything else is wiped and rebuilt
+  from empty. Reusing a checkout whose `HEAD` is at the commit was rejected: a prepare cut during a deepen leaves
+  `.git/shallow.lock` and a partial `shallow` file with `HEAD` already there, and the next fetch fails on the lock.
+- **Commands.** Each tool call is one git command in the checkout. Its output is read as it streams: what comes before
+  the requested page is only counted, the page collects at most 4 bytes per character a result may hold (48,000), and
+  then the process is killed. A command ends after 60 s. Output never crosses RPC uncapped.
+- **A container lost mid-turn.** Every call names its commit, and when the container is not running or the checkout is
+  not ready for that commit, the call prepares the same commit first. When that fails, the turn ends and the job fails
+  `workspace: lost and could not be rebuilt: <reason>`, which the host can retry, rather than handing the model an
+  error it cannot act on.
+- **One rebuild at a time, owned by the Workspace.** Every call carries its turn's sequence number
+  (`prq_session.turn_seq`, advanced at each start). The Workspace stores the newest sequence it has seen and the
+  highest released one, so a reset forgets neither. A call acts only while its sequence is the newest and not released,
+  checked again after every await and before every container operation; an older turn's call is refused and touches
+  nothing. Calls of one turn for one commit share the prepare in flight. A newer turn aborts an older turn's prepare
+  and waits for it to settle; it never waits out the older one's bounds. When a turn ends, the session sends
+  `release` (waited for at most 10 s, after the commit), which aborts only a prepare of that turn or an older one.
+- **After a reset.** The new instance's constructor starts one cleanup, and every container operation waits for it:
+  the old instance's fetch may still run. A container not running, or `pkill -KILL git` answering within 10 s, ends
+  it. Otherwise the container is stopped and confirmed stopped within 30 s; when that is not confirmed either, every
+  call fails `workspace: could not clean up after a restart: <reason>` until a newer turn tries again.
+- **Egress.** The container has no internet. Every HTTP and HTTPS request it makes is intercepted and sent to
+  `GitEgress` (`packages/server/src/egress.ts`), which lets through only the two requests of a git fetch from
+  `github.com` (`GET …/info/refs?service=git-upload-pack` and `POST …/git-upload-pack`). It replaces any credentials
+  the container sent with the installation token and hands a redirect back to git instead of following it.
+  Everything else gets 403 and reaches no upstream (`prq.egress.denied`); a token that cannot be had gets 502. Which
+  repositories are reachable follows from the installation token's scope, so there is no per-repository allow list.
+  The token never enters the container. A job whose session knows no installation (no webhook carried one) fails
+  `workspace: …` before the container starts.
 - The image includes `python3` for skill scripts (see [Instructions and skills](#instructions-and-skills)). Scripts get
   no network beyond the same restriction.
 - This restriction applies only to traffic from inside the container. LLM calls and external tools (web search, for
   example) are made by PrSession on the Worker side and are not restricted by it. If tests are run in the container
   later, the destinations they need (an npm registry, for example) are added then.
+- **Tests and the owner's check.** Tests run with containers off (`dev.enable_containers: false` in `wrangler.jsonc`,
+  which the CLI's wrangler test harness reads too), so CI needs no Docker; the Workspace's tests drive a fake container.
+  `pnpm run check:workspace` in `packages/cli` runs the real container in wrangler's local runtime (see
+  [AGENTS.md](../AGENTS.md)).
 
 ### Caching
 
@@ -853,7 +891,7 @@ Server:
   as they were. A prefix still misses after a prompt or skill edit, a switch between the analysis and answer prompts,
   the removal of reasoning at the end of a turn, a compaction, or the provider's eviction. Savings are judged from the
   provider's reported cache hits, not assumed.
-- **Workspace.** The Sandbox starts from empty each time (see [Workspace (cloud)](#workspace-cloud)); a checkout cache
+- **Workspace.** A container starts from empty each time (see [Workspace (cloud)](#workspace-cloud)); a checkout cache
   (snapshots or a backup) is added only if the start time turns out too slow.
 
 ### Authentication boundary
@@ -892,6 +930,11 @@ Server:
   (`prq.head.*`), LLM and tool errors, and compactions are logged with the PR key and `jobId`. A claim that reaches 60
   minutes is logged (`prq.job.stalled`), and so is a ledger entry the Hub refuses as older than the one it has
   (`prq.ledger.stale_rev`).
+- The Workspace logs each prepare with its commit, whether it reused, updated or rebuilt the checkout, and its time
+  (`prq.workspace.prepared`), a prepare that failed (`prepare_failed`), a cleanup after a reset that failed
+  (`cleanup_failed`), and a release the session could not deliver (`release_failed`). The egress logs each request it
+  refused with its host, method and path, never the query or a header (`prq.egress.denied`), and a token it could not
+  get (`prq.egress.token_failed`).
 - When a cloud job's run ends (`done` or `failed`), `prq.job.usage` logs the PR key, `jobId`, kind, run, outcome, the
   model, the steps (model calls), the input, output and cached input tokens, the time from the run's first start to its
   end (`wallMs`, on the session's clock) and its starts. Each finished step is added to the run's row as it ends, so
@@ -923,7 +966,7 @@ then a model that keeps calling tools runs until the provider refuses a call.
 - When the provider ends an answer other than normally (its output limit, its content filter, any finish but `stop`),
   the job ends as `failed` with that reason, never as `done`.
 - In every failure, the text the turn had already produced is kept in the conversation and marked incomplete.
-- A Sandbox stops after inactivity (for example, 30 minutes).
+- A workspace container stops after 30 minutes without a request.
 - A `prq wait` long-poll keeps the Hub awake while it waits, and that time is Durable Object duration billed. One waiter
   should fit in the allowance included with Workers Paid; usage is checked after deployment, and if it is high the
   long-poll is replaced by short polls every few tens of seconds.
@@ -996,13 +1039,16 @@ prq/
 │  │   │   │   └─ prompt.ts      the system prompt and an analysis's task
 │  │   │   ├─ github.ts          the GitHub App: installation tokens and pull request reads, each bounded
 │  │   │   ├─ instructions/      prompts, skill registry, activate_skill / read_skill_resource
-│  │   │   ├─ workspace.ts       Sandbox
+│  │   │   ├─ workspace.ts       Workspace: the container, the gate on turns, prepares and paged commands
+│  │   │   ├─ workspace-git.ts   the checkout's git procedure as data, and whether a checkout is reused
+│  │   │   ├─ egress.ts          GitEgress: the container's only way out
 │  │   │   └─ client/            React UI (Vite)
 │  │   ├─ scripts/           manual checks of a model provider, the tool loop and the GitHub App
 │  │   │                     (`pnpm run check:provider`, `check:tools`, `check:github`), not part of the Worker
+│  │   ├─ Dockerfile         the workspace container's image
 │  │   ├─ wrangler.jsonc
 │  │   ├─ vite.config.ts
-│  │   └─ vitest.config.ts
+│  │   └─ vitest.config.ts   two projects: the Worker's tests in workerd, the git procedure's (*.node.test.ts) in Node
 │  └─ cli/                 @prq/cli: prq, compiled by Bun into one binary (dist/prq; Node 24 runs the source too)
 │      └─ src/
 │          ├─ main.ts            the entry the binary is built from: arguments, the command, the exit code
@@ -1014,7 +1060,7 @@ prq/
 │          ├─ answer.ts          the answer prq submit sends: answer.md, checked before any request
 │          ├─ commands/          one module per command
 │          ├─ e2e/               the compiled binary against the real Worker
-│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`), manual checks of a cloud question and of head reconciliation (`pnpm run check:cloud`, `check:reconcile`)
+│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`), manual checks of a cloud question, of head reconciliation and of the workspace container (`pnpm run check:cloud`, `check:reconcile`, `check:workspace`)
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
 ├─ .claude/skills/verify-prq/  running the local stack with scripted jobs for a local agent, and reading its request log
 ├─ docs/                   design.md, decisions.md, ui.md, spikes.md
@@ -1052,8 +1098,8 @@ Only a deployment can show these.
   workspace: when GitHub refuses it, `checkout` exits 1 naming the commit. Head reconciliation has read GitHub's API
   through the Worker only in wrangler's local runtime (`check:reconcile`); how an answer's `updated_at` moves under
   pushes, and how far a replica lags, are tested only with a served API.
-- **Sandbox in production.** Start and rebuild times, and checkout time of a large repository. The local Docker
-  numbers are not production values.
+- **Containers in production.** Start and rebuild times, and checkout time of a large repository. The local Docker
+  numbers (`check:workspace`) are not production values.
 - **Bundling by wrangler.** The PKCS#8-only crypto path of `@octokit/auth-app`, bundled by wrangler, has minted a
   real installation token in wrangler's local runtime (`check:reconcile`); a deployed Worker has not minted one yet.
 - **Billing.** The Durable Object duration of the `wait` long-poll with one waiter, and the real cost of cloud turns.
@@ -1063,6 +1109,6 @@ Only a deployment can show these.
   real context length, and how often it runs, are not measured.
 - **Skills.** Not built in the prototype: fetching a skill at a pinned commit and storing it in the Hub (and its size
   against Durable Object storage limits), whether models choose to activate a skill from its description alone, running
-  a script under `allowed-tools` in the Sandbox, and materializing skills into a local job directory.
+  a script under `allowed-tools` in the workspace container, and materializing skills into a local job directory.
 - **Browser client.** `useAgentChat` with a local owner (an appended answer, reconnection) was exercised through a Node
   client speaking the same WebSocket protocol, not in a browser.

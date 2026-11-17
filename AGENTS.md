@@ -23,7 +23,14 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
   environment built from nothing, so a `GIT_DIR` a hook exported cannot reach the repository. A canary
   (`packages/cli/src/test/canary.ts`) fails the CLI's test run when the repository's refs (other than T3 Code's
   checkpoints under `refs/t3/`), `HEAD`, worktrees, config, index entries or hooks, or the user's git identity, changed
-  during it.
+  during it. The server's tests of the cloud workspace's git procedure (`packages/server/src/*.node.test.ts`, a Node
+  project beside the workerd one) use the same fixture, and the canary guards their run too.
+- Tests run the Worker without Docker (`dev.enable_containers: false` in `packages/server/wrangler.jsonc`), so the
+  Workspace's container is a fake there. The real container is the owner's check: with Docker running and
+  `packages/server/.dev.vars` holding the model, the GitHub App and `GITHUB_INSTALLATION_ID` (see
+  `packages/cli/src/test/workspace-check.ts`), `pnpm run check:workspace <owner>/<repo>#<number>` in `packages/cli`
+  runs the Worker in wrangler's local runtime with containers on, against a pull request of a public repository the
+  App is installed on, and removes the containers it started.
 - lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows, a
   `fileToken` check on `design/prq.pen`, and commitlint on the message.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
