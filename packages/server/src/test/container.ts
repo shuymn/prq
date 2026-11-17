@@ -39,8 +39,13 @@ type PendingHold = { match: (argv: string[]) => boolean; reached: boolean; opene
 // The checkout the container's disk holds.
 type Disk = { remote: string | null; objects: Set<string>; head: string | null; token: string | null } | null;
 
+// A setup call of the container: its interceptions and its idle stop.
+export type SetupCall = "intercept http" | "intercept https" | "idle";
+
 export class FakeContainer implements WorkspaceContainer {
   #running = false;
+  // Whether HTTPS requests of the running container reach the egress: a fetch fails without it.
+  #intercepted = false;
   // Every operation, in order: start, intercepts, the idle timeout, each exec's argv joined, destroy.
   readonly log: string[] = [];
   readonly execs: ExecCall[] = [];
@@ -68,6 +73,7 @@ export class FakeContainer implements WorkspaceContainer {
     this.log.push("start");
     this.starts.push(options);
     this.#running = true;
+    this.#intercepted = false;
     this.disk = null;
     this.#exited = Promise.withResolvers<void>();
   }
@@ -79,22 +85,26 @@ export class FakeContainer implements WorkspaceContainer {
     this.#exited.resolve();
   }
 
+  // Each setup call answers at once, its setting made, unless a test changes it (a call that rejects or never
+  // answers makes no setting).
+  setupReply: (call: SetupCall) => Promise<void> = async () => undefined;
+
   async interceptAllOutboundHttp(binding: Fetcher): Promise<void> {
     this.log.push("intercept http");
+    await this.setupReply("intercept http");
     this.egress.push(binding);
   }
 
   async interceptOutboundHttps(addr: string, binding: Fetcher): Promise<void> {
     this.log.push(`intercept https ${addr}`);
+    await this.setupReply("intercept https");
     this.egress.push(binding);
+    this.#intercepted = true;
   }
-
-  // setInactivityTimeout() answers at once unless a test changes it.
-  idleReply: () => Promise<void> = async () => undefined;
 
   async setInactivityTimeout(durationMs: number | bigint): Promise<void> {
     this.log.push(`idle ${durationMs}`);
-    await this.idleReply();
+    await this.setupReply("idle");
   }
 
   monitor(): Promise<void> {
@@ -213,6 +223,9 @@ export class FakeContainer implements WorkspaceContainer {
         disk.remote = git.at(-1) ?? null;
         return { exitCode: 0 };
       case "fetch":
+        if (!this.#intercepted) {
+          return { exitCode: 128, stderr: "fatal: unable to access the remote: Could not resolve host: github.com\n" };
+        }
         for (const sha of operands.slice(1)) {
           disk.objects.add(sha);
         }

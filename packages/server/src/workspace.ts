@@ -156,6 +156,10 @@ export class Workspace extends DurableObject<Env> {
   #cleanup: Promise<string | null>;
   #cleanupFailed = false;
   #flight: Flight | null = null;
+  // The installation whose egress this instance set up on the running container, with the idle stop; null until a
+  // setup completes. A running container does not show it was set up: a setup cut short (an abort, a reset) leaves
+  // it running without its interception, so each instance sets it up before its first command.
+  #setUpFor: number | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -430,19 +434,26 @@ export class Workspace extends DurableObject<Env> {
     );
   }
 
-  // Starts the container when it is not running: no internet, every HTTP and HTTPS request to the egress with the
-  // installation, and the idle stop. A new container has an empty disk, so no checkout is ready.
+  // Starts the container when it is not running (no internet; a new container has an empty disk, so no checkout is
+  // ready), then sets it up unless this instance already did for the installation: every HTTP and HTTPS request to
+  // the egress with the installation, and the idle stop. Each call sets a rule or a timeout, so a repeated setup
+  // replaces what an earlier one left.
   async #start(seq: number, installationId: number, signal: AbortSignal): Promise<void> {
     const running = await this.#gated(seq, signal, (container) => container.running);
-    if (running) {
+    if (!running) {
+      this.#setUpFor = null;
+      this.#clearReady();
+      await this.#gated(seq, signal, (container) => container.start({ enableInternet: false }));
+    }
+    if (this.#setUpFor === installationId) {
       return;
     }
-    this.#clearReady();
-    await this.#gated(seq, signal, (container) => container.start({ enableInternet: false }));
+    this.#setUpFor = null;
     const egress = this.ctx.exports.GitEgress({ props: { installationId } });
     await this.#gated(seq, signal, (container) => container.interceptAllOutboundHttp(egress));
     await this.#gated(seq, signal, (container) => container.interceptOutboundHttps("*", egress));
     await this.#gated(seq, signal, (container) => container.setInactivityTimeout(IDLE_STOP_MS));
+    this.#setUpFor = installationId;
   }
 
   // One step of a prepare: its exit code and short outputs. The prepare's abort kills it and ends the step at once.

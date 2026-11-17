@@ -58,7 +58,10 @@ function rebuildLog(commit: string, token: string): string[] {
   ];
 }
 
-const STARTED = ["start", "intercept http", "intercept https *", `idle ${IDLE_STOP_MS}`];
+const SETUP = ["intercept http", "intercept https *", `idle ${IDLE_STOP_MS}`];
+const STARTED = ["start", ...SETUP];
+// The cleanup after a reset.
+const PKILL = "pkill -KILL git";
 
 // The token the last prepare wrote.
 function tokenOf(container: FakeContainer): string {
@@ -212,7 +215,7 @@ describe("prepare", () => {
   it("ends a prepare whose container setup never answers at 30 minutes", async () => {
     captureLogs();
     const { stub, container } = newWorkspace("setup-bound");
-    container.idleReply = () => new Promise<void>(() => undefined);
+    container.setupReply = (call) => (call === "idle" ? new Promise<void>(() => undefined) : Promise.resolve());
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
     const reply = tracked(stub.prepare(target(1)));
@@ -223,6 +226,41 @@ describe("prepare", () => {
 
     expect(await reply.promise).toEqual({ ok: false, kind: "failed", reason: "the checkout took over 30 minutes" });
     expect(container.execs).toEqual([]);
+  });
+
+  it("sets a running container up again when its setup failed, before the next prepare's first command", async () => {
+    captureLogs();
+    const { stub, container } = newWorkspace("setup-failed");
+    container.mergeBase = BASE;
+    let refused = false;
+    container.setupReply = async (call) => {
+      if (call === "intercept http" && !refused) {
+        refused = true;
+        throw new Error("the interception failed");
+      }
+    };
+    expect(await stub.prepare(target(1))).toEqual({ ok: false, kind: "failed", reason: "the interception failed" });
+    expect(container.running).toBe(true);
+    const from = container.log.length;
+
+    expect(await stub.prepare(target(2, "b"))).toEqual({ ok: true, value: { sha: sha("b"), mergeBase: BASE } });
+    expect(container.log.slice(from)).toEqual([...SETUP, ...rebuildLog("b", tokenOf(container))]);
+  });
+
+  it("sets a running container up again after a reset cut its setup short, before the first command", async () => {
+    captureLogs();
+    const { name, stub: before, container } = newWorkspace("setup-reset");
+    container.mergeBase = BASE;
+    container.setupReply = (call) =>
+      call === "intercept https" ? new Promise<void>(() => undefined) : Promise.resolve();
+    void before.prepare(target(1)).catch(() => undefined);
+    await vi.waitFor(() => expect(container.log).toContain("intercept https *"), { timeout: 3000, interval: 5 });
+    const stub = await reset(name);
+    container.setupReply = async () => undefined;
+    const from = container.log.length;
+
+    expect(await stub.prepare(target(2, "b"))).toEqual({ ok: true, value: { sha: sha("b"), mergeBase: BASE } });
+    expect(container.log.slice(from)).toEqual([PKILL, ...SETUP, ...rebuildLog("b", tokenOf(container))]);
   });
 
   it("fails without an installation, touching no container", async () => {
@@ -449,11 +487,12 @@ describe("after a reset", () => {
     const from = container.log.length;
 
     expect(await stub.run(target(1), readFile("README.md"))).toEqual(RELEASED);
-    expect(container.log.slice(from)).toEqual(["pkill -KILL git"]);
+    expect(container.log.slice(from)).toEqual([PKILL]);
 
     container.mergeBase = BASE;
     expect(await stub.prepare(target(2, "b"))).toEqual({ ok: true, value: { sha: sha("b"), mergeBase: BASE } });
-    expect(container.log.slice(from, from + 2)).toEqual(["pkill -KILL git", `cat -- ${DIR}/.git/prq-ready`]);
+    // The new instance sets the running container up again before its first command.
+    expect(container.log.slice(from, from + 5)).toEqual([PKILL, ...SETUP, `cat -- ${DIR}/.git/prq-ready`]);
   });
 
   it("starts no container operation of two concurrent calls before the one cleanup ends", async () => {
@@ -468,7 +507,7 @@ describe("after a reset", () => {
     const two = tracked(stub.run(target(2), readFile("README.md")));
     await untilHeld(pkill);
     await scheduler.wait(50);
-    expect(container.log.slice(from)).toEqual(["pkill -KILL git"]);
+    expect(container.log.slice(from)).toEqual([PKILL]);
     expect(one.settled() || two.settled()).toBe(false);
     await runInDurableObject(stub, () => pkill.open());
 
@@ -492,7 +531,7 @@ describe("after a reset", () => {
     const two = tracked(stub.prepare(target(2)));
     await untilHeld(stop);
     await scheduler.wait(50);
-    expect(container.log.slice(from)).toEqual(["pkill -KILL git", "destroy"]);
+    expect(container.log.slice(from)).toEqual([PKILL, "destroy"]);
     expect(one.settled() || two.settled()).toBe(false);
     container.mergeBase = BASE;
     await runInDurableObject(stub, () => stop.open());
@@ -516,7 +555,7 @@ describe("after a reset", () => {
     const reply = tracked(stub.prepare(target(2)));
     await settles(() => container.log.length > from, "the cleanup");
     await advance(stub, PKILL_MS - 1);
-    expect(container.log.slice(from)).toEqual(["pkill -KILL git"]);
+    expect(container.log.slice(from)).toEqual([PKILL]);
     await advance(stub, 1);
     expect(stop.reached()).toBe(true);
     container.mergeBase = BASE;
@@ -545,7 +584,7 @@ describe("after a reset", () => {
     const reason = "pkill failed: exec failed, and the container was not confirmed stopped within 30 s";
     expect(await one.promise).toEqual({ ok: false, kind: "cleanup", reason });
     expect(await two.promise).toEqual({ ok: false, kind: "cleanup", reason });
-    expect(container.log.slice(from)).toEqual(["pkill -KILL git", "destroy"]);
+    expect(container.log.slice(from)).toEqual([PKILL, "destroy"]);
 
     // The next turn tries again, and nothing runs before its cleanup ends: pkill now answers that no git runs.
     container.on = () => undefined;
@@ -554,7 +593,7 @@ describe("after a reset", () => {
     const next = tracked(stub.prepare(target(3)));
     await untilHeld(retry);
     await scheduler.wait(50);
-    expect(container.log.slice(from + 2)).toEqual(["pkill -KILL git"]);
+    expect(container.log.slice(from + 2)).toEqual([PKILL]);
     expect(next.settled()).toBe(false);
     await runInDurableObject(stub, () => retry.open());
     expect(await next.promise).toEqual({ ok: true, value: { sha: sha("a"), mergeBase: BASE } });
