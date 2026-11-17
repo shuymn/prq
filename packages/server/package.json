@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:provider": "node --env-file-if-exists=.dev.vars scripts/provider-check.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "catalog:",
