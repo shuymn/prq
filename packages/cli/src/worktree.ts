@@ -136,19 +136,68 @@ async function canonical(path: string): Promise<string> {
   }
 }
 
-// Whether the clone registers a worktree at path, compared as the file system resolves both.
-export async function registered(git: Git, clone: string, path: string): Promise<boolean> {
+// Whether the clone registers a worktree at exactly path, as the file system resolves path's directories (git lists
+// the path it resolved when it added the worktree); a registration elsewhere that a symlink at path leads to is not it.
+async function registered(git: Git, clone: string, path: string): Promise<boolean> {
   const listed = await git.run(clone, ["worktree", "list", "--porcelain"], GIT_QUICK_MS);
   if (listed.code !== 0) {
     return false;
   }
   const wanted = await canonical(path);
-  for (const match of listed.stdout.matchAll(/^worktree (.+)$/gm)) {
-    if (match[1] !== undefined && (await canonical(match[1])) === wanted) {
-      return true;
+  return [...listed.stdout.matchAll(/^worktree (.+)$/gm)].some((match) => match[1] === wanted);
+}
+
+// The repository a directory's git belongs to: its common git directory, as the file system resolves it.
+async function commonDir(git: Git, dir: string): Promise<string | null> {
+  const found = await git.run(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"], GIT_QUICK_MS);
+  return found.code === 0 ? realpath(found.stdout.trim()).catch(() => null) : null;
+}
+
+// The clone, of those given, whose worktree the directory at path is: one that registers exactly path, and whose
+// common git directory the directory's git uses. null when none.
+export async function ownerOf(git: Git, clones: readonly string[], path: string): Promise<string | null> {
+  const own = await commonDir(git, path);
+  if (own === null) {
+    return null;
+  }
+  for (const clone of clones) {
+    if ((await registered(git, clone, path)) && own === (await commonDir(git, clone))) {
+      return clone;
     }
   }
-  return false;
+  return null;
+}
+
+// Removes what prq left at a worktree path, and only that: nothing there but a registration in one of the clones
+// (its directory gone), or a directory that is one of the clones' worktrees (ownerOf). A symlink is never followed,
+// and anything else is left as it is, with the reason.
+export async function releaseWorktree(
+  git: Git,
+  clones: readonly string[],
+  path: string,
+): Promise<{ released: true } | { released: false; reason: string }> {
+  const entry = await lstat(path).catch(() => null);
+  let owners: readonly string[];
+  if (entry === null) {
+    owners = clones;
+  } else if (entry.isSymbolicLink()) {
+    return { released: false, reason: `${path} is a symlink, not followed` };
+  } else if (!entry.isDirectory()) {
+    return { released: false, reason: `${path} is not a directory` };
+  } else {
+    const owner = await ownerOf(git, clones, path);
+    if (owner === null) {
+      const of = clones.length === 0 ? "a clone checkout.json names" : clones.join(" or ");
+      return { released: false, reason: `${path} is not a worktree of ${of}` };
+    }
+    owners = [owner];
+  }
+  for (const clone of owners) {
+    if ((await registered(git, clone, path)) && !(await removeWorktree(git, clone, path))) {
+      return { released: false, reason: `the worktree ${path} could not be removed from ${clone}` };
+    }
+  }
+  return { released: true };
 }
 
 // Removes the worktree registered at exactly path, its directory gone or not, locked or not (a worktree add that was

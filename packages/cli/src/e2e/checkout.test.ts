@@ -10,6 +10,7 @@ import {
   rename,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { join, relative } from "node:path";
@@ -388,5 +389,42 @@ describe("prq checkout", () => {
     const rerun = await checkout("laptop", repo.env);
     expect(rerun.out.path).toBe(second.out.path);
     expect(await readFile(join(rerun.out.path, "notes.txt"), "utf8")).toBe("the AI's file\n");
+  });
+
+  it.each([
+    ["a symlink to a host worktree", "symlink"],
+    ["another repository's worktree", "foreign"],
+  ] as const)("a worktree path prq did not make, %s: exit 1, nothing removed", async (_, kind) => {
+    const { repo, claimed } = await analysisJob();
+    const path = join(claimed.dir, "worktree");
+    await mkdir(claimed.dir, { recursive: true });
+    let target: string;
+    let owner: string;
+    if (kind === "symlink") {
+      target = join(stack.dir(), "host-worktree");
+      owner = repo.clone;
+      await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", target, repo.base);
+      await symlink(target, path);
+    } else {
+      target = path;
+      owner = join(stack.dir(), "other");
+      await repo.fixture.init(owner);
+      await repo.git(owner, "commit", "--quiet", "--allow-empty", "-m", "other");
+      await repo.git(owner, "worktree", "add", "--quiet", "--detach", path, "HEAD");
+    }
+    await writeFile(join(target, "keep.txt"), "keep\n");
+    const registrations = await repo.git(owner, "worktree", "list", "--porcelain");
+
+    const exit = await stack.run(["checkout", "--agent-id", "laptop"], repo.env);
+    expect(exit.code).toBe(1);
+    expect(exit.stdout).toBe("");
+    const reason =
+      kind === "symlink"
+        ? `${path} is a symlink, not followed`
+        : `${path} is not a worktree of ${await realpath(repo.clone)}`;
+    expect(stderrLines(exit)).toEqual([`prq: ${reason}; nothing was removed`]);
+    expect(await readFile(join(target, "keep.txt"), "utf8")).toBe("keep\n");
+    expect(await repo.git(owner, "worktree", "list", "--porcelain")).toBe(registrations);
+    expect(await exists(join(claimed.dir, "checkout.json"))).toBe(false);
   });
 });

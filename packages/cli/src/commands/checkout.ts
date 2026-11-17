@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { Job, PrDetails } from "@prq/protocol";
@@ -16,9 +15,9 @@ import {
   ensureCommit,
   findClone,
   isDirectory,
-  registered,
+  ownerOf,
+  releaseWorktree,
   remoteOf,
-  removeWorktree,
 } from "../worktree.ts";
 import { STALE, writeContext } from "./context.ts";
 
@@ -90,28 +89,27 @@ async function savedDetails(dir: string, job: Job): Promise<PrDetails | null | u
   return saved.output.details;
 }
 
-// The worktree an earlier checkout added for this directory, still registered in the clone checkout.json names: it is
-// at the directory's commit by construction, and the AI may already be working in it.
+// The worktree an earlier checkout added for this directory: the clone checkout.json names still has it there
+// (ownerOf). It is at the directory's commit by construction, and the AI may already be working in it.
 async function reusable(git: Git, dir: string, path: string, job: Job): Promise<Clone | null> {
   const recorded = await readCheckout(dir);
-  if (recorded === null || !(await isDirectory(path)) || !(await registered(git, recorded.clone, path))) {
+  if (recorded === null || !(await isDirectory(path)) || (await ownerOf(git, [recorded.clone], path)) === null) {
     return null;
   }
   const remote = await remoteOf(git, recorded.clone, job.pr);
   return remote === null ? null : { clone: recorded.clone, remote };
 }
 
-// Adds the worktree at path, after removing what an earlier attempt left there: a registration, in the clone it was
-// recorded with or in this one, and the files. checkout.json names the clone before the worktree exists, so a later
-// cleanup finds the registration whatever happens in between.
+// Adds the worktree at path, after removing what an earlier attempt left there, and only that (releaseWorktree): a
+// registration or a worktree of the clone it was recorded with or of this one. Anything else at path ends the command
+// with nothing removed. checkout.json names the clone before the worktree exists, so a later cleanup finds the
+// registration whatever happens in between.
 async function replaceWorktree(git: Git, dir: string, path: string, clone: string, sha: string): Promise<void> {
   const recorded = await readCheckout(dir);
-  for (const earlier of new Set([recorded?.clone ?? clone, clone])) {
-    if ((await registered(git, earlier, path)) && !(await removeWorktree(git, earlier, path))) {
-      throw new CliError(EXIT.error, `the worktree ${path} left by an earlier checkout could not be removed`);
-    }
+  const released = await releaseWorktree(git, [...new Set([recorded?.clone ?? clone, clone])], path);
+  if (!released.released) {
+    throw new CliError(EXIT.error, `${released.reason}; nothing was removed`);
   }
-  await rm(path, { recursive: true, force: true });
   await writeAtomically(join(dir, "checkout.json"), `${JSON.stringify({ clone, sha })}\n`);
   await addWorktree(git, clone, path, sha);
 }

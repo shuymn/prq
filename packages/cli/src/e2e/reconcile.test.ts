@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { ClaimResponse } from "@prq/protocol";
@@ -60,6 +60,14 @@ async function reconcile(agentId: string, env: Record<string, string> = {}, cwd?
   const exit = await stack.run(["reconcile", "--agent-id", agentId], env, cwd);
   expect(exit.code).toBe(0);
   return { exit, out: result(exit) };
+}
+
+// A job directory as prq leaves one whose worktree went: checkout.json naming the clone, no worktree at its path.
+async function recordedDir(repo: Repo): Promise<{ dir: string; path: string }> {
+  const dir = join(stack.home(), "jobs", `${randomUUID()}-r1-${repo.base}`);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "checkout.json"), JSON.stringify({ clone: await realpath(repo.clone), sha: repo.base }));
+  return { dir, path: join(dir, "worktree") };
 }
 
 describe("prq reconcile", () => {
@@ -123,6 +131,66 @@ describe("prq reconcile", () => {
     expect(await repo.worktrees()).toEqual(before.filter((path) => !prqRegistrations.includes(path)));
     expect(await repo.worktrees()).toContain(hostRegistration);
     expect(await repo.git(repo.clone, "for-each-ref", "--format=%(refname) %(objectname)")).toBe(refs);
+  });
+
+  it("cleanup: a job's worktree path that is a symlink to a host worktree: kept, and the host worktree with it", async () => {
+    const repo = await makeRepo(stack.dir(), pr);
+    const host = join(stack.dir(), "host-worktree");
+    await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", host, repo.base);
+    await writeFile(join(host, "host-file"), "the host's\n");
+    const { dir, path } = await recordedDir(repo);
+    await symlink(host, path);
+    const registrations = await repo.worktrees();
+    const refs = await repo.git(repo.clone, "for-each-ref", "--format=%(refname) %(objectname)");
+
+    const { exit, out } = await reconcile("laptop", repo.env);
+    expect(out).toEqual({
+      claim: null,
+      removed: [],
+      kept: [{ dir, reason: `${path} is a symlink, not followed` }],
+      next: "wait",
+    });
+    expect(stderrLines(exit)).toEqual([`prq: ${path} is a symlink, not followed; its job directory is kept`]);
+    expect(await readFile(join(host, "host-file"), "utf8")).toBe("the host's\n");
+    expect(await readFile(join(host, "README.md"), "utf8")).toBe("a widget\n");
+    expect(await repo.worktrees()).toEqual(registrations);
+    expect(await repo.git(repo.clone, "for-each-ref", "--format=%(refname) %(objectname)")).toBe(refs);
+    expect((await lstat(path)).isSymbolicLink()).toBe(true);
+  });
+
+  it.each([
+    ["another repository's worktree, prq's registration removed through git", "removed"],
+    ["another repository's worktree, prq's registration left behind", "left"],
+    ["a worktree of the clone moved there by hand", "moved"],
+  ] as const)("cleanup: a job's worktree path holding %s: kept, its files and registrations too", async (_, kind) => {
+    const repo = await makeRepo(stack.dir(), pr);
+    const { dir, path } = await recordedDir(repo);
+    let owner = repo.clone;
+    if (kind === "moved") {
+      // Its .git leads to the clone, which registers it where it was.
+      const elsewhere = join(stack.dir(), "elsewhere");
+      await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", elsewhere, repo.base);
+      await rename(elsewhere, path);
+    } else {
+      // The clone registers prq's worktree at the path, or no longer does; another repository's worktree is there now.
+      await repo.git(repo.clone, "worktree", "add", "--quiet", "--detach", path, repo.base);
+      await (kind === "removed" ? repo.git(repo.clone, "worktree", "remove", path) : rm(path, { recursive: true }));
+      owner = join(stack.dir(), "other");
+      await repo.fixture.init(owner);
+      await repo.git(owner, "commit", "--quiet", "--allow-empty", "-m", "other");
+      await repo.git(owner, "worktree", "add", "--quiet", "--detach", path, "HEAD");
+    }
+    await writeFile(join(path, "important.txt"), "keep\n");
+    const ownerRegistrations = await repo.git(owner, "worktree", "list", "--porcelain");
+    const registrations = await repo.worktrees();
+
+    const { exit, out } = await reconcile("laptop", repo.env);
+    const reason = `${path} is not a worktree of ${await realpath(repo.clone)}`;
+    expect(out).toEqual({ claim: null, removed: [], kept: [{ dir, reason }], next: "wait" });
+    expect(stderrLines(exit)).toEqual([`prq: ${reason}; its job directory is kept`]);
+    expect(await readFile(join(path, "important.txt"), "utf8")).toBe("keep\n");
+    expect(await repo.git(owner, "worktree", "list", "--porcelain")).toBe(ownerRegistrations);
+    expect(await repo.worktrees()).toEqual(registrations);
   });
 
   it("restart after a replaced claimId: keeps the record and the saved answer; the next claim resumes them", async () => {
