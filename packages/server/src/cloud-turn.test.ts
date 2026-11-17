@@ -713,13 +713,29 @@ describe("tools", () => {
 });
 
 describe("workspace prepare", () => {
-  it("fails a job whose workspace does not answer its prepare at the backstop, and not a tick sooner", async () => {
+  it("fails a job whose workspace does not answer its prepare at the backstop, not a tick sooner, and stops listening to the turn's signal", async () => {
     captureLogs();
     const { stub, ref } = await cloudSession("turn", sockets);
     const model = new ScriptedModel();
     useCloudModel(model);
     const workspace = new FakeWorkspace();
     workspace.prepareHangs = true;
+    // The abort listeners added to the turn's signal once the prepare started, and those removed.
+    const listeners = { added: [] as unknown[], removed: [] as unknown[] };
+    const prepare = workspace.prepare.bind(workspace);
+    vi.spyOn(workspace, "prepare").mockImplementation((target, signal) => {
+      const add = signal.addEventListener.bind(signal);
+      const remove = signal.removeEventListener.bind(signal);
+      vi.spyOn(signal, "addEventListener").mockImplementation((type, listener, options) => {
+        listeners.added.push(...(type === "abort" ? [listener] : []));
+        add(type, listener, options);
+      });
+      vi.spyOn(signal, "removeEventListener").mockImplementation((type, listener, options) => {
+        listeners.removed.push(...(type === "abort" ? [listener] : []));
+        remove(type, listener, options);
+      });
+      return prepare(target, signal);
+    });
     useWorkspace(workspace);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
@@ -734,6 +750,8 @@ describe("workspace prepare", () => {
       failure: "workspace: no answer within 31 minutes",
     });
     expect(model.calls).toHaveLength(0);
+    expect(listeners.added).not.toEqual([]);
+    expect(listeners.added.filter((listener) => !listeners.removed.includes(listener))).toEqual([]);
   });
 
   it("ends the wait for the prepare at once when the turn is aborted", async () => {

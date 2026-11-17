@@ -171,7 +171,7 @@ async function runPaged(context: ToolContext, signal: AbortSignal | undefined, p
   try {
     const callSignal = signal ?? new AbortController().signal;
     const command = { argv: paged.argv, page: { ...paged.request, capChars: startCap } };
-    const result = await raceAbort(context.workspace.run(context.target, command, callSignal), callSignal);
+    const result = await raceAbort(() => context.workspace.run(context.target, command, callSignal), callSignal);
     const numbered = paged.request.numbered === true;
     const cap = Math.min(startCap, capFor(context.room.leftChars()));
     if (cap < MIN_PAGE_CHARS) {

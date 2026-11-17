@@ -1290,11 +1290,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     outcome: TurnOutcome,
   ): Promise<PreparedWorkspace | null> {
     try {
-      return await withTimeout(
-        raceAbort(workspace.prepare(target, signal), signal),
-        WORKSPACE_CALL_MS,
-        "the workspace's prepare",
-      );
+      return await raceAbort(() => workspace.prepare(target, signal), signal, WORKSPACE_CALL_MS);
     } catch (error) {
       if (signal.aborted) {
         outcome.aborted = true;

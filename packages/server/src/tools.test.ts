@@ -68,6 +68,12 @@ async function tools(options: FakeWorkspaceOptions = {}, room = new ContextRoom(
   return { workspace, room, tools: workspaceTools({ workspace, target: TARGET, prepared, room }) };
 }
 
+// A turn's tools over a workspace whose every command ends as `run` says, with the room given.
+function stubTools(run: WorkspaceClient["run"], room = new ContextRoom(1_048_576)) {
+  const workspace: WorkspaceClient = { prepare: async () => ({ sha: HEAD, mergeBase: BASE }), run };
+  return workspaceTools({ workspace, target: TARGET, prepared: { sha: HEAD, mergeBase: BASE }, room });
+}
+
 // A tool's result as the model receives it.
 async function call(set: ToolSet, name: string, input: Record<string, unknown>, abortSignal?: AbortSignal) {
   const execute = set[name]?.execute;
@@ -189,17 +195,8 @@ describe("tools", () => {
   });
 
   it("returns a failed workspace call as text", async () => {
-    const workspace: WorkspaceClient = {
-      prepare: async () => ({ sha: HEAD, mergeBase: BASE }),
-      run: async () => {
-        throw new Error("the container stopped");
-      },
-    };
-    const set = workspaceTools({
-      workspace,
-      target: TARGET,
-      prepared: { sha: HEAD, mergeBase: BASE },
-      room: new ContextRoom(1_048_576),
+    const set = stubTools(async () => {
+      throw new Error("the container stopped");
     });
 
     expect(await call(set, "read_file", { path: "src/rates.ts" })).toBe("error: the container stopped");
@@ -374,6 +371,34 @@ describe("tool abort", () => {
     await consumed;
 
     expect(ended).toEqual(["error: the tool call was cancelled"]);
+  });
+
+  it("starts no call once the turn has aborted, so no call's failure goes unhandled", async () => {
+    const unhandled: unknown[] = [];
+    const record = (event: PromiseRejectionEvent): void => {
+      unhandled.push(event.reason);
+      event.preventDefault();
+    };
+    addEventListener("unhandledrejection", record);
+    try {
+      let started = 0;
+      const set = stubTools(async () => {
+        started += 1;
+        throw new Error("the container stopped");
+      });
+      const turn = new AbortController();
+      turn.abort();
+
+      const result = await call(set, "read_file", { path: "src/rates.ts" }, turn.signal);
+      // The platform reports an unhandled rejection after the microtasks run out.
+      await scheduler.wait(50);
+
+      expect(result).toBe("error: the tool call was cancelled");
+      expect(unhandled).toEqual([]);
+      expect(started).toBe(0);
+    } finally {
+      removeEventListener("unhandledrejection", record);
+    }
   });
 });
 

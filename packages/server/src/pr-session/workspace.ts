@@ -1,3 +1,4 @@
+import { WaitTimeout } from "../wait.ts";
 import type { Page, PageRequest } from "./pages.ts";
 
 // What a cloud job's tools read the code through (docs/design.md, Workspace (cloud)): a checkout of the job's commit,
@@ -33,15 +34,24 @@ export const WORKSPACE_CALL_MS = 31 * 60_000;
 // The most stderr a command returns: enough for git's message.
 export const STDERR_CHARS = 1000;
 
-// A workspace call that ended its wait: at the turn's abort or at the backstop. The call itself may still be running in
-// the workspace, which ends it by its own bounds.
-export function raceAbort<T>(call: Promise<T>, signal: AbortSignal): Promise<T> {
+// Waits for a workspace call until it settles, the signal aborts, or, when given, the backstop passes (a WaitTimeout).
+// A call is not started once the signal has aborted, so no call's failure goes unobserved. Every ending removes the
+// abort listener and clears the timer; the call itself may still be running in the workspace, which ends it by its own
+// bounds.
+export function raceAbort<T>(start: () => Promise<T>, signal: AbortSignal, backstopMs?: number): Promise<T> {
   if (signal.aborted) {
     return Promise.reject(signal.reason);
   }
-  const listening = new AbortController();
-  const aborted = new Promise<never>((_, reject) => {
-    signal.addEventListener("abort", () => reject(signal.reason), { once: true, signal: listening.signal });
+  const call = start();
+  const ended = Promise.withResolvers<never>();
+  const onAbort = (): void => ended.reject(signal.reason);
+  signal.addEventListener("abort", onAbort, { once: true });
+  const timer =
+    backstopMs === undefined
+      ? undefined
+      : setTimeout(() => ended.reject(new WaitTimeout(`the workspace took over ${backstopMs} ms`)), backstopMs);
+  return Promise.race([call, ended.promise]).finally(() => {
+    signal.removeEventListener("abort", onAbort);
+    clearTimeout(timer);
   });
-  return Promise.race([call, aborted]).finally(() => listening.abort());
 }
