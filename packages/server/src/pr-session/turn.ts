@@ -62,7 +62,7 @@ export function turnFailure(outcome: TurnOutcome): string | null {
   }
   switch (outcome.finishReason) {
     case "stop":
-      return outcome.message !== undefined && hasText(resultParts(outcome.message.parts)) ? null : NO_ANSWER_TEXT;
+      return outcome.message !== undefined && hasText(outcome.message.parts) ? null : NO_ANSWER_TEXT;
     case "length":
       return "the model stopped at its output limit";
     case "content-filter":

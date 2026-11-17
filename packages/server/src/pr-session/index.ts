@@ -891,11 +891,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       });
     }
     this.#publishView();
-    const by = { kind: "local", agentId } as const;
-    const metadata: MessageMetadata =
-      reserved.kind === "answer"
-        ? { kind: "answer", jobId, questionId: reserved.target, sha: reserved.workspace_sha, by }
-        : { kind: "analysis", jobId, headSha: reserved.target, by };
+    const metadata = this.#resultMetadata(reserved, { kind: "local", agentId });
     const messageId = resultMessageId(reserved);
     try {
       await this.insertMessages(
