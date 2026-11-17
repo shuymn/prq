@@ -87,7 +87,8 @@ UI:    React + Vite (Workers Static Assets), connected to PrSession with useAgen
   four empty, as the tests' runtime sets them), a cloud job fails `cloud agent not configured`; with some set or one
   malformed, it fails `cloud agent misconfigured: <each variable and what is wrong with it>`, never a value, and
   `prq.config.invalid` is logged. `pnpm run check:provider`
-  in `packages/server` shows what a provider does with the requests a turn makes.
+  in `packages/server` shows what a provider does with the requests a turn makes, and `pnpm run check:tools` runs a
+  turn's tool loop against it over an in-memory repository, with a window small enough that the tools are withdrawn.
 - **prq CLI.** Runs on the host's machine, talks to the Worker over HTTP with a service token, and uses the host's own
   git and `gh`.
 - **Sandbox.** The cloud workspace of a PrSession: a container with a checkout of the PR that the agent searches and
@@ -741,9 +742,26 @@ Pi's copyright notice.
 - **Token count.** The usage that the provider returned for the previous response is the main source, and only messages
   added since then are estimated. The estimate is characters ÷ 3, or a ratio measured in the session. Characters ÷ 4
   under-counted Japanese text and diffs by 1.3 to 1.7 times.
-- **Overrun inside one turn.** Compaction between turns cannot prevent it, so tool results are capped (for example, cut at
-  12,000 characters each) and the amount one turn may read is capped. When the cap is reached the agent answers from what
-  it has read.
+- **Tools.** A job with a workspace commit reads the code through four tools, each a git command at that commit, so a
+  path resolves in the commit's tree only and a symlink is its link text, never followed: `list_files` (the paths, all
+  or under a path), `read_file` (a file with line numbers), `grep` (an extended regular expression, each match as
+  `path:line:text`) and `diff` (the change from the merge base: the changed files with their line counts, or one file's
+  patch; when the history does not reach the merge base, the two tips, and the result says so). What a tool takes from
+  the model follows `--end-of-options` or `--`, so it is never read as an option. A failure (a missing path, a bad
+  pattern, a workspace that did not answer) comes back to the model as `error: …` text, and the turn goes on. A question
+  asked before any push has no workspace commit and gets no tools.
+- **Pages.** A tool result is at most 12,000 characters. A longer output comes in pages, and a note at the end of a
+  page says where the next one starts: a line, and a character inside a line longer than a page, so any part of a
+  large file or of a minified line can be reached. The output before a page is read and dropped as it streams, never
+  kept.
+- **Overrun inside one turn.** Compaction between turns cannot prevent it, so a turn measures the room it has left: the
+  model's window, less the reserve, less the newest request the provider measured (its input and output tokens), less
+  characters ÷ 3 of what was added after it (the tool results taken since). Before the first response, the whole
+  request is estimated. The newest measurement already holds every earlier step, so a long turn is never charged twice
+  for what it read. Each tool result is cut to the room left, in the order results complete; when less room is left
+  than one result needs, the next model call gets `toolChoice: "none"` (the tool definitions stay, so the cached prefix
+  does too) and the agent answers from what it has read. A turn has no step limit: it goes on while the model calls
+  tools (see [Billing limits](#billing-limits)).
 - **Cut point.** Going back from the newest message, the system keeps the most recent part (Pi's default: 20,000
   tokens). A tool call and its result are never separated. If the cut falls inside a turn, the first half of that turn is
   summarized separately; this step is required, because it happens every time when the amount kept is smaller than one
@@ -918,6 +936,10 @@ Apart from these, bounds that keep a job from waiting forever (liveness, not spe
   the AI SDK's bounds start only at the response); the second is the AI SDK's. Each request is bounded on its own, a
   retry included, and also ends at once when its caller aborts it, whether or not the request honours the abort. A
   job's total time is not bounded.
+- A tool call ends when the workspace answers, at the latest after 31 minutes (a backstop over the workspace's own
+  bounds, since a call may rebuild the checkout first), and at once when the turn is aborted; either way the model gets
+  the failure as text. The checkout a job's first model call needs is waited for the same way, and a job whose
+  checkout cannot be made fails `workspace: <reason>`.
 - A cloud job's run is started at most 3 times across restarts, and the SDK's own recovery is declined (see
   [Owner and jobs](#owner-and-jobs)). A compaction is retried once.
 
@@ -967,13 +989,17 @@ prq/
 │  │   │   │   ├─ model.ts       the model provider, its response bound, a provider error as a failure reason
 │  │   │   │   ├─ context-budget.ts  the context parameters scaled to the model's window
 │  │   │   │   ├─ projection.ts  what a job's model reads of the conversation
+│  │   │   │   ├─ tools.ts       the cloud agent's tools and the turn's loop
+│  │   │   │   ├─ room.ts        how much a turn may still read: the window less the newest measured request
+│  │   │   │   ├─ pages.ts       a page of a command's output, from any line or character
+│  │   │   │   ├─ workspace.ts   what the tools call: the workspace's client and its bounds
 │  │   │   │   └─ prompt.ts      the system prompt and an analysis's task
 │  │   │   ├─ github.ts          the GitHub App: installation tokens and pull request reads, each bounded
 │  │   │   ├─ instructions/      prompts, skill registry, activate_skill / read_skill_resource
 │  │   │   ├─ workspace.ts       Sandbox
 │  │   │   └─ client/            React UI (Vite)
-│  │   ├─ scripts/           manual checks of a model provider and of the GitHub App (`pnpm run check:provider`,
-│  │   │                     `check:github`), not part of the Worker
+│  │   ├─ scripts/           manual checks of a model provider, the tool loop and the GitHub App
+│  │   │                     (`pnpm run check:provider`, `check:tools`, `check:github`), not part of the Worker
 │  │   ├─ wrangler.jsonc
 │  │   ├─ vite.config.ts
 │  │   └─ vitest.config.ts
