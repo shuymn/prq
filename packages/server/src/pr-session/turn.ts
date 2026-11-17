@@ -1,4 +1,6 @@
+import { MessageMetadata } from "@prq/protocol";
 import { type FinishReason, isToolUIPart, type LanguageModel, type LanguageModelUsage, type UIMessage } from "ai";
+import * as v from "valibot";
 
 import type { JobRow, JobUsage } from "./jobs.ts";
 
@@ -89,6 +91,12 @@ export function resultParts(parts: UIMessage["parts"]): UIMessage["parts"] {
 // Whether parts hold text that is not blank: an answer worth committing, or text worth keeping as incomplete.
 export function hasText(parts: UIMessage["parts"]): boolean {
   return parts.some((part) => part.type === "text" && part.text.trim().length > 0);
+}
+
+// The reason stored with a run's incomplete text.
+export function storedFailure(metadata: unknown): string {
+  const parsed = v.safeParse(MessageMetadata, metadata);
+  return (parsed.success ? parsed.output.incomplete?.reason : undefined) ?? "the turn failed";
 }
 
 // The message a failed run's text is kept as. Its own ID per run leaves <kind>-<jobId> for a later success.

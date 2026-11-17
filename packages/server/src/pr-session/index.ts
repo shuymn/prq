@@ -100,6 +100,7 @@ import {
   reasonText,
   resultParts,
   stepTokens,
+  storedFailure,
   turnFailure,
   usageMetadata,
 } from "./turn.ts";
@@ -144,8 +145,8 @@ function isQuestion(message: UIMessage): boolean {
   return message.role === "user" && message.metadata === undefined;
 }
 
-// A stored message as the session store returns it: its parts are not typed further.
-type StoredMessage = { parts: readonly unknown[] };
+// A stored message as the session store returns it: its parts and metadata are not typed further.
+type StoredMessage = { parts: readonly unknown[]; metadata?: unknown };
 
 const TextPart = v.object({ type: v.literal("text"), text: v.string() });
 
@@ -1116,13 +1117,19 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // A running job whose turn is not live (the object restarted, or the turn ended before its model call): done when its
-  // result is stored (a commit stopped between its append and its statement), started again under a new turn while
-  // its run has starts left, else failed. Each is one statement guarded by the turn it found.
+  // result is stored, failed with the stored reason when its run's incomplete text is (either way a commit stopped
+  // between its append and its statement, and the run has ended), started again under a new turn while its run has
+  // starts left, else failed. Each is one statement guarded by the turn it found.
   async #recoverTurn(row: JobRow): Promise<void> {
     const model = this.cloudModel()?.modelId ?? null;
     const id = resultMessageId(row);
     if ((await this.#message(id)) !== undefined) {
       this.#endRun(row, { done: id }, model);
+      return;
+    }
+    const incomplete = await this.#message(incompleteMessageId(row));
+    if (incomplete !== undefined) {
+      this.#endRun(row, { failed: storedFailure(incomplete.metadata) }, model);
       return;
     }
     const agent = this.cloudAgent();

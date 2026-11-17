@@ -165,6 +165,31 @@ describe("restart after a reset", () => {
     expect(events(logs, "prq.job.usage")).toMatchObject([{ jobId: job.job_id, outcome: "done", starts: 1 }]);
   });
 
+  it("fails a run whose incomplete text was appended before the reset, with its stored reason and no new start", async () => {
+    const logs = captureLogs();
+    const session = await cloudSession("recovery", sockets);
+    const model = new ScriptedModel().add([...text("first partial"), { fail: new Error("first error") }]);
+    useCloudModel(model);
+    const held = await holdCommit(session.stub, "after");
+    await session.client.chat([Q1]);
+    await held.reached();
+    const before = await messageRows(session);
+
+    const stub = await resetAndRestart(session, model, [
+      ...text("second partial"),
+      { fail: new Error("second error") },
+    ]);
+    await untilState(stub, "q1", "failed");
+
+    const job = await jobOf(stub, "q1");
+    expect(job).toMatchObject({ failure: "first error", unresolved_failure: 1, turn_id: null });
+    expect(model.calls).toHaveLength(1);
+    expect(await messageRows(session)).toEqual(before);
+    expect(textOf((await storedMessages(session.path, session.token)).at(-1))).toBe("first partial");
+    expect(events(logs, "prq.job.restarted")).toEqual([]);
+    expect(events(logs, "prq.job.usage")).toMatchObject([{ jobId: job.job_id, outcome: "failed", starts: 1 }]);
+  });
+
   it("fails a run whose turn was interrupted on each of its 3 starts", async () => {
     const logs = captureLogs();
     const session = await cloudSession("recovery", sockets);
