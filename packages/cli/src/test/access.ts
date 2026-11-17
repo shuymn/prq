@@ -33,13 +33,15 @@ type Plan =
 export type Mode = "forward" | "forbid" | "redirect" | "expired";
 
 // A request as the stand-in saw it: when it arrived (performance.now()), its route and agent ID, whether it carried the
-// service token, and the status answered (null while pending or when cut off before the Worker answered).
+// service token, the status answered (null while pending or when cut off before the Worker answered), and whether its
+// connection is still open (a request in flight).
 type LogEntry = {
   at: number;
   route: string;
   agentId: string | null;
   serviceToken: boolean;
   status: number | null;
+  open: boolean;
 };
 
 export type Access = {
@@ -108,8 +110,18 @@ export async function startAccess(worker: Worker): Promise<Access> {
     const at = performance.now();
     const route = new URL(req.url ?? "/", "http://stand-in").pathname;
     const body = await text(req);
-    const entry: LogEntry = { at, route, agentId: agentIdOf(body), serviceToken: false, status: null };
+    const entry: LogEntry = {
+      at,
+      route,
+      agentId: agentIdOf(body),
+      serviceToken: false,
+      status: null,
+      open: !res.closed,
+    };
     access.log.push(entry);
+    res.on("close", () => {
+      entry.open = false;
+    });
     const answer = (status: number, headers: Record<string, string>, payload: string) => {
       entry.status = status;
       if (!res.destroyed) {

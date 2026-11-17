@@ -41,7 +41,7 @@ environment:
   PRQ_CLONE_ROOTS            directories holding <owner>/<repo> clones, separated by ':'
   PRQ_VERSION_NOTICE=0       no notice when the server's version differs
 
-exit codes: 0 done, 1 error, 2 wait timed out, 3 authentication failure, 4 claim mismatch
+exit codes: 0 done, 1 error, 2 wait timed out, 3 setup failure (authentication or configuration), 4 claim mismatch
 `;
 
 const DEFAULT_WAIT_S = 1500;

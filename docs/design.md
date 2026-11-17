@@ -313,8 +313,10 @@ UI, webhook and CLI input all enter through PrSession.
 - An authentication failure (a redirect, 401 or 403) during `wait` is told apart from an ordinary timeout and ends with
   an error, so the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.
-- The local AI's procedure (a skill or an `AGENTS.md`) is one round of: `wait` → `claim` → work → `submit` → start
-  `wait` again in the background. The last step is mandatory, because it is what wakes the AI for the next job.
+- The local AI's procedure, `skills/prq/SKILL.md`, is one round of: `wait` → `claim` → work → `submit` → start
+  `wait` again in the background. The last step is mandatory, because it is what wakes the AI for the next job. Every
+  outcome of a job ends there, except exit 3, which stops the session until the host fixes the setup (see
+  [Local CLI](#local-cli-prq)).
 
 ### Local CLI (`prq`)
 
@@ -345,9 +347,11 @@ UI, webhook and CLI input all enter through PrSession.
 - **Output.** stdout carries one JSON line, the command's result, or nothing when the command failed (exit 1 or 3).
   Every result has `next`, the step the AI takes next, so each command restates the procedure at the moment it
   applies. stderr carries notices (the version, a retry, an ended claim) and errors, each line starting `prq:`.
-- **Exit codes:** 0 done; 1 anything else; 2 `wait` timed out; 3 authentication failure, including no service token
-  configured (restarting cannot fix it); 4 claim mismatch, when the claim a command works under no longer holds (for
-  `submit`, the answer was dropped).
+- **Exit codes:** 0 done; 1 anything else; 2 `wait` timed out; 3 a setup failure only the host can fix: an
+  authentication failure, no service token configured, or a configuration the command refuses (`PRQ_URL`, the agent
+  ID, `PRQ_HOME`, and for `checkout` `PRQ_CLONE_ROOTS`); 4 claim mismatch, when the claim a command works under no
+  longer holds (for `submit`, the answer was dropped). Exit 3 is the one the procedure stops at: restarting or waiting
+  again would fail the same way, while the procedure answers exit 1 from `wait` by waiting again.
 
   | Command                                         | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
   | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -862,8 +866,9 @@ prq/
 │          ├─ answer.ts          the answer prq submit sends: answer.md, checked before any request
 │          ├─ commands/          one module per command
 │          ├─ e2e/               the compiled binary against the real Worker
-│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process
+│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`)
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
+├─ .claude/skills/verify-prq/  running the local stack with scripted jobs for a local agent, and reading its request log
 ├─ docs/                   design.md, decisions.md, ui.md, spikes.md
 ├─ design/                 design tokens, component inventory, screens ↔ Pencil frames, the Pencil document (the UI design's source for code)
 ├─ pnpm-workspace.yaml     catalog
