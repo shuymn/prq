@@ -68,6 +68,45 @@ async function readPull(pr: PrRef): Promise<v.InferOutput<typeof Pull>> {
   return v.parse(Pull, await res.json());
 }
 
+// The Worker's requests to GitHub, seen where the harness hands them to this process's fetch: each one's method, host
+// and path, status, and whether it carried git's Basic credentials for the installation token (never the token).
+function watchGithub(): { requests: string[]; stop: () => void } {
+  const requests: string[] = [];
+  const passThrough = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.host !== "github.com" && url.host !== "api.github.com") {
+      return passThrough(input, init);
+    }
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    const authorization = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get(
+      "authorization",
+    );
+    const basic = /^Basic (.+)$/.exec(authorization ?? "");
+    const user =
+      basic === null
+        ? null
+        : Buffer.from(basic[1] ?? "", "base64")
+            .toString()
+            .split(":")[0];
+    const credentials =
+      user === "x-access-token"
+        ? ", with the installation token"
+        : authorization === null
+          ? ""
+          : ", with other credentials";
+    const response = await passThrough(input, init);
+    requests.push(`${method} ${url.host}${url.pathname}${url.search}: ${response.status}${credentials}`);
+    return response;
+  };
+  return {
+    requests,
+    stop: () => {
+      globalThis.fetch = passThrough;
+    },
+  };
+}
+
 // --- Docker, only through these operations ---
 
 async function containers(): Promise<Container[]> {
@@ -235,7 +274,25 @@ export async function checkWorkspace(
     return fresh.filter((container) => container.image.startsWith(IMAGE_PREFIX));
   };
   const results = { prepared: false, rebuilt: false, contained: false };
-  const worker = await startWorker({ model: settings.model, githubApp: settings.app.settings, containers: true });
+  // Installed before the Worker starts, so the Worker's own fetch wrapper passes GitHub's requests through it.
+  const github = watchGithub();
+  const githubSince = (from: number) => {
+    const lines = github.requests.slice(from);
+    for (const line of lines) {
+      print(`  the Worker to GitHub: ${line}`);
+    }
+    return lines;
+  };
+  const fetched = (lines: string[]) =>
+    lines.some((line) =>
+      line.startsWith(`POST github.com/${pr.owner}/${pr.repo}.git/git-upload-pack: 200, with the installation token`),
+    );
+  const worker = await startWorker({ model: settings.model, githubApp: settings.app.settings, containers: true }).catch(
+    (error: unknown) => {
+      github.stop();
+      throw error;
+    },
+  );
   try {
     // 1. The analysis prepares from empty at the head; a question is answered through the tools.
     print("step 1: the push's analysis prepares the container from empty, and a code question is answered");
@@ -258,6 +315,10 @@ export async function checkWorkspace(
     for (const line of firstEvents) {
       print(`  ${line}`);
     }
+    const firstGithub = githubSince(0);
+    const minted = firstGithub.some((line) =>
+      line.startsWith(`POST api.github.com/app/installations/${settings.app.installationId}/access_tokens: 201`),
+    );
     const rebuiltAtHead = (lines: string[]) =>
       lines.some((line) => line.includes("prq.workspace.prepared") && line.includes(head) && line.includes("rebuild"));
     from = worker.logs().length;
@@ -266,7 +327,13 @@ export async function checkWorkspace(
       print(`  ${line}`);
     }
     results.prepared =
-      analysis?.state === "done" && first.length === 1 && rebuiltAtHead(firstEvents) && asked.done && asked.tools > 0;
+      analysis?.state === "done" &&
+      first.length === 1 &&
+      rebuiltAtHead(firstEvents) &&
+      minted &&
+      fetched(firstGithub) &&
+      asked.done &&
+      asked.tools > 0;
     print(results.prepared ? "step 1: as expected" : "step 1: NOT as expected");
 
     const container = first[0];
@@ -276,6 +343,7 @@ export async function checkWorkspace(
 
     // 3. Inside the container: other hosts and paths get 403, and no token is there.
     print("step 3: from inside the container, other hosts and paths get 403, and no token is there");
+    const probeFrom = github.requests.length;
     const probes = await exec(container.id, [
       "python3",
       "-c",
@@ -300,6 +368,7 @@ export async function checkWorkspace(
     for (const line of statuses) {
       print(`  ${line}`);
     }
+    githubSince(probeFrom);
     const [allowed, ...denied] = statuses;
     const probesHold =
       allowed?.endsWith(" 200") === true && denied.length === 6 && denied.every((line) => line.endsWith(" 403"));
@@ -332,22 +401,26 @@ export async function checkWorkspace(
     const state = (await containers()).find((entry) => entry.id === container.id)?.state ?? "gone";
     print(`  container ${container.id.slice(0, 12)}: ${state}`);
     from = worker.logs().length;
+    const githubFrom = github.requests.length;
     const again = await question(worker, pr, "workspace-check-2", QUESTIONS[1] ?? "", print);
     const secondEvents = events(worker, from);
     for (const line of secondEvents) {
       print(`  ${line}`);
     }
+    const secondGithub = githubSince(githubFrom);
     const second = (await workspaces()).filter((entry) => entry.state === "running");
     print(`  Workspace containers running: ${second.map((entry) => entry.id.slice(0, 12)).join(", ") || "none"}`);
     results.rebuilt =
       state !== "running" &&
       again.done &&
       rebuiltAtHead(secondEvents) &&
+      fetched(secondGithub) &&
       second.length === 1 &&
       second[0]?.id !== container.id;
     print(results.rebuilt ? "step 2: as expected" : "step 2: NOT as expected");
   } finally {
     await worker.close();
+    github.stop();
     await workspaces();
     const left = (await containers()).filter((container) => ours.has(container.id));
     for (const container of left) {
