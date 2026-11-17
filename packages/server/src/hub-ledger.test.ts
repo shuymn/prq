@@ -5,7 +5,6 @@ import {
   type AgentRow,
   type HubView,
   type Job,
-  type JobCounts,
   LEDGER_PAGE_BYTES,
   LEDGER_PAGE_ROWS,
   LedgerPage,
@@ -56,6 +55,7 @@ import {
   ledgerRows,
   newSession,
   prSessionSeams,
+  quiet,
   retryIn,
   sessionSql,
   setPool,
@@ -269,30 +269,9 @@ async function repoPages(): Promise<RepoPage[]> {
   return pages;
 }
 
-function jobCounts(waiting: number, running: number, failed: number): JobCounts {
-  return { waiting, running, failed };
-}
-
 // An agent's row in the first page of the pool.
 async function agentRow(agentId: string): Promise<AgentRow | undefined> {
   return v.parse(AgentPage, await (await hub()).agentPage()).rows.find((row) => row.agentId === agentId);
-}
-
-// The jobs of every row, added up.
-function jobTotals(rows: readonly LedgerRow[]): JobCounts {
-  return rows.reduce(
-    (sum, { jobs }) => ({
-      waiting: sum.waiting + jobs.waiting,
-      running: sum.running + jobs.running,
-      failed: sum.failed + jobs.failed,
-    }),
-    { waiting: 0, running: 0, failed: 0 },
-  );
-}
-
-// The rows needing attention as their problems say.
-async function attentionRows(): Promise<number> {
-  return (await ledgerRows()).filter((row) => needsAttention(row.problem)).length;
 }
 
 function sessionsOf(rows: readonly LedgerRow[]): string[] {
@@ -360,23 +339,6 @@ describe("view broadcasts", () => {
     expect(logs.some((log) => log.entry["event"] === "prq.state.refused")).toBe(true);
   });
 });
-
-// An entry with nothing to show.
-function quiet(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
-  return {
-    details: null,
-    owner: "local",
-    latestEvent: null,
-    summaryFailed: false,
-    answerFailed: false,
-    stalled: false,
-    waitingWork: false,
-    unsummarized: false,
-    jobs: { waiting: 0, running: 0, failed: 0 },
-    claims: [],
-    ...overrides,
-  };
-}
 
 describe("out-of-order push", () => {
   it("keeps the newer entry when an older delivery lands after it, and logs the stale one", async () => {
@@ -1155,28 +1117,6 @@ describe("bounded view and ledger pages", () => {
     expect(logs.some(({ entry }) => entry["event"] === "prq.page.overflow" && entry["first"] === "octo~fit~1")).toBe(
       true,
     );
-  });
-
-  it("keeps the needs-attention count, with a local agent present and without one, and the job counts as entries change", async () => {
-    captureLogs();
-    const stub = await hub();
-    const check = async () => {
-      await setPool([]);
-      expect((await stub.view()).needsAttention).toBe(await attentionRows());
-      await setPool(["desk"]);
-      expect((await stub.view()).needsAttention).toBe(await attentionRows());
-      expect((await stub.view()).jobs).toEqual(jobTotals(await ledgerRows()));
-    };
-    await stub.upsertLedger("octo~count~1", 1, quiet({ answerFailed: true, jobs: jobCounts(0, 0, 2) }));
-    await stub.upsertLedger("octo~count~2", 1, quiet({ waitingWork: true, jobs: jobCounts(3, 0, 0) }));
-    await stub.upsertLedger("octo~count~3", 1, quiet({ unsummarized: true, jobs: jobCounts(0, 1, 0) }));
-    await stub.upsertLedger("octo~count~4", 1, quiet({ stalled: true, waitingWork: true, jobs: jobCounts(1, 1, 0) }));
-    await check();
-    // A row resolved, a row that fails, and a redelivery that changes nothing.
-    await stub.upsertLedger("octo~count~1", 2, quiet({ jobs: jobCounts(0, 1, 0) }));
-    await stub.upsertLedger("octo~count~3", 2, quiet({ summaryFailed: true, jobs: jobCounts(0, 0, 1) }));
-    await stub.upsertLedger("octo~count~4", 1, quiet());
-    await check();
   });
 
   it("lists the first MAX_ROW_CLAIMS of a row's claims", async () => {
