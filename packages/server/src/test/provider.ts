@@ -34,7 +34,7 @@ export async function useModelEnv(
   });
 }
 
-type Reply = (signal: AbortSignal | undefined) => Promise<Response>;
+export type Reply = (signal: AbortSignal | undefined) => Promise<Response>;
 
 type ServedRequest = { body: Record<string, unknown>; signal: AbortSignal | undefined };
 

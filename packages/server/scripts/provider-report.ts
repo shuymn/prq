@@ -77,6 +77,18 @@ function stepUsage(parts: Part[]) {
   return parts.findLast((part) => part.type === "finish-step")?.usage;
 }
 
+// Whether a run ended as a turn's result must: answer text that is not blank, then a `stop` finish.
+function answered(parts: Part[]): boolean {
+  return (
+    parts.some((part) => part.type === "text-delta" && part.text.trim() !== "") &&
+    parts.find((part) => part.type === "finish")?.finishReason === "stop"
+  );
+}
+
+function yesNo(value: boolean): string {
+  return value ? "yes" : "no";
+}
+
 // A field of a value that may be an object.
 function field(value: unknown, name: string): unknown {
   return typeof value === "object" && value !== null ? Reflect.get(value, name) : undefined;
@@ -137,9 +149,10 @@ function checks(config: ModelConfig): Check[] {
       run: async (model, say) => {
         const run = await stream(model, "Count from 1 to 30, one number per line, and nothing else.");
         const chunks = run.parts.filter((part) => part.type === "text-delta").length;
-        say(`text chunks: ${chunks} (more than one: ${chunks > 1 ? "yes" : "no"})`);
-        say(`finish reason: ${finish(run.parts)}`);
-        return !errorsReported(run, say, secret) && chunks > 1;
+        const done = answered(run.parts);
+        say(`text chunks: ${chunks} (more than one: ${yesNo(chunks > 1)})`);
+        say(`finish reason: ${finish(run.parts)}; answered (text, then a stop): ${yesNo(done)}`);
+        return !errorsReported(run, say, secret) && chunks > 1 && done;
       },
     },
     {
@@ -149,15 +162,18 @@ function checks(config: ModelConfig): Check[] {
         const hits = new Set<string>();
         for (const attempt of ["first", "second"]) {
           const run = await stream(model, LONG_PROMPT);
-          ok &&= !errorsReported(run, say, secret);
+          const done = answered(run.parts);
+          ok = !errorsReported(run, say, secret) && done && ok;
+          say(`${attempt}: finish reason ${finish(run.parts)}; answered (text, then a stop): ${yesNo(done)}`);
+          // The usage log needs both counts; a provider that leaves them out logs every run as 0.
           const usage = stepUsage(run.parts);
-          if (usage === undefined) {
-            say(`${attempt}: no usage reported`);
+          if (usage?.inputTokens === undefined || usage.outputTokens === undefined) {
+            say(`${attempt}: no usage reported (raw: ${JSON.stringify(usage?.raw ?? null)})`);
             ok = false;
             continue;
           }
           say(
-            `${attempt}: input ${usage.inputTokens ?? "none"}, output ${usage.outputTokens ?? "none"}, ` +
+            `${attempt}: input ${usage.inputTokens}, output ${usage.outputTokens}, ` +
               `cacheReadTokens ${usage.inputTokenDetails.cacheReadTokens ?? "none"}, ` +
               `cached input prq logs ${stepTokens(usage).cachedInput}`,
           );
@@ -194,10 +210,10 @@ function checks(config: ModelConfig): Check[] {
       run: async (model, say) => {
         const run = await stream(model, "Use the lookup tool to read README.md.", { tools, toolChoice: "none" });
         const calls = run.parts.filter((part) => part.type === "tool-call").length;
-        const text = run.parts.some((part) => part.type === "text-delta" && part.text.trim() !== "");
+        const done = answered(run.parts);
         say(`stream parts: ${shape(run.parts)}`);
-        say(`tool calls: ${calls}; text: ${text ? "yes" : "no"}; finish reason: ${finish(run.parts)}`);
-        return !errorsReported(run, say, secret) && calls === 0;
+        say(`tool calls: ${calls}; finish reason: ${finish(run.parts)}; answered (text, then a stop): ${yesNo(done)}`);
+        return !errorsReported(run, say, secret) && calls === 0 && done;
       },
     },
     {

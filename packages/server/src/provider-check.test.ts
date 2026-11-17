@@ -5,9 +5,11 @@ import { checkProvider } from "../scripts/provider-report.ts";
 import { readModelConfig } from "./config.ts";
 import {
   answerStream,
+  delta,
   errorBody,
   finishChunk,
   MODEL_ENV,
+  type Reply,
   serveProvider,
   sse,
   TEST_KEY,
@@ -35,29 +37,40 @@ function toolCall(index: number, fields: Record<string, unknown>): Record<string
 
 const USAGE = { prompt_tokens: 2400, completion_tokens: 1 };
 
+// Replies that pass every check, in the checks' order: streaming, the two cache runs, the tool call, toolChoice
+// "none", the context-length prompt.
+function passing(): Reply[] {
+  return [
+    answerStream("1\n2\n3"),
+    answerStream("OK", { ...USAGE, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 2400 }),
+    answerStream("OK", { ...USAGE, prompt_cache_hit_tokens: 2304, prompt_cache_miss_tokens: 96 }),
+    sse([
+      toolCall(0, { id: "call_1", type: "function", function: { name: "lookup", arguments: "" } }),
+      toolCall(0, { function: { arguments: '{"path":' } }),
+      toolCall(0, { function: { arguments: '"README.md"}' } }),
+      finishChunk("tool_calls"),
+      usageChunk(USAGE),
+    ]),
+    answerStream("I cannot read files here."),
+    errorBody(400, {
+      error: {
+        message: "This model's maximum context length is 131072 tokens. However, you requested 163856 tokens.",
+        type: "invalid_request_error",
+        code: "context_length_exceeded",
+      },
+    }),
+  ];
+}
+
+// The lines a check printed, from its title to its verdict.
+function section(report: string, check: number): string {
+  return report.split("\n\n").find((block) => block.startsWith(`${check}. `)) ?? "";
+}
+
 describe("provider check", () => {
   it("reports each check as the provider answers it", async () => {
     const provider = serveProvider();
-    provider.reply(
-      answerStream("1\n2\n3"),
-      answerStream("OK", { ...USAGE, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 2400 }),
-      answerStream("OK", { ...USAGE, prompt_cache_hit_tokens: 2304, prompt_cache_miss_tokens: 96 }),
-      sse([
-        toolCall(0, { id: "call_1", type: "function", function: { name: "lookup", arguments: "" } }),
-        toolCall(0, { function: { arguments: '{"path":' } }),
-        toolCall(0, { function: { arguments: '"README.md"}' } }),
-        finishChunk("tool_calls"),
-        usageChunk(USAGE),
-      ]),
-      answerStream("I cannot read files here."),
-      errorBody(400, {
-        error: {
-          message: "This model's maximum context length is 131072 tokens. However, you requested 163856 tokens.",
-          type: "invalid_request_error",
-          code: "context_length_exceeded",
-        },
-      }),
-    );
+    provider.reply(...passing());
     const lines: string[] = [];
 
     const ok = await checkProvider(config(), (line) => lines.push(line));
@@ -72,7 +85,7 @@ describe("provider check", () => {
     expect(report).toContain("cached tokens reported in: prompt_cache_hit_tokens");
     expect(report).toContain('tool call: lookup {"path":"README.md"}');
     expect(report).toContain("finish reason: tool-calls (raw: tool_calls)");
-    expect(report).toContain("tool calls: 0; text: yes");
+    expect(report).toContain("tool calls: 0; finish reason: stop (raw: stop); answered (text, then a stop): yes");
     expect(report).toContain('"status":400,"code":"context_length_exceeded"');
     expect(report).toContain("recognised as a context-length refusal: yes");
     // The context-length prompt was over the window, and toolChoice "none" was sent with the tools.
@@ -81,6 +94,44 @@ describe("provider check", () => {
     expect(v.parse(v.object({ tool_choice: v.string(), tools: v.array(v.unknown()) }), sent[4])).toMatchObject({
       tool_choice: "none",
     });
+  });
+
+  it.for<{ name: string; check: number; replace: Record<number, Reply> }>([
+    {
+      name: "usage missing from both cache replies",
+      check: 2,
+      replace: { 1: sse([delta("OK"), finishChunk("stop")]), 2: sse([delta("OK"), finishChunk("stop")]) },
+    },
+    {
+      name: 'no text for toolChoice "none"',
+      check: 4,
+      replace: { 4: sse([finishChunk("stop"), usageChunk(USAGE)]) },
+    },
+    {
+      name: 'blank text for toolChoice "none"',
+      check: 4,
+      replace: { 4: sse([delta(" \n"), finishChunk("stop"), usageChunk(USAGE)]) },
+    },
+    {
+      name: 'an answer to toolChoice "none" cut at the output limit',
+      check: 4,
+      replace: { 4: sse([delta("I cannot"), finishChunk("length"), usageChunk(USAGE)]) },
+    },
+    {
+      name: "a streamed answer cut at the output limit",
+      check: 1,
+      replace: { 0: sse([delta("1\n"), delta("2\n"), finishChunk("length"), usageChunk(USAGE)]) },
+    },
+  ])("does not count a check as expected with $name", async ({ check, replace }) => {
+    serveProvider().reply(...passing().map((reply, index) => replace[index] ?? reply));
+    const lines: string[] = [];
+
+    const ok = await checkProvider(config(), (line) => lines.push(line));
+
+    const report = lines.join("\n");
+    expect(section(report, check)).toContain("NOT as expected");
+    expect(report).toContain("4 of 5 checks as expected");
+    expect(ok).toBe(false);
   });
 
   it("reports a refusal of every check, without the key it echoes, and fails", async () => {
