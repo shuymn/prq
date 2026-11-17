@@ -391,6 +391,30 @@ describe("prq checkout", () => {
     expect(await readFile(join(rerun.out.path, "notes.txt"), "utf8")).toBe("the AI's file\n");
   });
 
+  it("a rerun after the worktree left the job's commit: exit 1 naming where it is, its files left alone", async () => {
+    const { repo, head } = await analysisJob();
+    const { out } = await checkout("laptop", repo.env);
+    await writeFile(join(out.path, "notes.txt"), "the AI's file\n");
+
+    await repo.git(out.path, "checkout", "--quiet", "--detach", repo.base);
+    const moved = await stack.run(["checkout", "--agent-id", "laptop"], repo.env);
+    expect(moved.code).toBe(1);
+    expect(moved.stdout).toBe("");
+    expect(stderrLines(moved)).toEqual([
+      `prq: the worktree ${out.path} is detached at ${repo.base}, not at the job's commit ${head}; its files are left as they are`,
+    ]);
+    expect(await repo.git(out.path, "rev-parse", "HEAD")).toBe(repo.base);
+
+    await repo.git(out.path, "switch", "--quiet", "-c", "work", head);
+    const onBranch = await stack.run(["checkout", "--agent-id", "laptop"], repo.env);
+    expect(onBranch.code).toBe(1);
+    expect(stderrLines(onBranch)).toEqual([
+      `prq: the worktree ${out.path} is at ${head} on refs/heads/work, not detached at the job's commit ${head}; its files are left as they are`,
+    ]);
+    expect(await repo.git(out.path, "symbolic-ref", "HEAD")).toBe("refs/heads/work");
+    expect(await readFile(join(out.path, "notes.txt"), "utf8")).toBe("the AI's file\n");
+  });
+
   it.each([
     ["a symlink to a host worktree", "symlink"],
     ["another repository's worktree", "foreign"],

@@ -200,6 +200,13 @@ export async function releaseWorktree(
   return { released: true };
 }
 
+// Where a worktree's HEAD is: its commit, and the branch it is on (null when detached).
+export async function headOf(git: Git, path: string): Promise<{ commit: string; branch: string | null }> {
+  const commit = (await git.run(path, ["rev-parse", "--verify", "--quiet", "HEAD"], GIT_QUICK_MS)).stdout.trim();
+  const branch = await git.run(path, ["symbolic-ref", "--quiet", "HEAD"], GIT_QUICK_MS);
+  return { commit, branch: branch.code === 0 ? branch.stdout.trim() : null };
+}
+
 // Removes the worktree registered at exactly path, its directory gone or not, locked or not (a worktree add that was
 // stopped leaves its lock); never a clone-wide prune. Whether the registration is gone.
 export async function removeWorktree(git: Git, clone: string, path: string): Promise<boolean> {

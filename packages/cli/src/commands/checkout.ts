@@ -14,6 +14,7 @@ import {
   type CloneSearch,
   ensureCommit,
   findClone,
+  headOf,
   isDirectory,
   ownerOf,
   releaseWorktree,
@@ -58,7 +59,7 @@ export async function checkout(
   const git = await Git.create(state.hooksDir);
   await cleanUp(state, git, agentId, search.cwd, stderr);
   const path = join(dir, "worktree");
-  let target = await reusable(git, dir, path, job);
+  let target = await reusable(git, dir, path, job, sha);
   if (target === null) {
     target = await findClone(git, job.pr, search);
     const fetched = await ensureCommit(git, target, sha, [`pull/${job.pr.number}/head`, sha]);
@@ -90,11 +91,23 @@ async function savedDetails(dir: string, job: Job): Promise<PrDetails | null | u
 }
 
 // The worktree an earlier checkout added for this directory: the clone checkout.json names still has it there
-// (ownerOf). It is at the directory's commit by construction, and the AI may already be working in it.
-async function reusable(git: Git, dir: string, path: string, job: Job): Promise<Clone | null> {
+// (ownerOf). The AI may be working in it, so it is reused only while its HEAD is detached at the job's commit, and
+// otherwise left alone with exit 1.
+async function reusable(git: Git, dir: string, path: string, job: Job, sha: string): Promise<Clone | null> {
   const recorded = await readCheckout(dir);
   if (recorded === null || !(await isDirectory(path)) || (await ownerOf(git, [recorded.clone], path)) === null) {
     return null;
+  }
+  const head = await headOf(git, path);
+  if (head.branch !== null || head.commit !== sha) {
+    const where =
+      head.branch === null
+        ? `detached at ${head.commit}, not at`
+        : `at ${head.commit} on ${head.branch}, not detached at`;
+    throw new CliError(
+      EXIT.error,
+      `the worktree ${path} is ${where} the job's commit ${sha}; its files are left as they are`,
+    );
   }
   const remote = await remoteOf(git, recorded.clone, job.pr);
   return remote === null ? null : { clone: recorded.clone, remote };
