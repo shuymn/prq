@@ -17,6 +17,7 @@ import { env } from "cloudflare:workers";
 import * as v from "valibot";
 import { expect, vi } from "vitest";
 
+import type { GithubClient } from "../github.ts";
 import type { Hub } from "../hub.ts";
 import type { LedgerEntry } from "../ledger.ts";
 import { hubStub, prSessionStub } from "../names.ts";
@@ -293,6 +294,7 @@ export type PrSessionSeams = {
   cloudAgent(): CloudAgent | undefined;
   cloudModel(): CloudModel | undefined;
   workspaceFor(job: Job): Workspace | null;
+  github(): GithubClient | undefined;
   // AIChatAgent's own.
   waitUntilStable(options?: { timeout?: number }): Promise<boolean>;
 };
@@ -306,6 +308,7 @@ const PR_SESSION_SEAMS = [
   "cloudAgent",
   "cloudModel",
   "workspaceFor",
+  "github",
   "waitUntilStable",
 ] as const;
 

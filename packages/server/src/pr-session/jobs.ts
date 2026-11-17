@@ -677,12 +677,14 @@ export function stallDeadline(row: Pick<JobRow, "claimed_at">): number {
   return row.claimed_at + STALL_MS;
 }
 
-// The head as it is before a push is taken in: whether one was set by a push yet, and which.
-export function readHead(sql: SqlStorage): { headSha: string | null; pushed: boolean } {
+// The current head and GitHub's time of it (NULL until a push set it).
+export type Head = { headSha: string | null; headAt: number | null };
+
+export function readHead(sql: SqlStorage): Head {
   const row = sql
     .exec<{ head_sha: string | null; head_at: number | null }>("SELECT head_sha, head_at FROM prq_session WHERE id = 1")
     .one();
-  return { headSha: row.head_sha, pushed: row.head_at !== null };
+  return { headSha: row.head_sha, headAt: row.head_at };
 }
 
 // The session's latest event, which orders its ledger row.

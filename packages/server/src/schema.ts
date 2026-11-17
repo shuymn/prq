@@ -161,6 +161,12 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
   // in with the details: the installation whose token reads the pull request.
   "ALTER TABLE prq_inbox ADD COLUMN installation_id INTEGER",
   "ALTER TABLE prq_session ADD COLUMN installation_id INTEGER",
+  // Head reconciliation (docs/design.md, Intake): reconcile_at marks a same-second tie for a read of GitHub's head and
+  // is NULL or head_at; push_gen counts the pushes taken in, so a read knows whether one came after it was requested;
+  // reconcile_tries counts the failed reads of the mark.
+  "ALTER TABLE prq_session ADD COLUMN reconcile_at INTEGER",
+  "ALTER TABLE prq_session ADD COLUMN push_gen INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE prq_session ADD COLUMN reconcile_tries INTEGER NOT NULL DEFAULT 0",
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {
