@@ -2,7 +2,7 @@
 // tests), with an environment of its own: nothing from the developer's environment but PATH, a temporary HOME and state
 // root, and the stand-in Access as the Worker's URL.
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // The build script's --outfile (package.json).
@@ -11,7 +11,6 @@ const BINARY = fileURLToPath(new URL("../../dist/prq", import.meta.url));
 export type Exit = { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string };
 
 export type Running = {
-  child: ChildProcess;
   // Settles once the process exited and its output closed.
   exited: Promise<Exit>;
   // Kills it with SIGKILL and waits for its exit.
@@ -33,7 +32,6 @@ export function startCli(args: readonly string[], env: Readonly<Record<string, s
     child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr }));
   });
   return {
-    child,
     exited,
     kill() {
       if (child.exitCode === null && child.signalCode === null) {

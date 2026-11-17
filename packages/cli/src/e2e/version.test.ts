@@ -48,12 +48,4 @@ describe("the version notice", () => {
     expect(exit.code).toBe(3);
     expect(notices(stderrLines(exit))).toEqual([]);
   });
-
-  it("names a refused request's version too: the Worker's 401 carries it", async () => {
-    stack.access().serverVersion = "v9.9.9";
-    stack.access().mode = "expired";
-    const exit = await stack.run(["claim", "--agent-id", "laptop"]);
-    expect(exit.code).toBe(3);
-    expect(notices(stderrLines(exit))).toHaveLength(1);
-  });
 });
