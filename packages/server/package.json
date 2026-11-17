@@ -21,6 +21,7 @@
     "ai": "catalog:",
     "hono": "catalog:",
     "jose": "catalog:",
+    "universal-github-app-jwt": "catalog:",
     "valibot": "catalog:"
   },
   "devDependencies": {

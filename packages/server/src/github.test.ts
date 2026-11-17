@@ -92,9 +92,10 @@ describe("installation tokens", () => {
     expect(api.tokens()).toHaveLength(2);
     expect(githubStatus(next.error)).toBe(503);
   });
-  it("ends a mint whose signing does not finish at the bound", async () => {
+  it("ends a mint whose signing does not finish at the bound, and mints anew on the next call", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const api = serveGithub();
+    api.reply(pull(sha("A"), AT));
     const signing = vi.spyOn(crypto.subtle, "sign").mockReturnValue(new Promise(() => undefined));
     const github = client();
 
@@ -106,6 +107,19 @@ describe("installation tokens", () => {
     await until(() => call.settled, "the call's end");
     expect(String(call.error)).toMatch(/the installation token took over 10000 ms/);
     expect(api.requests).toEqual([]);
+
+    // The hung signing no longer stands for the installation's token, which auth-app shares among concurrent mints of
+    // one installation: once signing works, the next call mints one.
+    signing.mockRestore();
+    const next = track(github.pullRequest(15, PR));
+    // It needs no timer, unless it waits on the hung signing: then the bound ends it.
+    for (let waited = 0; !next.settled && waited < 1000; waited += 20) {
+      await scheduler.wait(20);
+    }
+    await vi.advanceTimersByTimeAsync(GITHUB_CALL_MS);
+    await until(() => next.settled, "the next call's end");
+    expect(next.error).toBeUndefined();
+    expect(api.tokens().map((request) => request.path)).toEqual(["/app/installations/15/access_tokens"]);
   });
 });
 

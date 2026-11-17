@@ -1,6 +1,7 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { request } from "@octokit/request";
 import { type PrRef, Sha } from "@prq/protocol";
+import githubAppJwt from "universal-github-app-jwt";
 import * as v from "valibot";
 
 import type { GithubAppConfig } from "./config.ts";
@@ -51,10 +52,18 @@ export interface GithubClient {
 }
 
 function createClient(config: GithubAppConfig): GithubClient {
-  // auth-app keeps each installation's token until a minute before it expires, and joins concurrent mints.
+  // auth-app keeps each installation's token until a minute before it expires, and joins concurrent mints of one
+  // installation in a module-wide entry that stays until that mint ends. The App's JWT is signed through its
+  // `createJwt` option, by universal-github-app-jwt as auth-app would (with GitHub's clock difference) but within
+  // GITHUB_CALL_MS, so a signing that never finishes ends that mint, and its entry, too.
   const auth = createAppAuth({
     appId: config.GITHUB_APP_ID,
-    privateKey: config.GITHUB_APP_PRIVATE_KEY,
+    createJwt: async (appId, timeDifference) => {
+      const now = timeDifference === undefined ? {} : { now: Math.floor(Date.now() / 1000) + timeDifference };
+      const signing = githubAppJwt({ id: appId, privateKey: config.GITHUB_APP_PRIVATE_KEY, ...now });
+      const signed = await withTimeout(signing, GITHUB_CALL_MS, "the App's JWT");
+      return { jwt: signed.token, expiresAt: new Date(signed.expiration * 1000).toISOString() };
+    },
     request: github,
   });
   const token = async (installationId: number) => {
