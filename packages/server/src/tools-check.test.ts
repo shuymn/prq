@@ -35,12 +35,12 @@ describe("tools check", () => {
 
     expect(shown).toContain("step 1: tools offered; finish tool-calls");
     expect(shown).toMatch(/diff \{"path":"src\/catalog.ts"\} → \d+ characters, cut: no room left/);
-    expect(shown).toContain('step 2: toolChoice "none"; finish stop');
-    expect(shown).toContain('tools withdrawn: from step 2 (toolChoice "none")');
+    expect(shown).toContain("step 2: no tools offered; finish stop");
+    expect(shown).toContain("tools withdrawn: from step 2 (no tools offered)");
     expect(shown).toContain("  Item 115 rose the most.");
     expect(shown).toContain("answered: yes");
     expect(ok).toBe(true);
-    expect(model.calls.map((call) => call.toolChoice)).toEqual([{ type: "auto" }, { type: "none" }]);
+    expect(model.calls.map((call) => call.tools?.length ?? 0)).toEqual([4, 0]);
   });
 
   it("does not count an answer cut at the output limit, and never prints the key", async () => {

@@ -306,9 +306,11 @@ export type ToolLoop = {
   withdrawnAt: () => number | null;
 };
 
-// A turn with a workspace: its tools, and the room that withdraws them (toolChoice "none", which keeps their
-// definitions in the cached prefix) when the next request would leave no room for a result, so the model answers from
-// what it has read. The room is measured at the end of each model call; tools run after it.
+// A turn with a workspace: its tools, and the room that withdraws them (no tools offered) when the next request would
+// leave no room for a result, so the model answers from what it has read. Under toolChoice "none", which would keep the
+// tool definitions in the cached prefix, a provider wrote its tool call as the answer's text (DeepSeek), and an answer
+// the author can read is worth more than that prefix. The room is measured at the end of each model call; tools run
+// after it.
 export async function toolLoop(
   context: Omit<ToolContext, "room">,
   window: number,
@@ -325,7 +327,7 @@ export async function toolLoop(
         return undefined;
       }
       withdrawn ??= stepNumber;
-      return { toolChoice: "none" };
+      return { activeTools: [] };
     },
     onLanguageModelCallEnd: ({ usage, content }) => {
       room.measure(usage, JSON.stringify(content).length);

@@ -136,7 +136,7 @@ export async function checkTools(
     tools: loop.tools,
     prepareStep: (options) => {
       const step = loop.prepareStep(options);
-      offered.push(step?.toolChoice === "none" ? 'toolChoice "none"' : "tools offered");
+      offered.push(step?.activeTools?.length === 0 ? "no tools offered" : "tools offered");
       return step;
     },
     onLanguageModelCallEnd: loop.onLanguageModelCallEnd,
@@ -173,7 +173,7 @@ export async function checkTools(
   const withdrawn = loop.withdrawnAt();
   const total = await Promise.resolve(result.totalUsage).catch(() => undefined);
   say("");
-  say(`tools withdrawn: ${withdrawn === null ? "no" : `from step ${withdrawn + 1} (toolChoice "none")`}`);
+  say(`tools withdrawn: ${withdrawn === null ? "no" : `from step ${withdrawn + 1} (no tools offered)`}`);
   say(`finish reason: ${finishReason}`);
   say("answer:");
   for (const line of text.split("\n")) {
