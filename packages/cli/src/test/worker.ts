@@ -1,6 +1,8 @@
 // The real Worker (packages/server/wrangler.jsonc) in a local runtime through wrangler's test harness, with the secrets
 // it reads passed in. Its fetch of Access's key set is served here: the harness sends the Worker's outbound requests to
 // this process's globalThis.fetch, which a wrapper answers for the key set URL and passes on for anything else.
+// The harness also loads packages/server/.dev.vars, which may hold a model provider's settings for a manual check: the
+// Worker gets a model only when the caller passes one, so the tests never reach a provider.
 
 import { fileURLToPath } from "node:url";
 
@@ -39,7 +41,13 @@ export type Worker = {
   sql(className: "Hub" | "PrSession", name: string, query: string, ...bindings: unknown[]): Promise<unknown[]>;
 };
 
-export async function startWorker(): Promise<Worker> {
+// The cloud agent's model settings (packages/server/src/env.d.ts).
+export type ModelSettings = Record<"MODEL_BASE_URL" | "MODEL_API_KEY" | "MODEL_ID" | "MODEL_CONTEXT_TOKENS", string>;
+
+// Empty settings override any the harness loaded from .dev.vars: the Worker reads them as no model configured.
+const NO_MODEL: ModelSettings = { MODEL_BASE_URL: "", MODEL_API_KEY: "", MODEL_ID: "", MODEL_CONTEXT_TOKENS: "" };
+
+export async function startWorker({ model = NO_MODEL }: { model?: ModelSettings } = {}): Promise<Worker> {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const jwk: JWK = { ...(await exportJWK(publicKey)), kid: KEY_ID, alg: "RS256", use: "sig" };
   let fetches = 0;
@@ -68,6 +76,7 @@ export async function startWorker(): Promise<Worker> {
           ACCESS_AUD: AUDIENCE,
           WEBHOOK_SECRET,
           HOST_GITHUB_ID: String(HOST_ID),
+          ...model,
         },
       },
     ],
