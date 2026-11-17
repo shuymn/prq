@@ -122,6 +122,21 @@ describe("the cut", () => {
     expect(cut?.turnPrefix.map((step) => step.message.id)).toEqual(["q4"]);
   });
 
+  it("sums the kept part's characters and rounds once, as the context count does", () => {
+    // Rounded per step, the last answer (17,996 characters: 5,999) and its one-character question (1) would reach 6,000
+    // and the cut would keep 17,997 characters, 5,999 estimated tokens.
+    const projection = [
+      { id: "q1", role: "user", parts: [{ type: "text", text: "x".repeat(10) }] },
+      cloudAnswer("q1", [{ type: "step-start" }, { type: "text", text: "y".repeat(10) }]),
+      { id: "q2", role: "user", parts: [{ type: "text", text: "x" }] },
+      cloudAnswer("q2", [{ type: "step-start" }, { type: "text", text: "y".repeat(17_996) }]),
+    ] satisfies UIMessage[];
+    const cut = findCut(projection, null, keptTail);
+
+    expect(cut?.cut).toEqual({ messageId: "answer-job-q1", step: 0 });
+    expect(keptTokens(projection, { messageId: "answer-job-q1", step: 0 })).toBeGreaterThanOrEqual(keptTail);
+  });
+
   it("makes no cut when the whole projection fits in the kept tail", () => {
     expect(findCut([Q1, answer("q1", 3000), Q2, answer("q2", 2990)], null, keptTail)).toBeNull();
   });

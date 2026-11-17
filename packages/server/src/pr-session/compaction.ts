@@ -189,10 +189,6 @@ function estimateTokens(chars: number): number {
   return Math.ceil(chars / CHARS_PER_TOKEN);
 }
 
-function stepTokens(step: Step): number {
-  return estimateTokens(partsChars(step.parts));
-}
-
 function messagesChars(messages: readonly Projected[]): number {
   return messages.reduce((chars, message) => chars + partsChars(message.parts), 0);
 }
@@ -249,18 +245,19 @@ function stepIndex(steps: readonly Step[], at: CutPosition | null): number {
 }
 
 // The cut over the projection from the previous cut on: going back from the newest step, at least keptTail estimated
-// tokens are kept, and the cut falls at the start of the step where they are reached (a question, or a step of a
-// result). A cut inside a turn sets the turn's earlier steps apart. Null when nothing before the cut is left to
-// summarize. The cut never moves back: the walk starts at the previous cut, and the projection only grows at its end.
+// tokens are kept (the characters summed, then rounded once, as the context count is), and the cut falls at the start
+// of the step where they are reached (a question, or a step of a result). A cut inside a turn sets the turn's earlier
+// steps apart. Null when nothing before the cut is left to summarize. The cut never moves back: the walk starts at the
+// previous cut, and the projection only grows at its end.
 export function findCut(projection: readonly Projected[], previous: CutPosition | null, keptTail: number): Cut | null {
   const steps = projectionSteps(projection);
   const start = stepIndex(steps, previous);
   let cut = start;
-  let kept = 0;
+  let keptChars = 0;
   for (let index = steps.length - 1; index >= start; index -= 1) {
     const step = steps[index];
-    kept += step === undefined ? 0 : stepTokens(step);
-    if (kept >= keptTail) {
+    keptChars += step === undefined ? 0 : partsChars(step.parts);
+    if (estimateTokens(keptChars) >= keptTail) {
       cut = index;
       break;
     }
