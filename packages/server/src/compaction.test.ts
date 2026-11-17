@@ -145,6 +145,10 @@ describe("failed summaries", () => {
   it.for([
     ["ends at its output limit", [...text("cut notes"), finish("length")]],
     ["is empty", [...text("  "), finish("stop")]],
+    [
+      "holds only what prq generates",
+      [...text("<summary>\n<read-files>\nsrc/a.ts\n</read-files>\n</summary>"), finish("stop")],
+    ],
     ["errors", [...text("partial notes"), { fail: new Error("stream lost") }]],
   ] satisfies [string, Script][])(
     "does not adopt a summary that %s, tries it once more, then leaves the notes and runs the next job on the full context",

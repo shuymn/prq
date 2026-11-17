@@ -373,6 +373,13 @@ export function readFiles(steps: readonly Step[], before: readonly string[]): st
 }
 
 const READ_FILES_BLOCK = /\n*<read-files>[\s\S]*?<\/read-files>\s*/g;
+// The tags prq wraps a summary's input and the notes in, which a summary may echo.
+const WRAPPER_TAGS = /<\/?(?:summary|previous-summary|conversation)>/g;
+
+// A summary without what prq generates around it (the file list, which is made again, and the wrapping tags).
+function cleanSummary(text: string): string {
+  return text.replace(READ_FILES_BLOCK, "\n").replace(WRAPPER_TAGS, "").trim();
+}
 
 // --- The summary requests (Pi: generateSummary, compact) ---
 
@@ -412,7 +419,8 @@ class SummaryFailure extends Error {
 
 // One summary, streamed and consumed whole, under the turn's output bounds (firstChunkMs, chunkMs) and, through the
 // model, the response bound, and with the notes' output limit. A summary that stalled, errored, ended other than
-// `stop`, or is empty is a failed attempt, which rejects; each model call's usage is reported either way.
+// `stop`, or is empty once what prq generates is removed is a failed attempt, which rejects; each model call's usage is
+// reported either way.
 export async function summarize(
   model: CloudModel,
   request: SummaryRequest,
@@ -456,7 +464,7 @@ export async function summarize(
   if (ended.finishReason !== "stop") {
     throw new SummaryFailure(`the summary ended with finish reason ${ended.finishReason}`);
   }
-  const text = ended.text.trim();
+  const text = cleanSummary(ended.text);
   if (text === "") {
     throw new SummaryFailure("the summary is empty");
   }
