@@ -460,6 +460,25 @@ describe("rebuild ownership", () => {
     expect(container.log.slice(from)).toEqual([]);
   });
 
+  it("refuses a command whose turn is released after its checkout is ready, before the command starts", async () => {
+    captureLogs();
+    const { stub, container } = await prepared("release-after-ready");
+    container.on = (argv) => (argv.includes("show") ? { stdout: "hello\n" } : undefined);
+    const from = container.log.length;
+
+    // The prepare and the command share the ready check; once it has settled there is no prepare left to abort, and
+    // the release lands before the command's turn is checked again.
+    const reply = await runInDurableObject(stub, async (instance) => {
+      const ready = instance.prepare(target(1));
+      const command = instance.run(target(1), readFile("README.md"));
+      void ready.then(() => instance.release(1));
+      return command;
+    });
+
+    expect(reply).toEqual(RELEASED);
+    expect(container.log.slice(from)).toEqual([`cat -- ${DIR}/.git/prq-ready`]);
+  });
+
   it("never stops a newer turn's rebuild on an older turn's release", async () => {
     captureLogs();
     const { stub, container } = newWorkspace("late-release");
