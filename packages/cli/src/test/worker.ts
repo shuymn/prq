@@ -6,10 +6,11 @@
 // manual check: the Worker gets a model or the App only when the caller passes one, so the tests never reach a provider
 // or GitHub.
 
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
-import { createTestHarness } from "wrangler";
+import { createTestHarness, experimental_readRawConfig } from "wrangler";
 
 // .example never resolves, so a key set fetch the wrapper does not answer cannot reach the network.
 const TEAM_DOMAIN = "https://team.prq.example";
@@ -80,10 +81,26 @@ export type GithubAppSettings = Record<"GITHUB_APP_ID" | "GITHUB_APP_PRIVATE_KEY
 // Likewise no GitHub App, so no test reaches GitHub through credentials in .dev.vars.
 const NO_GITHUB_APP: GithubAppSettings = { GITHUB_APP_ID: "", GITHUB_APP_PRIVATE_KEY: "" };
 
+// The Worker as the harness runs it: from wrangler.jsonc with the secrets, or, with containers, from the same config
+// with `dev.enable_containers` turned on. The harness reads that setting only from the config, and takes no secrets
+// for an inline one, so they become its vars.
+function workerInput(secrets: Record<string, string>, containers: boolean) {
+  if (!containers) {
+    return { configPath: "./wrangler.jsonc", secrets };
+  }
+  const { rawConfig } = experimental_readRawConfig({ config: join(SERVER_DIR, "wrangler.jsonc") });
+  const { env: _environments, ...config } = rawConfig;
+  return {
+    config: { ...config, dev: { ...config.dev, enable_containers: true }, vars: { ...config.vars, ...secrets } },
+  };
+}
+
+// containers: the Workspace runs its container in Docker (the manual workspace check only; tests run without Docker).
 export async function startWorker({
   model = NO_MODEL,
   githubApp = NO_GITHUB_APP,
-}: { model?: ModelSettings; githubApp?: GithubAppSettings } = {}): Promise<Worker> {
+  containers = false,
+}: { model?: ModelSettings; githubApp?: GithubAppSettings; containers?: boolean } = {}): Promise<Worker> {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const jwk: JWK = { ...(await exportJWK(publicKey)), kid: KEY_ID, alg: "RS256", use: "sig" };
   let fetches = 0;
@@ -105,9 +122,8 @@ export async function startWorker({
   const harness = createTestHarness({
     root: SERVER_DIR,
     workers: [
-      {
-        configPath: "./wrangler.jsonc",
-        secrets: {
+      workerInput(
+        {
           ACCESS_TEAM_DOMAIN: TEAM_DOMAIN,
           ACCESS_AUD: AUDIENCE,
           WEBHOOK_SECRET,
@@ -115,7 +131,8 @@ export async function startWorker({
           ...githubApp,
           ...model,
         },
-      },
+        containers,
+      ),
     ],
   });
   let url: string;

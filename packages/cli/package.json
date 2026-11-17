@@ -8,6 +8,7 @@
     "stack": "node src/test/local-stack.ts",
     "check:cloud": "node src/test/cloud-check.ts",
     "check:reconcile": "node src/test/reconcile-check.ts",
+    "check:workspace": "node src/test/workspace-check.ts",
     "typecheck": "tsc",
     "test": "vitest run"
   },
