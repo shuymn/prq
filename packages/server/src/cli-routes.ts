@@ -5,16 +5,17 @@ import {
   ContextRequest,
   type ContextResponse,
   type ErrorResponse,
+  ROUTE_CALL_MS,
   SubmitRequest,
   type SubmitResponse,
   WaitRequest,
   WaitResponse,
+  waitBoundMs,
 } from "@prq/protocol";
 import { Hono } from "hono";
 import * as v from "valibot";
 
-import { type CallBound, errorResponse, invalidRequest, ROUTE_CALL_MS, Unavailable } from "./http.ts";
-import { waitBoundMs } from "./hub.ts";
+import { type CallBound, errorResponse, invalidRequest, Unavailable } from "./http.ts";
 import { hubStub, prSessionStub } from "./names.ts";
 
 // /cli/*: what a local agent calls (docs/design.md, Notification and wait; Owner and jobs). Each call to a Durable

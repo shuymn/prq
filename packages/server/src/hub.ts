@@ -21,6 +21,7 @@ import {
   REPO_PAGE_ROWS,
   type RepoPage,
   WaitRequest,
+  waitBoundMs,
   type WaitResponse,
 } from "@prq/protocol";
 import { Agent, type Connection } from "agents";
@@ -47,13 +48,6 @@ import { SerialQueue, withTimeout } from "./wait.ts";
 
 // How long a call to a PrSession may take, the session's start included.
 const SESSION_CALL_MS = 10_000;
-// The longest a wait lasts; the agent then waits again.
-export const WAIT_MAX_MS = 25_000;
-
-// How long a wait asked for timeoutMs lasts at most.
-export function waitBoundMs(timeoutMs: number | undefined): number {
-  return Math.min(timeoutMs ?? WAIT_MAX_MS, WAIT_MAX_MS);
-}
 
 type Notification = { session: string; gen: number };
 

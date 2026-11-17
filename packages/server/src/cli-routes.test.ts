@@ -1,11 +1,17 @@
-import { type ClaimResponse, ErrorResponse, MAX_ANSWER_CHARS, PRQ_VERSION_HEADER } from "@prq/protocol";
+import {
+  type ClaimResponse,
+  ErrorResponse,
+  MAX_ANSWER_CHARS,
+  PRQ_VERSION_HEADER,
+  ROUTE_CALL_MS,
+  WAIT_MAX_MS,
+} from "@prq/protocol";
 import type { UIMessage } from "ai";
 import { runInDurableObject } from "cloudflare:test";
 import * as v from "valibot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ROUTE_CALL_MS } from "./http.ts";
-import { Hub, WAIT_MAX_MS } from "./hub.ts";
+import { Hub } from "./hub.ts";
 import app from "./index.ts";
 import {
   accessToken,

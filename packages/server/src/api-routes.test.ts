@@ -5,6 +5,7 @@ import {
   type LedgerRow,
   MAX_LEDGER_CURSOR_CHARS,
   RepoPage,
+  ROUTE_CALL_MS,
   sessionName,
 } from "@prq/protocol";
 import { listDurableObjectIds, runInDurableObject } from "cloudflare:test";
@@ -12,7 +13,7 @@ import { env, exports } from "cloudflare:workers";
 import * as v from "valibot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { type CallBound, ROUTE_CALL_MS } from "./http.ts";
+import type { CallBound } from "./http.ts";
 import { LedgerEntry } from "./ledger.ts";
 import { captureLogs, request } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";

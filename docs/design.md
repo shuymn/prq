@@ -58,7 +58,7 @@ Worker (Hono)
         ledger of PRs (for the list), agent pool (local presence), queue of notifications for local agents
         instructions: the two prompts and the registered skills (pinned to commit SHAs)
 
-Local: prq (CLI, Node 24)   wait / claim / context / checkout / submit / reconcile
+Local: prq (CLI, one binary) wait / claim / context / checkout / submit / reconcile
 UI:    React + Vite (Workers Static Assets), connected to PrSession with useAgentChat
 ```
 
@@ -304,13 +304,77 @@ UI, webhook and CLI input all enter through PrSession.
   The webhook route is bounded at 5 s instead, under GitHub's own limit (see [Intake](#intake)). A delivery its session
   stores after the 503 is taken in like any other, GitHub's redelivery of it is then a duplicate, and which head is
   current follows GitHub's order, not when either lands, within that order's same-second limits.
-- An authentication failure (401 or 403) during `wait` is told apart from an ordinary timeout and ends with an error, so
-  the AI notices it.
+- An authentication failure (a redirect, 401 or 403) during `wait` is told apart from an ordinary timeout and ends with
+  an error, so the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.
 - The local AI's procedure (a skill or an `AGENTS.md`) is one round of: `wait` → `claim` → work → `submit` → start
   `wait` again in the background. The last step is mandatory, because it is what wakes the AI for the next job.
 
-CLI exit codes: 0 ready, 2 timeout, 3 authentication failure, 4 claim mismatch, 1 anything else.
+### Local CLI (`prq`)
+
+- **Install.** `prq` is one file: `bun build --compile` makes it from `packages/cli/src/main.ts` (`pnpm run build` in
+  `packages/cli` writes `packages/cli/dist/prq`; Bun's `--target` builds for another platform), and the host puts it on
+  its `PATH`. The host's machine then needs neither this repository nor Node or pnpm. A release workflow that builds the
+  binaries for each platform and attaches them to a release, with build provenance attestations, comes with release
+  versioning (#8); until then the host builds its own. The source uses no Bun-only API, so Node 24 runs it as well
+  (`node packages/cli/src/main.ts`); the unit tests run its modules there, and the end-to-end tests run the compiled
+  binary. `prq --version` prints `v` + `packages/cli/package.json` `version`, and `prq --help` the usage.
+- **Configuration**, only from the flags and the environment the AI session runs the commands in. No file in the
+  working directory is read: the build turns off the `.env` and `bunfig.toml` a Bun-compiled binary otherwise loads
+  from there, which would set variables or run code depending on where `prq` runs. Environment variables rather than a
+  config file: a file would hold the same secret, readable by the same AI, and direnv or mise can scope the variables
+  per directory.
+  - `PRQ_URL` (required): the Worker's origin, `https:`, or `http:` only for `localhost`, `127.0.0.1` and `[::1]`, so
+    the service token never crosses a network in clear text. There is no default: one would send the token to a server
+    nobody named.
+  - `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET` (required): the Access service token, sent as
+    `CF-Access-Client-Id` and `CF-Access-Client-Secret`. Access turns them into the `Cf-Access-Jwt-Assertion` the
+    Worker verifies. They are never written to stdout, stderr or a file.
+  - The agent ID: `--agent-id`, else `PRQ_AGENT_ID`, else the host name, as `AgentId` (printable ASCII without spaces,
+    at most 128 characters). An invalid one, such as a host name with other characters, asks for `--agent-id`.
+  - `PRQ_HOME`: the state root (below); without it `$XDG_STATE_HOME/prq`, else `~/.local/state/prq`.
+  - `PRQ_VERSION_NOTICE=0` turns the version notice off (see [Versions](#versions)).
+- **Output.** stdout carries one JSON line, the command's result, or nothing when the command failed (exit 1 or 3).
+  Every result has `next`, the step the AI takes next, so each command restates the procedure at the moment it
+  applies. stderr carries notices (the version, a retry, an ended claim) and errors, each line starting `prq:`.
+- **Exit codes:** 0 done; 1 anything else; 2 `wait` timed out; 3 authentication failure, including no service token
+  configured (restarting cannot fix it); 4 claim mismatch, when the claim a command works under no longer holds.
+
+  | Command                                         | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+  | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | `prq wait [--timeout <seconds>]` (default 1500) | Polls `/cli/wait`, each poll asking for the time left up to 25 s, until it answers `ready`: `{"status":"ready","next":"claim"}`, 0. When the deadline passes after an answered poll, `{"status":"timeout","next":"wait"}`, 2; while the server was unavailable, 1                                                                                                                                                                                                                    |
+  | `prq claim`                                     | Calls `/cli/claim`. A job: saves the claim as the agent's record, then prints the server's answer with `dir` (the claim's job directory), `answer` (`<dir>/answer.md`), `saved` (whether that file exists) and `next` (`answer` when it does, else `context`), 0. No job: removes the record and prints `{"job":null,"next":"wait"}`, 0. A record of another directory that the claim replaced or removed gets a stderr line: that claim ended, and its answer must not be submitted |
+
+- **Requests.** Every request is a JSON `POST` with the service token headers, no redirect followed, and a timeout. Its
+  body is built through the route's `@prq/protocol` schema, so a bad local value fails before it is sent. A 2xx body
+  must parse with the route's response schema; one that does not ends the command with exit 1 naming the route, and is
+  never printed as a result. Any 3xx, 401 or 403 is an authentication failure: exit 3, no retry, and one stderr line
+  naming it, after the version notice when the response's version differs (the Worker's 401 carries it). Access answers
+  a bad service token before the Worker (a 403, or a redirect to its sign-in page), and the Worker answers 401 to a
+  token it refuses. A 503, whatever its body (Access's keys unavailable, a Durable Object that did not answer, a contact
+  the Hub could not record, an edge failure), a network failure and the client's timeout are retried: 503 is the
+  server's one "try again", and every route is safe to send again (see
+  [Notification and wait](#notification-and-wait-prq-wait)). Any other status ends the command with exit 1.
+- **Timeouts and retries.** The client waits 5 s longer than a route's bound: `ROUTE_CALL_MS` (30 s) plus 5 s for
+  `claim`, and for `wait` the wait's bound plus `ROUTE_CALL_MS` plus 5 s, from the constants the server's routes use
+  (`@prq/protocol`). The route's own 503 then arrives before the client gives up, and a client timeout is a network or
+  edge failure. A retry comes 1 s after a failure, doubling to 15 s, with one stderr line per streak of failures. A
+  command other than `wait` starts no attempt later than 60 s after its first and then ends with exit 1, within 60 s
+  plus one request's timeout, under the 120 s a foreground command gets by default in Claude Code. `wait` retries until
+  its deadline.
+- **Local state**, under the state root:
+
+  ```
+  agents/<sha256(agentId) hex>.json         the agent's current claim: {agentId, claim, savedAt}
+  jobs/<jobId>-r<run>-<workspaceSha|none>/  one claim's work: its job, run and workspace
+  ```
+
+  The record is the one place a `claimId` lives between processes, one per agent ID, since an agent ID is one AI
+  session working one job at a time. `claim` writes it through a temporary file and a rename, so a reader sees the old
+  record or the new one, and creates the job directory only after the record that names it. The file name is a hash:
+  agent IDs are case-sensitive while macOS file systems usually are not, and an ID can contain `/`. A claim that resumes
+  the same job, run and workspace names the same directory, so an answer saved there before a restart is found again; a
+  retry or a moved workspace names another, so an answer written under the earlier claim stays apart from the new one.
 
 ### Versions
 
@@ -655,7 +719,7 @@ prq/
 │  │       ├─ version.ts         the Prq-Version header name
 │  │       ├─ errors.ts          error codes and the error body
 │  │       ├─ pr.ts              pull request references and details, the canonical session name, the Hub's name
-│  │       ├─ cli.ts             jobs and what a local agent sends and receives
+│  │       ├─ cli.ts             jobs, what a local agent sends and receives, and the routes' time bounds
 │  │       ├─ messages.ts        the metadata of messages the server appends
 │  │       └─ views.ts           what the UI reads from the server (the version message, the session view, the retry answer, the Hub view and its pages)
 │  ├─ server/              @prq/server: the Worker (Hono + Agents SDK) and the UI
@@ -691,8 +755,16 @@ prq/
 │  │   ├─ wrangler.jsonc
 │  │   ├─ vite.config.ts
 │  │   └─ vitest.config.ts
-│  └─ cli/                 @prq/cli: prq (Node 24)
-│      └─ src/                main.ts, commands/, HTTP client, git
+│  └─ cli/                 @prq/cli: prq, compiled by Bun into one binary (dist/prq; Node 24 runs the source too)
+│      └─ src/
+│          ├─ main.ts            the entry the binary is built from: arguments, the command, the exit code
+│          ├─ config.ts          the Worker's URL, the service token, the agent ID, the state root
+│          ├─ client.ts          /cli/* over HTTP: the token headers, validation, authentication failures, the version notice
+│          ├─ retry.ts           client timeouts from the routes' bounds, retries and their window
+│          ├─ state.ts           the claim record and the job directories
+│          ├─ commands/          one module per command
+│          ├─ e2e/               the compiled binary against the real Worker
+│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
 ├─ docs/                   design.md, decisions.md, ui.md, spikes.md
 ├─ design/                 design tokens, component inventory, screens ↔ Pencil frames, the Pencil document (the UI design's source for code)

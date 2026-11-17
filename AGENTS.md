@@ -12,6 +12,11 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
 - `pnpm run lint` (oxlint, type-aware), `pnpm run fmt` (oxfmt check; `pnpm run fmt:fix` formats), `pnpm run knip`
   (unused files, dependencies and exports), `pnpm run typecheck` and `pnpm run test` are the checks CI's `Check` job
   runs.
+- `pnpm run build` in `packages/cli` compiles `prq` with Bun into the single file `packages/cli/dist/prq`; put it on
+  `PATH` or run it by path. Node 24 runs the source as well (`node packages/cli/src/main.ts`), so it uses no Bun-only
+  API. The CLI's tests run in Node within `pnpm run test`: they compile the binary first, then run it as a child process
+  against the real Worker, which wrangler's test harness runs locally behind a stand-in for Access; nothing reaches the
+  network.
 - lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows,
   and commitlint on the message.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would

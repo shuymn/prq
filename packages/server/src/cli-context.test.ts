@@ -6,12 +6,12 @@ import {
   MAX_TITLE_CHARS,
   MAX_URL_CHARS,
   PRQ_VERSION_HEADER,
+  ROUTE_CALL_MS,
 } from "@prq/protocol";
 import { runInDurableObject } from "cloudflare:test";
 import * as v from "valibot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ROUTE_CALL_MS } from "./http.ts";
 import { PRESENCE_MS, STALL_MS } from "./ledger.ts";
 import { CONTEXT_PAGE_BYTES, jsonBytes, take } from "./pr-session/context.ts";
 import { PrSession } from "./pr-session/index.ts";

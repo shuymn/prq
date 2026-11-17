@@ -3,6 +3,8 @@
 [tools]
 node = "24"
 pnpm = "12"
+# Compiles the CLI into the single-file prq binary (packages/cli build); its tests run that binary.
+bun = "1"
 # Linters the shared security and gha workflows also run; the git hooks use these so local checks match CI.
 actionlint = "1"
 betterleaks = "1"

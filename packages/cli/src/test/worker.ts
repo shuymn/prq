@@ -1,0 +1,129 @@
+// The real Worker (packages/server/wrangler.jsonc) in a local runtime through wrangler's test harness, with the secrets
+// it reads passed in. Its fetch of Access's key set is served here: the harness sends the Worker's outbound requests to
+// this process's globalThis.fetch, which a wrapper answers for the key set URL and passes on for anything else.
+
+import { fileURLToPath } from "node:url";
+
+import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
+import { createTestHarness } from "wrangler";
+
+// .example never resolves, so a key set fetch the wrapper does not answer cannot reach the network.
+const TEAM_DOMAIN = "https://team.prq.example";
+const AUDIENCE = "prq-test-audience";
+const KEY_ID = "test-key";
+export const WEBHOOK_SECRET = "prq-test-webhook-secret";
+export const HOST_ID = 1001;
+
+const CERTS_URL = `${TEAM_DOMAIN}/cdn-cgi/access/certs`;
+const SERVER_DIR = fileURLToPath(new URL("../../../server", import.meta.url));
+
+type Stub = Record<string, (...args: unknown[]) => Promise<unknown>>;
+type Namespace = { getByName(name: string): Stub };
+
+export type Worker = {
+  // The Worker's current origin; reset() changes it.
+  url(): string;
+  // The version the Worker sends in Prq-Version.
+  version: string;
+  // Fresh storage and a fresh runtime (Access's key set no longer cached), before each test.
+  reset(): Promise<void>;
+  close(): Promise<void>;
+  // A token as Access issues it for the application, signed by the key the key set serves; expired one an hour ago.
+  token(options?: { expired?: boolean }): Promise<string>;
+  // Fetches of the key set since the last reset; failKeys(n) answers the next n with 500.
+  keyFetches(): number;
+  failKeys(times: number): void;
+  // A Durable Object of the Worker by name, its RPC methods called from here.
+  durableObject(binding: "Hub" | "PrSession", name: string): Promise<Stub>;
+  // SQL in a Durable Object's storage, for test setup.
+  sql(className: "Hub" | "PrSession", name: string, query: string, ...bindings: unknown[]): Promise<unknown[]>;
+};
+
+export async function startWorker(): Promise<Worker> {
+  const { privateKey, publicKey } = await generateKeyPair("RS256");
+  const jwk: JWK = { ...(await exportJWK(publicKey)), kid: KEY_ID, alg: "RS256", use: "sig" };
+  let fetches = 0;
+  let failures = 0;
+  const passThrough = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url !== CERTS_URL) {
+      return passThrough(input, init);
+    }
+    fetches += 1;
+    if (failures > 0) {
+      failures -= 1;
+      return new Response("unavailable", { status: 500 });
+    }
+    return Response.json({ keys: [jwk] });
+  };
+
+  const harness = createTestHarness({
+    root: SERVER_DIR,
+    workers: [
+      {
+        configPath: "./wrangler.jsonc",
+        secrets: {
+          ACCESS_TEAM_DOMAIN: TEAM_DOMAIN,
+          ACCESS_AUD: AUDIENCE,
+          WEBHOOK_SECRET,
+          HOST_GITHUB_ID: String(HOST_ID),
+        },
+      },
+    ],
+  });
+  let url: string;
+  try {
+    url = (await harness.listen()).url.origin;
+  } catch (error) {
+    globalThis.fetch = passThrough;
+    throw error;
+  }
+  // Every /cli/* response carries the server's version, a refused one included.
+  const version = (await passThrough(new URL("/cli/claim", url), { method: "POST" })).headers.get("Prq-Version");
+  if (version === null) {
+    throw new Error("the Worker sent no Prq-Version");
+  }
+
+  const worker = harness.getWorker();
+  return {
+    url: () => url,
+    version,
+    async reset() {
+      await harness.reset();
+      url = (await harness.listen()).url.origin;
+      fetches = 0;
+      failures = 0;
+    },
+    async close() {
+      globalThis.fetch = passThrough;
+      await harness.close();
+    },
+    token: ({ expired = false } = {}) => {
+      const now = Math.floor(Date.now() / 1000);
+      const exp = expired ? now - 3600 : now + 300;
+      return new SignJWT({ iss: TEAM_DOMAIN, aud: AUDIENCE, iat: exp - 300, exp })
+        .setProtectedHeader({ alg: "RS256", kid: KEY_ID })
+        .sign(privateKey);
+    },
+    keyFetches: () => fetches,
+    failKeys(times) {
+      failures = times;
+    },
+    async durableObject(binding, name) {
+      const env: Record<string, Namespace> = await worker.getEnv();
+      const namespace = env[binding];
+      if (namespace === undefined) {
+        throw new Error(`no binding ${binding}`);
+      }
+      const stub = namespace.getByName(name);
+      // As the Agents SDK's getAgentByName does: the instance knows its name and has started.
+      await stub["__unsafe_ensureInitialized"]?.();
+      return stub;
+    },
+    async sql(className, name, query, ...bindings) {
+      const storage = await worker.getDurableObjectStorage(className, { name });
+      return storage.exec(query, ...bindings);
+    },
+  };
+}
