@@ -319,7 +319,9 @@ UI, webhook and CLI input all enter through PrSession.
   versioning (#8); until then the host builds its own. The source uses no Bun-only API, so Node 24 runs it as well
   (`node packages/cli/src/main.ts`); the unit tests run its modules there, and the end-to-end tests run the compiled
   binary. `prq --version` prints `v` + `packages/cli/package.json` `version`, and `prq --help` the usage.
-- **Configuration**, from the environment the AI session runs the commands in. Environment variables rather than a
+- **Configuration**, only from the flags and the environment the AI session runs the commands in. No file in the
+  working directory is read: the build turns off the `.env` and `bunfig.toml` a Bun-compiled binary otherwise loads
+  from there, which would set variables or run code depending on where `prq` runs. Environment variables rather than a
   config file: a file would hold the same secret, readable by the same AI, and direnv or mise can scope the variables
   per directory.
   - `PRQ_URL` (required): the Worker's origin, `https:`, or `http:` only for `localhost`, `127.0.0.1` and `[::1]`, so

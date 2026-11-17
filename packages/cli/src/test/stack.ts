@@ -18,6 +18,8 @@ type EnvOverrides = Readonly<Record<string, string | undefined>>;
 export type Stack = {
   worker(): Worker;
   access(): Access;
+  // The directory a CLI run starts in, also its HOME.
+  cwd(): string;
   // The test's state root (PRQ_HOME).
   home(): string;
   start(args: readonly string[], env?: EnvOverrides): Running;
@@ -63,9 +65,10 @@ export function useStack(): Stack {
   const stack: Stack = {
     worker: () => required(worker, "the Worker"),
     access: () => required(access, "the stand-in"),
-    home: () => join(required(dir, "the test directory"), "state"),
+    cwd: () => required(dir, "the test directory"),
+    home: () => join(stack.cwd(), "state"),
     start(args, overrides = {}) {
-      const home = required(dir, "the test directory");
+      const home = stack.cwd();
       const stand = stack.access();
       const env: Record<string, string> = {};
       const base: EnvOverrides = {
