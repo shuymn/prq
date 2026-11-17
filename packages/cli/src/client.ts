@@ -108,7 +108,7 @@ export class Client {
     if ((res.status >= 300 && res.status < 400) || res.status === 401 || res.status === 403) {
       await discard(res);
       throw new CliError(
-        EXIT.auth,
+        EXIT.setup,
         `authentication failed (HTTP ${res.status} from ${route}); check PRQ_ACCESS_CLIENT_ID and PRQ_ACCESS_CLIENT_SECRET`,
       );
     }

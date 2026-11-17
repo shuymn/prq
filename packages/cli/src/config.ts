@@ -28,18 +28,19 @@ const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 // A header value fetch accepts and a service token is made of: visible ASCII.
 const HEADER_VALUE = /^[\x21-\x7e]+$/;
 
-// Reads the configuration (docs/design.md, Local CLI). No messages name a value: the URL can hold credentials, and
-// the token never leaves the request headers.
+// Reads the configuration (docs/design.md, Local CLI). Every refusal is exit 3, as an authentication failure is: the
+// host must fix the configuration, and a rerun would fail the same way. No messages name a value: the URL can hold
+// credentials, and the token never leaves the request headers.
 export function readConfig(env: Env, agentIdFlag: string | undefined, system: System): Config {
   const url = workerOrigin(set(env["PRQ_URL"]));
   const clientId = set(env["PRQ_ACCESS_CLIENT_ID"]);
   const clientSecret = set(env["PRQ_ACCESS_CLIENT_SECRET"]);
   if (clientId === undefined || clientSecret === undefined) {
-    throw new CliError(EXIT.auth, "no service token: set PRQ_ACCESS_CLIENT_ID and PRQ_ACCESS_CLIENT_SECRET");
+    throw new CliError(EXIT.setup, "no service token: set PRQ_ACCESS_CLIENT_ID and PRQ_ACCESS_CLIENT_SECRET");
   }
   if (!HEADER_VALUE.test(clientId) || !HEADER_VALUE.test(clientSecret)) {
     throw new CliError(
-      EXIT.auth,
+      EXIT.setup,
       "PRQ_ACCESS_CLIENT_ID and PRQ_ACCESS_CLIENT_SECRET must be printable ASCII without spaces",
     );
   }
@@ -61,17 +62,17 @@ function set(value: string | undefined): string | undefined {
 // The Worker's origin: https, or http to a loopback host; nothing after the host and port.
 function workerOrigin(value: string | undefined): string {
   if (value === undefined) {
-    throw new CliError(EXIT.error, "PRQ_URL is not set: set it to the Worker's origin (https://<host>)");
+    throw new CliError(EXIT.setup, "PRQ_URL is not set: set it to the Worker's origin (https://<host>)");
   }
   const url = URL.parse(value);
   if (url === null) {
-    throw new CliError(EXIT.error, "PRQ_URL is not a URL");
+    throw new CliError(EXIT.setup, "PRQ_URL is not a URL");
   }
   if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK.has(url.hostname))) {
-    throw new CliError(EXIT.error, "PRQ_URL must use https (http only for localhost, 127.0.0.1 or [::1])");
+    throw new CliError(EXIT.setup, "PRQ_URL must use https (http only for localhost, 127.0.0.1 or [::1])");
   }
   if (url.username !== "" || url.password !== "" || url.pathname !== "/" || url.search !== "" || url.hash !== "") {
-    throw new CliError(EXIT.error, "PRQ_URL must be an origin, without credentials, path, query or fragment");
+    throw new CliError(EXIT.setup, "PRQ_URL must be an origin, without credentials, path, query or fragment");
   }
   return url.origin;
 }
@@ -82,7 +83,7 @@ function workerOrigin(value: string | undefined): string {
 export function cloneRoots(value: string | undefined): string[] {
   const roots = (value ?? "").split(":").filter((root) => root !== "");
   if (!roots.every((root) => isAbsolute(root))) {
-    throw new CliError(EXIT.error, "PRQ_CLONE_ROOTS must list absolute paths, separated by ':'");
+    throw new CliError(EXIT.setup, "PRQ_CLONE_ROOTS must list absolute paths, separated by ':'");
   }
   return roots;
 }
@@ -93,7 +94,7 @@ function agentId(flag: string | undefined, env: string | undefined, hostname: st
     flag !== undefined ? [flag, "--agent-id"] : env !== undefined ? [env, "PRQ_AGENT_ID"] : [hostname, "the host name"];
   if (!v.is(AgentId, id)) {
     throw new CliError(
-      EXIT.error,
+      EXIT.setup,
       `the agent ID from ${source} is not valid (printable ASCII without spaces, at most 128 characters); pass --agent-id`,
     );
   }
@@ -105,7 +106,7 @@ function agentId(flag: string | undefined, env: string | undefined, hostname: st
 function stateHome(prqHome: string | undefined, xdgStateHome: string | undefined, homedir: string): string {
   if (prqHome !== undefined) {
     if (!isAbsolute(prqHome)) {
-      throw new CliError(EXIT.error, "PRQ_HOME must be an absolute path");
+      throw new CliError(EXIT.setup, "PRQ_HOME must be an absolute path");
     }
     return prqHome;
   }

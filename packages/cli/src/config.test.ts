@@ -41,10 +41,10 @@ describe("readConfig", () => {
       ["--agent-id", "x".repeat(129), undefined, system.hostname],
       ["PRQ_AGENT_ID", undefined, "tab\there", system.hostname],
       ["the host name", undefined, undefined, "café.local"],
-    ])("refuses an invalid ID from %s with exit 1", (source, flag, env, hostname) => {
+    ])("refuses an invalid ID from %s with exit 3", (source, flag, env, hostname) => {
       const run = () => readConfig({ ...valid, PRQ_AGENT_ID: env }, flag, { ...system, hostname });
       expect(failure(run)).toEqual({
-        exitCode: 1,
+        exitCode: 3,
         message: `the agent ID from ${source} is not valid (printable ASCII without spaces, at most 128 characters); pass --agent-id`,
       });
     });
@@ -77,9 +77,9 @@ describe("readConfig", () => {
       ["https://user:pass@prq.example.com", "PRQ_URL must be an origin, without credentials, path, query or fragment"],
       ["https://prq.example.com/?a=1", "PRQ_URL must be an origin, without credentials, path, query or fragment"],
       ["https://prq.example.com/#x", "PRQ_URL must be an origin, without credentials, path, query or fragment"],
-    ])("refuses %s with exit 1", (value, message) => {
+    ])("refuses %s with exit 3", (value, message) => {
       expect(failure(() => readConfig({ ...valid, PRQ_URL: value }, undefined, system))).toEqual({
-        exitCode: 1,
+        exitCode: 3,
         message,
       });
     });
@@ -112,9 +112,9 @@ describe("readConfig", () => {
       expect(home({})).toBe("/home/someone/.local/state/prq");
     });
 
-    it("refuses a relative PRQ_HOME with exit 1", () => {
+    it("refuses a relative PRQ_HOME with exit 3", () => {
       expect(failure(() => readConfig({ ...valid, PRQ_HOME: "state" }, undefined, system))).toEqual({
-        exitCode: 1,
+        exitCode: 3,
         message: "PRQ_HOME must be an absolute path",
       });
     });
@@ -134,9 +134,9 @@ describe("cloneRoots", () => {
     expect(cloneRoots("")).toEqual([]);
   });
 
-  it("refuses a relative entry", () => {
+  it("refuses a relative entry with exit 3", () => {
     expect(failure(() => cloneRoots("/src:work"))).toEqual({
-      exitCode: 1,
+      exitCode: 3,
       message: "PRQ_CLONE_ROOTS must list absolute paths, separated by ':'",
     });
   });
