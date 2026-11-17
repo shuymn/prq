@@ -4,7 +4,7 @@ import { CliError, EXIT } from "./errors.ts";
 
 // How long the client waits for a route beyond the route's own bound, so the route's 503 arrives before the client
 // gives up; a client timeout is then a network or edge failure, retried like one.
-const CLIENT_MARGIN_MS = 5_000;
+export const CLIENT_MARGIN_MS = 5_000;
 
 // The client's timeout for a route that answers within ROUTE_CALL_MS (claim, context, submit).
 export const CALL_TIMEOUT_MS = ROUTE_CALL_MS + CLIENT_MARGIN_MS;
