@@ -1,6 +1,7 @@
 // The check of scripts/github-check.ts: the production GitHub client (githubFor, with its bounds) mints an
 // installation token and reads a pull request twice, the second time with the token it kept. It prints each request's
-// method, path and status, never a header or a body, and every line goes through the key's and any token's redaction.
+// method, path and status, never a header or a body, and every line goes through redaction: the key, every credential
+// a request carried (the App's JWT, the installation token), and anything in a GitHub token's format.
 
 import type { PrRef } from "@prq/protocol";
 
@@ -11,8 +12,12 @@ import { githubFor, githubStatus } from "../src/github.ts";
 const TOKEN = /\bgh[opsur]_[A-Za-z0-9_]+/g;
 const TOKEN_PATH = /^\/app\/installations\/[0-9]+\/access_tokens$/;
 
-function redact(line: string, key: string): string {
-  return line.replaceAll(key, "[redacted]").replace(TOKEN, "[redacted]");
+function redact(line: string, secrets: Iterable<string>): string {
+  let redacted = line;
+  for (const secret of secrets) {
+    redacted = redacted.replaceAll(secret, "[redacted]");
+  }
+  return redacted.replace(TOKEN, "[redacted]");
 }
 
 function describe(error: unknown): string {
@@ -27,11 +32,17 @@ export async function checkGithub(
   pr: PrRef,
   print: (line: string) => void,
 ): Promise<boolean> {
-  const say = (line: string) => print(redact(line, config.GITHUB_APP_PRIVATE_KEY));
+  // The key, and each request's credential by value, before any upstream text is printed.
+  const secrets = new Set([config.GITHUB_APP_PRIVATE_KEY]);
+  const say = (line: string) => print(redact(line, secrets));
   const paths: string[] = [];
   const passThrough = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
+    const credential = (request.headers.get("authorization") ?? "").replace(/^\S+\s+/, "");
+    if (credential !== "") {
+      secrets.add(credential);
+    }
     const { pathname } = new URL(request.url);
     paths.push(pathname);
     try {

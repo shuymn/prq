@@ -77,4 +77,20 @@ describe("check:github", () => {
     expect(lines.at(-1)).toBe("NOT as expected");
     expectNoSecret(lines);
   });
+
+  it("reports a refused token without the App's JWT, which GitHub echoes", async () => {
+    const api = serveGithub();
+    const jwt = () =>
+      api
+        .tokens()
+        .at(-1)
+        ?.authorization?.replace(/^bearer /, "") ?? "";
+    api.tokenReply(async () => failure(401, `Bad credentials for ${jwt()}`)(undefined));
+
+    const { ok, lines } = await check();
+    expect(ok).toBe(false);
+    expect(jwt()).toMatch(/^eyJ/);
+    expect(lines.at(-2)).toBe("read 1: failed (HTTP 401, HttpError: Bad credentials for [redacted])");
+    expect(lines.join("\n")).not.toContain(jwt());
+  });
 });
