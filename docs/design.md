@@ -313,8 +313,10 @@ UI, webhook and CLI input all enter through PrSession.
 - An authentication failure (a redirect, 401 or 403) during `wait` is told apart from an ordinary timeout and ends with
   an error, so the AI notices it.
 - The connection between `prq` and the Hub is an HTTP long-poll with the service token in a header.
-- The local AI's procedure (a skill or an `AGENTS.md`) is one round of: `wait` → `claim` → work → `submit` → start
-  `wait` again in the background. The last step is mandatory, because it is what wakes the AI for the next job.
+- The local AI's procedure, `skills/prq/SKILL.md`, is one round of: `wait` → `claim` → work → `submit` → start
+  `wait` again in the background. The last step is mandatory, because it is what wakes the AI for the next job. Every
+  outcome of a job ends there, except exit 3, which stops the session until the host fixes the setup (see
+  [Local CLI](#local-cli-prq)).
 
 ### Local CLI (`prq`)
 
