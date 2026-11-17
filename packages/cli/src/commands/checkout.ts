@@ -29,7 +29,7 @@ const SavedContext = v.looseObject({ job: Job, details: v.nullable(PrDetails) })
 // (docs/design.md, Local CLI). A job without a workspace needs none, and no git runs. The worktree's commit is fetched
 // when the clone lacks it, pull/<n>/head first and then the commit itself, by a fetch that changes none of the clone's
 // refs; so is the base, whose absence is only a notice. prq writes nothing inside the worktree. The job directories
-// no record names are removed first, as reconcile does.
+// no record names are removed first, as reconcile does. Nothing is made through a jobs/ that is a symlink.
 export async function checkout(
   client: Client,
   state: State,
@@ -44,6 +44,13 @@ export async function checkout(
   if (sha === null) {
     print({ path: null, sha: null, base: null, next: "answer" });
     return EXIT.ok;
+  }
+  const refused = await state.jobsDirRefusal();
+  if (refused !== null) {
+    throw new CliError(
+      EXIT.error,
+      `${refused}; no worktree is added through it (set PRQ_HOME to keep prq's state elsewhere)`,
+    );
   }
   const dir = state.jobDir(job);
   let details = await savedDetails(dir, job);

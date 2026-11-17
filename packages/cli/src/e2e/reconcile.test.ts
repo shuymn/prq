@@ -195,6 +195,35 @@ describe("prq reconcile", () => {
     expect(await repo.clone.worktrees()).toEqual(registrations);
   });
 
+  it("cleanup through a jobs directory that is a symlink to another state root's: nothing removed there, jobs kept with the reason", async () => {
+    // The default state root: the desk's claim of the analysis, with its worktree and a saved answer.
+    const repo = await makeRepo(stack.dir(), pr);
+    const head = await repo.head("h1");
+    await present("desk");
+    await push(stack.worker(), pr, head, repo.base);
+    const desk = await claim("desk");
+    expect((await stack.run(["checkout", "--agent-id", "desk"], repo.env)).code).toBe(0);
+    await writeFile(desk.answer, "the summary\n");
+    // Another state root, without records, whose jobs/ leads to the first one's.
+    const home = join(stack.dir(), "laptop-state");
+    const jobs = join(home, "jobs");
+    await mkdir(home);
+    await symlink(join(stack.home(), "jobs"), jobs);
+    const record = await readFile(recordPath("desk"), "utf8");
+    const registrations = await repo.clone.worktrees();
+
+    const { exit, out } = await reconcile("laptop", { ...repo.env, PRQ_HOME: home });
+    const reason = `${jobs} is a symlink, not followed`;
+    expect(out).toEqual({ claim: null, removed: [], kept: [{ dir: jobs, reason }], next: "wait" });
+    expect(stderrLines(exit)).toEqual([
+      `prq: ${reason}; no job directory is removed (set PRQ_HOME to keep prq's state elsewhere)`,
+    ]);
+    expect(await readFile(recordPath("desk"), "utf8")).toBe(record);
+    expect(await readFile(desk.answer, "utf8")).toBe("the summary\n");
+    expect(await readFile(join(desk.dir, "worktree", "change.txt"), "utf8")).toBe("h1\n");
+    expect(await repo.clone.worktrees()).toEqual(registrations);
+  });
+
   it("restart after a replaced claimId: keeps the record and the saved answer; the next claim resumes them", async () => {
     await present("laptop");
     await push(stack.worker(), pr, sha("h1"));

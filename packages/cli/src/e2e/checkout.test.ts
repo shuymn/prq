@@ -13,7 +13,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 
 import { ClaimResponse } from "@prq/protocol";
 import * as v from "valibot";
@@ -462,6 +462,25 @@ describe("prq checkout", () => {
     expect(await readFile(join(target, "keep.txt"), "utf8")).toBe("keep\n");
     expect(await owner.worktreeList()).toBe(registrations);
     expect(await exists(join(claimed.dir, "checkout.json"))).toBe(false);
+  });
+
+  it("a jobs directory that is a symlink: exit 1, no worktree added through it", async () => {
+    const { repo, claimed } = await analysisJob();
+    // jobs/ moved elsewhere and a symlink left in its place.
+    const elsewhere = join(stack.dir(), "elsewhere-jobs");
+    const jobs = join(stack.home(), "jobs");
+    await rename(jobs, elsewhere);
+    await symlink(elsewhere, jobs);
+    const registrations = await repo.clone.worktrees();
+
+    const exit = await stack.run(["checkout", "--agent-id", "laptop"], repo.env);
+    expect(exit.code).toBe(1);
+    expect(exit.stdout).toBe("");
+    expect(stderrLines(exit)).toEqual([
+      `prq: ${jobs} is a symlink, not followed; no worktree is added through it (set PRQ_HOME to keep prq's state elsewhere)`,
+    ]);
+    expect(await readdir(join(elsewhere, basename(claimed.dir)))).toEqual([]);
+    expect(await repo.clone.worktrees()).toEqual(registrations);
   });
 
   it("ended by a signal while git runs: stops git and the filters git runs, then ends by that signal", async () => {

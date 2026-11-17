@@ -55,6 +55,14 @@ export class State {
     return join(this.#home, "git-hooks");
   }
 
+  // Why the job directories may not be used through jobs/, or null: it is a symlink, which prq does not follow. A jobs/
+  // that leads to another state root's would let this one's cleanup remove the job directories of agents whose records
+  // are there; prq's state moves by pointing PRQ_HOME elsewhere.
+  async jobsDirRefusal(): Promise<string | null> {
+    const entry = await lstat(this.jobsDir).catch(() => null);
+    return entry?.isSymbolicLink() === true ? `${this.jobsDir} is a symlink, not followed` : null;
+  }
+
   // The directory of a claim's work. A claim that resumes the same job, run and workspace names the same directory; a
   // retry or a moved workspace names another.
   jobDir(job: Job): string {

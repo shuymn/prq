@@ -28,9 +28,16 @@ type Cleanup = {
 // a record that names it. Left alone: a directory that holds the working directory, an entry whose name is not a job
 // directory's, and everything while a record is unreadable (it may name any of them). A symlink is unlinked, never
 // followed. A directory's worktree is removed from its clone by its exact path first, only when it is that clone's
-// (releaseWorktree); otherwise the directory is kept, reported with the reason.
+// (releaseWorktree); otherwise the directory is kept, reported with the reason. Nothing is removed while jobs/ is a
+// symlink (State.jobsDirRefusal).
 export async function cleanUp(state: State, git: Git, agentId: string, cwd: string, stderr: (line: string) => void) {
   const result: Cleanup = { removed: [], kept: [] };
+  const linked = await state.jobsDirRefusal();
+  if (linked !== null) {
+    stderr(`${linked}; no job directory is removed (set PRQ_HOME to keep prq's state elsewhere)`);
+    result.kept.push({ dir: state.jobsDir, reason: linked });
+    return result;
+  }
   let entries: string[];
   try {
     entries = await readdir(state.jobsDir);
