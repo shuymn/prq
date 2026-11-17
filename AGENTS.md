@@ -17,6 +17,10 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
   API. The CLI's tests run in Node within `pnpm run test`: they compile the binary first, then run it as a child process
   against the real Worker, which wrangler's test harness runs locally behind a stand-in for Access; nothing reaches the
   network.
+- A test runs git only through `FixtureGit` (`packages/cli/src/test/git.ts`): on fixtures in a fresh directory of the
+  OS temp directory, outside every repository, with an environment built from nothing, so a `GIT_DIR` a hook exported
+  cannot reach the repository. A canary (`packages/cli/src/test/canary.ts`) fails the CLI's test run when the
+  repository's refs, `HEAD`, worktrees, config or index, or the user's git identity, changed during it.
 - lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows,
   and commitlint on the message.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
