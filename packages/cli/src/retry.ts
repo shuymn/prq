@@ -44,7 +44,9 @@ export const systemClock: Clock = {
 };
 
 // Makes attempts until one is not Retryable, starting none later than RETRY_WINDOW_MS after the first; then the
-// command ends with exit 1. onStreak hears the first failure only: one stderr line per streak, not one per attempt.
+// command ends with exit 1. The window is checked before a backoff, so no sleep is spent on an attempt it rules out,
+// and again before the attempt, since a sleep can end late (a machine that slept). onStreak hears the first failure
+// only: one stderr line per streak, not one per attempt.
 export async function withRetry<T>(
   attempt: () => Promise<T | Retryable>,
   clock: Clock,
@@ -60,9 +62,13 @@ export async function withRetry<T>(
       onStreak(result);
     }
     const delay = backoffMs(failures);
+    const unavailable = () => new CliError(EXIT.error, `the server is unavailable (${result.reason}); try again`);
     if (clock.now() + delay - first > RETRY_WINDOW_MS) {
-      throw new CliError(EXIT.error, `the server is unavailable (${result.reason}); try again`);
+      throw unavailable();
     }
     await clock.sleep(delay);
+    if (clock.now() - first > RETRY_WINDOW_MS) {
+      throw unavailable();
+    }
   }
 }
