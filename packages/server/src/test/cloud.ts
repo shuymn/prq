@@ -28,6 +28,27 @@ export async function untilState(stub: DurableObjectStub<PrSession>, target: str
   });
 }
 
+// Waits until the job of the target has ended (done or failed), and returns its state and failure, so a test that
+// expects one ending shows the other's reason.
+export async function untilEnded(
+  stub: DurableObjectStub<PrSession>,
+  target: string,
+): Promise<{ state: string; failure: string | null }> {
+  let ended: { state: string; failure: string | null } | undefined;
+  await vi.waitFor(
+    async () => {
+      const row = (await jobRows(stub)).find((candidate) => candidate.target === target);
+      expect(["done", "failed"]).toContain(row?.state);
+      ended = { state: row?.state ?? "", failure: row?.failure ?? null };
+    },
+    { timeout: 3000, interval: 20 },
+  );
+  if (ended === undefined) {
+    throw new Error("the job did not end");
+  }
+  return ended;
+}
+
 // The stored conversation, each message by ID as JSON: what an append-only history keeps byte for byte.
 export async function messageRows(session: { path: string; token: string }): Promise<Map<string, string>> {
   return new Map(

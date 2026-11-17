@@ -32,7 +32,6 @@ import {
   type CloudAgent,
   MAX_STARTS,
   TURN_INTERRUPTED,
-  type Workspace,
   WORKSPACE_NOT_AVAILABLE,
 } from "./cloud.ts";
 import { type ContextMessage, type Cursor, cursorText, jsonBytes, messageRoom, parseCursor, take } from "./context.ts";
@@ -91,10 +90,11 @@ import {
   writeLedger,
   writeNotify,
 } from "./jobs.ts";
-import { classifyModelError, modelFor, OUTPUT_STALLED, STREAM_TIMEOUT } from "./model.ts";
+import { classifyModelError, modelFor, OUTPUT_STALLED, reasonText } from "./model.ts";
 import { projection } from "./projection.ts";
 import { analysisTask, systemPrompt } from "./prompt.ts";
 import { adoptAnswer, clearMark, failTry, isLagging, notePush, readReconcile } from "./reconcile.ts";
+import { toolLoop, TURN_LOOP } from "./tools.ts";
 import {
   type Binding,
   type CloudModel,
@@ -106,8 +106,16 @@ import {
   stepTokens,
   storedFailure,
   turnFailure,
+  type TurnOutcome,
   usageMetadata,
 } from "./turn.ts";
+import {
+  type PreparedWorkspace,
+  raceAbort,
+  WORKSPACE_CALL_MS,
+  type WorkspaceClient,
+  type WorkspaceTarget,
+} from "./workspace.ts";
 
 // Seconds until the wake armed before a write that creates work runs settle.
 const WAKE_S = 5;
@@ -535,8 +543,18 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   // The workspace a job with a workspace commit reads its code from (spied on in tests); none until the Sandbox exists,
   // so such a job fails rather than producing a result without the code it is about.
-  protected workspaceFor(_job: Job): Workspace | null {
+  protected workspaceFor(_job: Job): WorkspaceClient | null {
     return null;
+  }
+
+  // The model's context window in tokens (spied on in tests), which the tools' room is measured against. Read only for
+  // a turn with tools, which runs only while the model is configured.
+  protected contextTokens(): number {
+    const config = readModelConfig(this.env);
+    if (config?.ok !== true) {
+      throw new Error("a turn with tools runs on a configured model");
+    }
+    return config.config.MODEL_CONTEXT_TOKENS;
   }
 
   // A job that has just become running reaches its agent: its turn is live in this isolate from here.
@@ -1179,7 +1197,8 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // The bound turn's model call, streamed: the job must still be running under this turn. A job with a workspace commit
-  // needs its workspace. The outcome is recorded as the stream ends, whatever ends it.
+  // needs its workspace, prepared at that commit before any model call, and reads it through tools. The outcome is
+  // recorded as the stream ends, whatever ends it.
   async #turnResponse(binding: Binding, abortSignal?: AbortSignal): Promise<Response | undefined> {
     const { jobId, turnId, model, outcome } = binding;
     const row = jobById(this.#sql, jobId);
@@ -1187,15 +1206,34 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       return undefined;
     }
     const job = this.#job(row);
-    if (job.workspaceSha !== null && this.workspaceFor(job) === null) {
+    const workspace = job.workspaceSha === null ? null : this.workspaceFor(job);
+    if (job.workspaceSha !== null && workspace === null) {
       outcome.failure = WORKSPACE_NOT_AVAILABLE;
       return undefined;
+    }
+    const signal = abortSignal ?? new AbortController().signal;
+    const details = readDetails(this.#sql);
+    let code: { workspace: WorkspaceClient; target: WorkspaceTarget; prepared: PreparedWorkspace } | null = null;
+    if (workspace !== null && job.workspaceSha !== null) {
+      if (details === null) {
+        outcome.failure = "workspace: the pull request's base is not known";
+        return undefined;
+      }
+      const target = { sha: job.workspaceSha, baseSha: details.baseSha };
+      const prepared = await this.#prepare(workspace, target, signal, outcome);
+      if (prepared === null) {
+        return undefined;
+      }
+      code = { workspace, target, prepared };
     }
     const messages = await this.#turnMessages(row);
     if (messages === null) {
       outcome.failure = "the question is not stored";
       return undefined;
     }
+    const system = systemPrompt({ pr: this.#pr(), details, job, tools: code !== null });
+    const modelMessages = await convertToModelMessages(messages);
+    const loop = code === null ? null : await toolLoop(code, this.contextTokens(), { system, messages: modelMessages });
     const secret = this.#modelSecret();
     // The turn's first error, classified with the key redacted, is its reason; what the client is shown is that reason.
     const failWith = (error: unknown): string => {
@@ -1204,10 +1242,13 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     };
     const result = streamText({
       model,
-      system: systemPrompt({ pr: this.#pr(), details: readDetails(this.#sql), job }),
-      messages: await convertToModelMessages(messages),
+      system,
+      messages: modelMessages,
       ...(abortSignal === undefined ? {} : { abortSignal }),
-      timeout: STREAM_TIMEOUT,
+      ...TURN_LOOP,
+      ...(loop === null
+        ? {}
+        : { tools: loop.tools, prepareStep: loop.prepareStep, onLanguageModelCallEnd: loop.onLanguageModelCallEnd }),
       onError: ({ error }) => {
         failWith(error);
       },
@@ -1237,6 +1278,33 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       onError: failWith,
     });
     return failingWith(response, failWith);
+  }
+
+  // Makes the job's checkout ready before its first model call: the turn's abort or the workspace backstop ends the
+  // wait. A checkout that cannot be made fails the job with the reason, which the host can retry; null then, with the
+  // ending recorded in the outcome.
+  async #prepare(
+    workspace: WorkspaceClient,
+    target: WorkspaceTarget,
+    signal: AbortSignal,
+    outcome: TurnOutcome,
+  ): Promise<PreparedWorkspace | null> {
+    try {
+      return await raceAbort(() => workspace.prepare(target, signal), signal, WORKSPACE_CALL_MS);
+    } catch (error) {
+      if (signal.aborted) {
+        outcome.aborted = true;
+        return null;
+      }
+      const reason =
+        error instanceof WaitTimeout
+          ? `no answer within ${WORKSPACE_CALL_MS / 60_000} minutes`
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      outcome.failure = reasonText(`workspace: ${reason}`, this.#modelSecret());
+      return null;
+    }
   }
 
   // What the job's model reads after the system prompt: the projection, then its own question (by the job's target)

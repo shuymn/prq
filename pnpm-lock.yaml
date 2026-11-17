@@ -9,6 +9,9 @@ catalogs:
     '@ai-sdk/openai-compatible':
       specifier: 3.0.92
       version: 3.0.92
+    '@ai-sdk/valibot':
+      specifier: 3.0.81
+      version: 3.0.81
     '@cloudflare/ai-chat':
       specifier: 0.12.2
       version: 0.12.2
@@ -39,6 +42,9 @@ catalogs:
     '@types/node':
       specifier: 24.19.2
       version: 24.19.2
+    '@valibot/to-json-schema':
+      specifier: 1.8.0
+      version: 1.8.0
     agents:
       specifier: 0.33.0
       version: 0.33.0
@@ -151,6 +157,9 @@ importers:
       '@ai-sdk/openai-compatible':
         specifier: 'catalog:'
         version: 3.0.92(zod@4.6.6)
+      '@ai-sdk/valibot':
+        specifier: 'catalog:'
+        version: 3.0.81(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(valibot@1.5.0(typescript@7.0.2))(zod@4.6.6)
       '@cloudflare/ai-chat':
         specifier: 'catalog:'
         version: 0.12.2(agents@0.33.0(@ai-sdk/provider@4.0.38)(@babel/core@8.1.2)(@babel/runtime@7.29.14)(@modelcontextprotocol/client@2.4.0)(ai@7.0.172(zod@4.6.6))(rolldown@1.2.19)(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(zod@4.6.6))(ai@7.0.172(zod@4.6.6))
@@ -169,6 +178,9 @@ importers:
       '@prq/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@valibot/to-json-schema':
+        specifier: 'catalog:'
+        version: 1.8.0(valibot@1.5.0(typescript@7.0.2))
       agents:
         specifier: 'catalog:'
         version: 0.33.0(@ai-sdk/provider@4.0.38)(@babel/core@8.1.2)(@babel/runtime@7.29.14)(@modelcontextprotocol/client@2.4.0)(ai@7.0.172(zod@4.6.6))(rolldown@1.2.19)(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(zod@4.6.6)
@@ -227,6 +239,13 @@ packages:
   '@ai-sdk/provider@4.0.38':
     resolution: {integrity: sha512-GElz70UUCuDFFyD6m6aQJFgRY0HEABQzB5otzgkrisYaF5mnss7o0upAmbBTSD6KWiM9h7lZm1ls2c7xzHR8CA==}
     engines: {node: '>=22'}
+
+  '@ai-sdk/valibot@3.0.81':
+    resolution: {integrity: sha512-GKRoj1Zh4/AYbvf6J7KgHb5ohuHrshony1sJITLciE5siP54wtBSIHuIcDlLPGMlF8vd4VczUh75Atmz0B6Sqw==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      '@valibot/to-json-schema': ^1.3.0
+      valibot: ^1.1.0
 
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
@@ -1727,6 +1746,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@valibot/to-json-schema@1.8.0':
+    resolution: {integrity: sha512-a0M+uwCuQZEPAo65NYkFSJ14O5c213KoSZmPdoCfuFvUhfULi4T2Z6Tpjv6lTVMW9RoLm74RpRAjNEa43KcN+g==}
+    peerDependencies:
+      valibot: ^1.5.0
+
   '@vercel/oidc@3.2.0':
     resolution: {integrity: sha512-UycprH3T6n3jH0k44NHMa7pnFHGu/N05MjojYr+Mc6I7obkoLIJujSWwin1pCvdy/eOxrI/l3uDLQsmcrOb4ug==}
     engines: {node: '>= 20'}
@@ -2689,6 +2713,14 @@ snapshots:
   '@ai-sdk/provider@4.0.38':
     dependencies:
       json-schema: 0.4.0
+
+  '@ai-sdk/valibot@3.0.81(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(valibot@1.5.0(typescript@7.0.2))(zod@4.6.6)':
+    dependencies:
+      '@ai-sdk/provider-utils': 5.0.81(zod@4.6.6)
+      '@valibot/to-json-schema': 1.8.0(valibot@1.5.0(typescript@7.0.2))
+      valibot: 1.5.0(typescript@7.0.2)
+    transitivePeerDependencies:
+      - zod
 
   '@babel/code-frame@7.29.7':
     dependencies:
@@ -3771,6 +3803,10 @@ snapshots:
 
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
+
+  '@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2))':
+    dependencies:
+      valibot: 1.5.0(typescript@7.0.2)
 
   '@vercel/oidc@3.2.0': {}
 

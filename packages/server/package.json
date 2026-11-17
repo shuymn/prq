@@ -7,16 +7,19 @@
     "typecheck": "tsc",
     "test": "vitest run",
     "check:provider": "node --env-file-if-exists=.dev.vars scripts/provider-check.ts",
-    "check:github": "node --env-file-if-exists=.dev.vars scripts/github-check.ts"
+    "check:github": "node --env-file-if-exists=.dev.vars scripts/github-check.ts",
+    "check:tools": "node --env-file-if-exists=.dev.vars scripts/tools-check.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "catalog:",
+    "@ai-sdk/valibot": "catalog:",
     "@cloudflare/ai-chat": "catalog:",
     "@hono/valibot-validator": "catalog:",
     "@octokit/auth-app": "catalog:",
     "@octokit/request": "catalog:",
     "@octokit/webhooks-methods": "catalog:",
     "@prq/protocol": "workspace:*",
+    "@valibot/to-json-schema": "catalog:",
     "agents": "catalog:",
     "ai": "catalog:",
     "hono": "catalog:",

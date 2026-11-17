@@ -21,10 +21,11 @@ import type { GithubClient } from "../github.ts";
 import type { Hub } from "../hub.ts";
 import type { LedgerEntry } from "../ledger.ts";
 import { hubStub, prSessionStub } from "../names.ts";
-import type { CloudAgent, Workspace } from "../pr-session/cloud.ts";
+import type { CloudAgent } from "../pr-session/cloud.ts";
 import type { PrSession, Submission } from "../pr-session/index.ts";
 import type { JobRow, Peek } from "../pr-session/jobs.ts";
 import type { CloudModel } from "../pr-session/turn.ts";
+import type { WorkspaceClient } from "../pr-session/workspace.ts";
 import { type AgentSocket, connect, hostToken } from "./chat.ts";
 import { latch } from "./latch.ts";
 
@@ -293,10 +294,12 @@ export type PrSessionSeams = {
   deliver(): Promise<void>;
   cloudAgent(): CloudAgent | undefined;
   cloudModel(): CloudModel | undefined;
-  workspaceFor(job: Job): Workspace | null;
+  workspaceFor(job: Job): WorkspaceClient | null;
+  contextTokens(): number;
   github(): GithubClient | undefined;
   // AIChatAgent's own.
   waitUntilStable(options?: { timeout?: number }): Promise<boolean>;
+  abortAllRequests(reason?: unknown): void;
 };
 
 const PR_SESSION_SEAMS = [
@@ -308,8 +311,10 @@ const PR_SESSION_SEAMS = [
   "cloudAgent",
   "cloudModel",
   "workspaceFor",
+  "contextTokens",
   "github",
   "waitUntilStable",
+  "abortAllRequests",
 ] as const;
 
 function hasPrSessionSeams(instance: object): instance is PrSessionSeams {

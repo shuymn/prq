@@ -6,8 +6,12 @@ import * as v from "valibot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WORKSPACE_NOT_AVAILABLE } from "./pr-session/cloud.ts";
+import { contextBudget } from "./pr-session/context-budget.ts";
 import { PrSession } from "./pr-session/index.ts";
+import { CHARS_PER_TOKEN } from "./pr-session/room.ts";
+import { MIN_RESULT_CHARS } from "./pr-session/tools.ts";
 import { NO_ANSWER_TEXT } from "./pr-session/turn.ts";
+import { WORKSPACE_CALL_MS } from "./pr-session/workspace.ts";
 import { captureLogs, events } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import {
@@ -18,24 +22,30 @@ import {
   streamsText,
   textOf,
   turnFrames,
+  untilEnded,
   untilState,
 } from "./test/cloud.ts";
 import {
   answerScript,
+  type CallOptions,
   finish,
   reasoning,
   ScriptedModel,
   type StreamPart,
   text,
+  toolCall,
   useCloudModel,
   useWorkspace,
 } from "./test/model.ts";
+import { advance, until } from "./test/provider.ts";
 import { gate, jobOf, jobRows, prSessionSeams, retryIn, revOf, sessionSql } from "./test/session.ts";
-import { push, sha } from "./test/webhook.ts";
+import { BASE, push, sha } from "./test/webhook.ts";
+import { FakeWorkspace } from "./test/workspace.ts";
 
 const sockets: AgentSocket[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const socket of sockets.splice(0)) {
     socket.close();
   }
@@ -639,5 +649,238 @@ describe("races", () => {
       [sha("c"), "done"],
     ]);
     expect(model.calls).toHaveLength(2);
+  });
+});
+
+// The text of each tool result a model call was sent, in order.
+function toolResults(call: CallOptions | undefined): string[] {
+  return (call?.prompt ?? []).flatMap((message) =>
+    message.role === "tool"
+      ? message.content.flatMap((part) =>
+          part.type === "tool-result" && part.output.type === "text" ? [part.output.value] : [],
+        )
+      : [],
+  );
+}
+
+function toolNames(call: CallOptions | undefined): string[] {
+  return (call?.tools ?? []).map((definition) => definition.name);
+}
+
+// A text file of the given number of lines, each 59 characters and a newline.
+function lines(count: number, label: string): string {
+  return Array.from({ length: count }, (_, index) => `${label} ${String(index + 1).padStart(4, "0")} `.padEnd(59, "x"))
+    .map((line) => `${line}\n`)
+    .join("");
+}
+
+describe("tools", () => {
+  it("offers no tools to a question with no workspace commit, and the four tools to a job with one", async () => {
+    captureLogs();
+    const { stub, client, ref } = await cloudSession("turn", sockets);
+    const model = new ScriptedModel().add(answerScript("answer one"), answerScript("the summary"));
+    useCloudModel(model);
+    // A workspace offered for every job: only the job's commit decides whether it has one.
+    const workspace = new FakeWorkspace();
+    vi.spyOn(prSessionSeams(PrSession.prototype), "workspaceFor").mockReturnValue(workspace);
+
+    await client.chat([Q1]);
+    await untilState(stub, "q1", "done");
+    await push(ref, "a");
+    await untilState(stub, sha("a"), "done");
+
+    expect(model.calls[0]?.tools).toBeUndefined();
+    expect(toolNames(model.calls[1])).toEqual(["diff", "grep", "list_files", "read_file"]);
+    expect(workspace.prepares).toEqual([{ sha: sha("a"), baseSha: BASE }]);
+  });
+
+  it("fails a job whose workspace cannot be prepared, calling no model", async () => {
+    captureLogs();
+    const { stub, ref } = await cloudSession("turn", sockets);
+    const model = new ScriptedModel();
+    useCloudModel(model);
+    const workspace = new FakeWorkspace();
+    workspace.prepareFailure = new Error("the fetch of the commit failed");
+    useWorkspace(workspace);
+
+    await push(ref, "a");
+    await untilState(stub, sha("a"), "failed");
+
+    expect((await jobRows(stub))[0]?.failure).toBe("workspace: the fetch of the commit failed");
+    expect(workspace.prepares).toEqual([{ sha: sha("a"), baseSha: BASE }]);
+    expect(model.calls).toHaveLength(0);
+  });
+});
+
+describe("workspace prepare", () => {
+  it("fails a job whose workspace does not answer its prepare at the backstop, not a tick sooner, and stops listening to the turn's signal", async () => {
+    captureLogs();
+    const { stub, ref } = await cloudSession("turn", sockets);
+    const model = new ScriptedModel();
+    useCloudModel(model);
+    const workspace = new FakeWorkspace();
+    workspace.prepareHangs = true;
+    // The abort listeners added to the turn's signal once the prepare started, and those removed.
+    const listeners = { added: [] as unknown[], removed: [] as unknown[] };
+    const prepare = workspace.prepare.bind(workspace);
+    vi.spyOn(workspace, "prepare").mockImplementation((target, signal) => {
+      const add = signal.addEventListener.bind(signal);
+      const remove = signal.removeEventListener.bind(signal);
+      vi.spyOn(signal, "addEventListener").mockImplementation((type, listener, options) => {
+        listeners.added.push(...(type === "abort" ? [listener] : []));
+        add(type, listener, options);
+      });
+      vi.spyOn(signal, "removeEventListener").mockImplementation((type, listener, options) => {
+        listeners.removed.push(...(type === "abort" ? [listener] : []));
+        remove(type, listener, options);
+      });
+      return prepare(target, signal);
+    });
+    useWorkspace(workspace);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    await push(ref, "a");
+    await until(() => workspace.prepares.length === 1, "the prepare");
+    await advance(stub, WORKSPACE_CALL_MS - 1);
+    expect((await jobRows(stub))[0]?.state).toBe("running");
+    await advance(stub, 1);
+
+    expect(await untilEnded(stub, sha("a"))).toEqual({
+      state: "failed",
+      failure: "workspace: no answer within 31 minutes",
+    });
+    expect(model.calls).toHaveLength(0);
+    expect(listeners.added).not.toEqual([]);
+    expect(listeners.added.filter((listener) => !listeners.removed.includes(listener))).toEqual([]);
+  });
+
+  it("ends the wait for the prepare at once when the turn is aborted", async () => {
+    captureLogs();
+    const { stub, ref } = await cloudSession("turn", sockets);
+    const model = new ScriptedModel();
+    useCloudModel(model);
+    const workspace = new FakeWorkspace();
+    workspace.prepareHangs = true;
+    useWorkspace(workspace);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    await push(ref, "a");
+    await until(() => workspace.prepares.length === 1, "the prepare");
+    // As a client's cancel aborts it.
+    await runInDurableObject(stub, (instance) => prSessionSeams(instance).abortAllRequests());
+
+    expect(await untilEnded(stub, sha("a"))).toEqual({ state: "failed", failure: "the turn was cancelled" });
+    expect(model.calls).toHaveLength(0);
+  });
+});
+
+describe("workspace base", () => {
+  it("fails a job with a workspace commit whose pull request's base is not known, preparing nothing", async () => {
+    captureLogs();
+    const { stub, ref } = await cloudSession("turn", sockets);
+    const model = new ScriptedModel();
+    useCloudModel(model);
+    await push(ref, "a");
+    await untilState(stub, sha("a"), "failed");
+    // The details lose a field, so the session no longer knows the pull request's base.
+    await sessionSql(stub, "UPDATE prq_session SET title = NULL WHERE id = 1");
+    const workspace = new FakeWorkspace();
+    useWorkspace(workspace);
+
+    const [job] = await jobRows(stub);
+    await retryIn(stub, job?.job_id ?? "");
+
+    expect(await untilEnded(stub, sha("a"))).toEqual({
+      state: "failed",
+      failure: "workspace: the pull request's base is not known",
+    });
+    expect(workspace.prepares).toEqual([]);
+    expect(model.calls).toHaveLength(0);
+  });
+});
+
+describe("no budgets", () => {
+  it("goes on while the model calls tools: a 40-step turn completes as done", async () => {
+    const logs = captureLogs();
+    const { stub, ref } = await cloudSession("turn", sockets);
+    const steps = Array.from({ length: 39 }, (_, step) => [
+      toolCall("list_files", {}, `call-${step}`),
+      finish("tool-calls"),
+    ]);
+    const model = new ScriptedModel().add(...steps, answerScript("the summary"));
+    useCloudModel(model);
+    useWorkspace(new FakeWorkspace({ head: { "src/a.ts": "a\n" } }));
+
+    await push(ref, "a");
+
+    expect(await untilEnded(stub, sha("a"))).toEqual({ state: "done", failure: null });
+    expect(model.calls).toHaveLength(40);
+    expect(toolResults(model.calls[39])).toHaveLength(39);
+    expect(events(logs, "prq.job.usage").at(-1)).toMatchObject({ outcome: "done", steps: 40 });
+  });
+});
+
+describe("room", () => {
+  it("offers every step the tools while the latest request and what came after it stay under the window", async () => {
+    captureLogs();
+    const { stub, ref } = await cloudSession("turn", sockets);
+    const file = lines(50, "row");
+    // A 20,000-token start, each step's input grown by 5,000 tokens: its tool result and output.
+    const steps = Array.from({ length: 8 }, (_, step) => [
+      toolCall("read_file", { path: "src/a.ts" }, `call-${step}`),
+      finish("tool-calls", { input: 20_000 + 5000 * step, output: 100 }),
+    ]);
+    const model = new ScriptedModel().add(...steps, answerScript("the summary", { input: 60_000, output: 100 }));
+    model.contextTokens = 128_000;
+    useCloudModel(model);
+    useWorkspace(new FakeWorkspace({ head: { "src/a.ts": file } }));
+
+    await push(ref, "a");
+
+    const ended = await untilEnded(stub, sha("a"));
+    expect(model.calls.map((call) => call.toolChoice)).toEqual(Array.from({ length: 9 }, () => ({ type: "auto" })));
+    expect(ended).toEqual({ state: "done", failure: null });
+    expect(model.calls).toHaveLength(9);
+    const results = toolResults(model.calls[8]);
+    expect(results).toHaveLength(8);
+    for (const result of results) {
+      expect(result.split("\n")).toHaveLength(50);
+    }
+  });
+
+  it("cuts results to the room left when the next request would exceed it, then withdraws the tools", async () => {
+    captureLogs();
+    const { stub, ref } = await cloudSession("turn", sockets);
+    const window = 20_000;
+    const left = 9000;
+    // The step that called the tools measured the request at the window less the reserve, less `left` characters.
+    const measured = window - contextBudget(window).reserve - left / CHARS_PER_TOKEN;
+    const model = new ScriptedModel().add(
+      [
+        toolCall("read_file", { path: "a.txt" }, "call-a"),
+        toolCall("read_file", { path: "b.txt" }, "call-b"),
+        finish("tool-calls", { input: measured - 100, output: 100 }),
+      ],
+      answerScript("answered from what was read"),
+    );
+    model.contextTokens = window;
+    useCloudModel(model);
+    // Each file alone fits the room; both together do not.
+    const file = lines(100, "row");
+    expect(file.length).toBeLessThan(left - MIN_RESULT_CHARS);
+    expect(2 * file.length).toBeGreaterThan(left);
+    useWorkspace(new FakeWorkspace({ head: { "a.txt": file, "b.txt": file } }));
+
+    await push(ref, "a");
+
+    expect(await untilEnded(stub, sha("a"))).toEqual({ state: "done", failure: null });
+    const results = toolResults(model.calls[1]);
+    expect(results).toHaveLength(2);
+    expect(results.reduce((sum, result) => sum + result.length, 0)).toBeLessThanOrEqual(left);
+    expect(results.filter((result) => result.split("\n").length === 100)).toHaveLength(1);
+    expect(results.filter((result) => /\[cut at line \d+ .*no room for more/.test(result))).toHaveLength(1);
+    // The answer's step keeps the tool definitions (a cached prefix) but may call none.
+    expect(model.calls.map((call) => call.toolChoice)).toEqual([{ type: "auto" }, { type: "none" }]);
+    expect(toolNames(model.calls[1])).toEqual(["diff", "grep", "list_files", "read_file"]);
   });
 });
