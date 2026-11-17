@@ -343,11 +343,12 @@ UI, webhook and CLI input all enter through PrSession.
 - **Requests.** Every request is a JSON `POST` with the service token headers, no redirect followed, and a timeout. Its
   body is built through the route's `@prq/protocol` schema, so a bad local value fails before it is sent. A 2xx body
   must parse with the route's response schema; one that does not ends the command with exit 1 naming the route, and is
-  never printed as a result. Any 3xx, 401 or 403 is an authentication failure, exit 3 with one stderr line and no
-  retry: Access answers a bad service token before the Worker (a 403, or a redirect to its sign-in page), and the
-  Worker answers 401 to a token it refuses. A 503, whatever its body (Access's keys unavailable, a Durable Object that
-  did not answer, a contact the Hub could not record, an edge failure), a network failure and the client's timeout are
-  retried: 503 is the server's one "try again", and every route is safe to send again (see
+  never printed as a result. Any 3xx, 401 or 403 is an authentication failure: exit 3, no retry, and one stderr line
+  naming it, after the version notice when the response's version differs (the Worker's 401 carries it). Access answers
+  a bad service token before the Worker (a 403, or a redirect to its sign-in page), and the Worker answers 401 to a
+  token it refuses. A 503, whatever its body (Access's keys unavailable, a Durable Object that did not answer, a contact
+  the Hub could not record, an edge failure), a network failure and the client's timeout are retried: 503 is the
+  server's one "try again", and every route is safe to send again (see
   [Notification and wait](#notification-and-wait-prq-wait)). Any other status ends the command with exit 1.
 - **Timeouts and retries.** The client waits 5 s longer than a route's bound: `ROUTE_CALL_MS` (30 s) plus 5 s for
   `claim`, and for `wait` the wait's bound plus `ROUTE_CALL_MS` plus 5 s, from the constants the server's routes use

@@ -127,6 +127,19 @@ describe("prq claim", () => {
     ]);
   });
 
+  it("rejects a malformed answer: exit 1 naming the route, the record kept", async () => {
+    await jobFor("laptop");
+    await claim("laptop");
+    const record = await readFile(recordPath("laptop"), "utf8");
+    stack.access().plan("/cli/claim", { kind: "body", body: '{"job":"maybe"}' });
+
+    const exit = await stack.run(["claim", "--agent-id", "laptop"]);
+    expect(exit.code).toBe(1);
+    expect(exit.stdout).toBe("");
+    expect(stderrLines(exit)).toEqual(["prq: /cli/claim answered 200 with a body that is not its answer"]);
+    expect(await readFile(recordPath("laptop"), "utf8")).toBe(record);
+  });
+
   it("late claim: a claim that landed behind a 503 is resumed by the retry in the same command", async () => {
     await jobFor("laptop");
     stack.access().plan("/cli/claim", { kind: "lose" });

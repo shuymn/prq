@@ -43,6 +43,18 @@ describe("authentication failures", () => {
     });
   }
 
+  it("the Worker's 401 with another version: the version notice, then the one authentication line", async () => {
+    stack.access().mode = "expired";
+    stack.access().serverVersion = "v9.9.9";
+    const exit = await stack.run(["claim", "--agent-id", "laptop"]);
+    expect(exit.code).toBe(3);
+    expect(exit.stdout).toBe("");
+    expect(stderrLines(exit)).toEqual([
+      `prq: prq ${stack.worker().version} talks to a v9.9.9 server; update prq if a command fails`,
+      "prq: authentication failed (HTTP 401 from /cli/claim); check PRQ_ACCESS_CLIENT_ID and PRQ_ACCESS_CLIENT_SECRET",
+    ]);
+  });
+
   it("keys unavailable: the Worker's 503 is retried, not exit 3", async () => {
     stack.worker().failKeys(2);
     const exit = await stack.run(["claim", "--agent-id", "laptop"]);
