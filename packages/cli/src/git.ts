@@ -11,6 +11,36 @@ export const GIT_QUICK_MS = 60_000;
 // How long git has to exit after SIGTERM (it removes its lock files then) before it is killed.
 const KILL_GRACE_MS = 5_000;
 
+// The process groups of the git calls running. Each git runs in a group of its own, with the programs it starts (a
+// filter such as Git LFS's, a credential helper, ssh), so stopping the group stops them all; a signal to prq does not
+// reach a group of its own, so prq passes SIGINT, SIGTERM and SIGHUP on to the groups, then ends by the signal.
+const groups = new Set<number>();
+let forwarding = false;
+
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // The group has ended.
+  }
+}
+
+function forwardSignals(): void {
+  if (forwarding) {
+    return;
+  }
+  forwarding = true;
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.once(signal, () => {
+      for (const pid of groups) {
+        signalGroup(pid, "SIGTERM");
+      }
+      // The listener is gone, so this ends prq as the signal would have.
+      process.kill(process.pid, signal);
+    });
+  }
+}
+
 export type GitResult = { code: number; stdout: string; stderr: string };
 
 // A git call that did not end within its timeout; git was stopped.
@@ -73,12 +103,18 @@ export class Git {
   }
 
   // git -C dir args: its exit code and output. A git that cannot start, or does not end within timeoutMs, ends the
-  // command.
+  // command; one that does not end is stopped with every program it started.
   run(dir: string, args: readonly string[], timeoutMs: number): Promise<GitResult> {
+    forwardSignals();
     const child = spawn(this.#binary, ["-C", dir, "-c", `core.hooksPath=${this.#hooks}`, ...args], {
       env: this.#env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     });
+    const { pid } = child;
+    if (pid !== undefined) {
+      groups.add(pid);
+    }
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
@@ -93,12 +129,21 @@ export class Git {
       let kill: ReturnType<typeof setTimeout> | undefined;
       const timer = setTimeout(() => {
         timedOut = true;
-        child.kill("SIGTERM");
-        kill = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
+        if (pid !== undefined) {
+          signalGroup(pid, "SIGTERM");
+          kill = setTimeout(() => signalGroup(pid, "SIGKILL"), KILL_GRACE_MS);
+        }
       }, timeoutMs);
       const done = () => {
         clearTimeout(timer);
         clearTimeout(kill);
+        if (pid !== undefined) {
+          groups.delete(pid);
+          // What of a stopped git's group outlived it and closed its output.
+          if (timedOut) {
+            signalGroup(pid, "SIGKILL");
+          }
+        }
       };
       child.on("error", (error) => {
         done();

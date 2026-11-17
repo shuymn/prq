@@ -2,14 +2,18 @@
 // Real git against fixture repositories (src/test/git.ts), the git under test given the fixtures' environment; a slow
 // or a failing git is a script in git's place.
 
+import { execFile } from "node:child_process";
 import { chmod, lstat, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import * as v from "valibot";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CliError } from "./errors.ts";
 import { Git, GitTimeout } from "./git.ts";
-import { fixtureRoot, makeRepo, type Repo } from "./test/git.ts";
+import { fixtureRoot, liveProcesses, makeRepo, type Repo, slowFilter } from "./test/git.ts";
 import { addWorktree, removeWorktree } from "./worktree.ts";
 
 const pr = { owner: "acme", repo: "widgets", number: 7 };
@@ -23,6 +27,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // A filter a failing test left running.
+  for (const pid of await liveProcesses(join(dir, "filter-pids"))) {
+    process.kill(pid, "SIGKILL");
+  }
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -39,6 +47,11 @@ async function clone() {
     refs: await repo.git(repo.clone, "for-each-ref", "--format=%(refname) %(objectname)"),
     worktrees: await repo.git(repo.clone, "worktree", "list", "--porcelain"),
   };
+}
+
+// A module of this package, as an import specifier a script elsewhere can use.
+function source(name: string): string {
+  return JSON.stringify(fileURLToPath(new URL(name, import.meta.url)));
 }
 
 // A script in git's place: body for a worktree add, real git for anything else.
@@ -63,6 +76,67 @@ describe("addWorktree", () => {
     expect(await exists(path)).toBe(false);
     expect(await clone()).toEqual(before);
   });
+
+  it("a worktree add stopped in time stops the filters git runs as well", async () => {
+    const { files, pids } = await slowFilter(repo);
+    const head = await repo.head("filtered", files);
+    await repo.git(repo.clone, "fetch", "--quiet", "origin", `pull/${pr.number}/head`);
+    const before = await clone();
+    const git = await Git.create(join(dir, "hooks"), { env: repo.fixture.env });
+    const path = join(dir, "job", "worktree");
+    await mkdir(join(dir, "job"));
+
+    const started = Date.now();
+    await expect(addWorktree(git, repo.clone, path, head, 1_500)).rejects.toEqual(
+      new GitTimeout("worktree add", 1_500),
+    );
+    // Well before the filter's sleep ends, and without waiting for the grace before SIGKILL.
+    expect(Date.now() - started).toBeLessThan(4_500);
+    await vi.waitFor(async () => expect(await liveProcesses(pids)).toEqual([]), { timeout: 3_000 });
+    expect(await exists(path)).toBe(false);
+    expect(await clone()).toEqual(before);
+  }, 60_000);
+
+  it("the same under Bun, the runtime prq is compiled with", async () => {
+    const { files, pids } = await slowFilter(repo);
+    const head = await repo.head("filtered", files);
+    await repo.git(repo.clone, "fetch", "--quiet", "origin", `pull/${pr.number}/head`);
+    const before = await clone();
+    const path = join(dir, "job", "worktree");
+    await mkdir(join(dir, "job"));
+    const driver = join(dir, "driver.ts");
+    await writeFile(
+      driver,
+      [
+        `import { Git } from ${source("./git.ts")};`,
+        `import { addWorktree } from ${source("./worktree.ts")};`,
+        "const [hooks, clone, path, sha] = process.argv.slice(2);",
+        "const git = await Git.create(hooks, { env: process.env });",
+        "const started = Date.now();",
+        "const error = await addWorktree(git, clone, path, sha, 1_500).then(() => null, (failure) => failure.message);",
+        "console.log(JSON.stringify({ bun: typeof Bun !== 'undefined', elapsedMs: Date.now() - started, error }));",
+        "",
+      ].join("\n"),
+    );
+
+    const { stdout } = await promisify(execFile)("bun", [driver, join(dir, "hooks"), repo.clone, path, head], {
+      cwd: dir,
+      env: repo.fixture.env,
+    });
+    const outcome = v.parse(
+      v.object({ bun: v.boolean(), elapsedMs: v.number(), error: v.nullable(v.string()) }),
+      JSON.parse(stdout),
+    );
+    expect(outcome).toEqual({
+      bun: true,
+      elapsedMs: expect.any(Number),
+      error: new GitTimeout("worktree add", 1_500).message,
+    });
+    expect(outcome.elapsedMs).toBeLessThan(4_500);
+    await vi.waitFor(async () => expect(await liveProcesses(pids)).toEqual([]), { timeout: 3_000 });
+    expect(await exists(path)).toBe(false);
+    expect(await clone()).toEqual(before);
+  }, 60_000);
 
   it("a worktree add that fails leaves nothing behind", async () => {
     const before = await clone();

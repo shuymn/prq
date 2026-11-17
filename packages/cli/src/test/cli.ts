@@ -13,8 +13,8 @@ export type Exit = { code: number | null; signal: NodeJS.Signals | null; stdout:
 export type Running = {
   // Settles once the process exited and its output closed.
   exited: Promise<Exit>;
-  // Kills it with SIGKILL and waits for its exit.
-  kill(): Promise<Exit>;
+  // Sends it a signal, SIGKILL unless another is named, and waits for its exit.
+  kill(signal?: NodeJS.Signals): Promise<Exit>;
 };
 
 export function startCli(args: readonly string[], env: Readonly<Record<string, string>>, cwd: string): Running {
@@ -33,9 +33,9 @@ export function startCli(args: readonly string[], env: Readonly<Record<string, s
   });
   return {
     exited,
-    kill() {
+    kill(signal = "SIGKILL") {
       if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
+        child.kill(signal);
       }
       return exited;
     },

@@ -5,7 +5,7 @@
 // Identity comes only from GIT_AUTHOR_* and GIT_COMMITTER_*; no fixture writes user.* or global or system config.
 
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -247,4 +247,30 @@ export async function makeRepo(root: string, pr: PrRef): Promise<Repo> {
       return git(seed, "rev-parse", "HEAD");
     },
   };
+}
+
+// A smudge filter that does not end in time, as a stalled Git LFS download would be: a shell waiting on a sleep it
+// started, each writing its pid to pids. Configured in the clone as the required filter "slow"; files, committed, make a
+// checkout run it.
+export async function slowFilter(repo: Repo): Promise<{ files: Record<string, string>; pids: string }> {
+  const pids = join(repo.fixture.root, "filter-pids");
+  const filter = join(repo.fixture.root, "slow-filter");
+  await writeFile(filter, `#!/bin/sh\necho $$ >> '${pids}'\nsleep 20 &\necho $! >> '${pids}'\nwait $!\ncat\n`);
+  await chmod(filter, 0o755);
+  await repo.git(repo.clone, "config", "filter.slow.smudge", filter);
+  await repo.git(repo.clone, "config", "filter.slow.required", "true");
+  return { files: { ".gitattributes": "large.bin filter=slow\n", "large.bin": "pointer\n" }, pids };
+}
+
+// The processes of a pids file that are still running.
+export async function liveProcesses(pids: string): Promise<number[]> {
+  const listed = (await readFile(pids, "utf8").catch(() => "")).split("\n").filter((line) => line !== "");
+  return listed.map(Number).filter((pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }

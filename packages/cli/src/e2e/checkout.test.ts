@@ -17,15 +17,22 @@ import { join, relative } from "node:path";
 
 import { ClaimResponse } from "@prq/protocol";
 import * as v from "valibot";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { result, stderrLines } from "../test/cli.ts";
-import { makeRepo, type Repo } from "../test/git.ts";
+import { liveProcesses, makeRepo, type Repo, slowFilter } from "../test/git.ts";
 import { ask, push, retry, sha } from "../test/pr.ts";
 import { useStack } from "../test/stack.ts";
 
 const stack = useStack();
 const pr = { owner: "acme", repo: "widgets", number: 7 };
+
+// A filter a failing test left running.
+afterEach(async () => {
+  for (const pid of await liveProcesses(join(stack.dir(), "filter-pids"))) {
+    process.kill(pid, "SIGKILL");
+  }
+});
 
 const Claimed = v.object({ ...ClaimResponse.options[0].entries, dir: v.string(), answer: v.string() });
 const CheckedOut = v.object({
@@ -451,4 +458,22 @@ describe("prq checkout", () => {
     expect(await repo.git(owner, "worktree", "list", "--porcelain")).toBe(registrations);
     expect(await exists(join(claimed.dir, "checkout.json"))).toBe(false);
   });
+
+  it("ended by a signal while git runs: stops git and the filters git runs, then ends by that signal", async () => {
+    const repo = await makeRepo(stack.dir(), pr);
+    const { files, pids } = await slowFilter(repo);
+    const head = await repo.head("h1", files);
+    await present("laptop");
+    await push(stack.worker(), pr, head, repo.base);
+    await claim("laptop");
+
+    const running = stack.start(["checkout", "--agent-id", "laptop"], repo.env);
+    await vi.waitFor(async () => expect((await readFile(pids, "utf8").catch(() => "")).split("\n")).toHaveLength(3), {
+      timeout: 20_000,
+      interval: 50,
+    });
+    const exit = await running.kill("SIGTERM");
+    expect(exit.signal).toBe("SIGTERM");
+    await vi.waitFor(async () => expect(await liveProcesses(pids)).toEqual([]), { timeout: 3_000 });
+  }, 60_000);
 });
