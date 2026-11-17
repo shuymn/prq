@@ -2,6 +2,7 @@ import { APICallError, RetryError, StreamProviderError } from "ai";
 import { describe, expect, it } from "vitest";
 
 import { classifyModelError } from "./pr-session/model.ts";
+import { TEST_KEY } from "./test/provider.ts";
 
 // How an error a turn sees becomes its job's failure reason, and which errors are context-length refusals (which
 // compaction re-runs from PR 6; until then they fail the job with the provider's reason like any refusal).
@@ -79,6 +80,20 @@ describe("classifyModelError", () => {
       errors: [refusal(503, { message: "busy" }), refusal(503, { message: "busy" }), refusal(503, { message: "busy" })],
     });
     expect(classifyModelError(error).reason).toBe("provider refused the request (HTTP 503): busy (after 3 attempts)");
+  });
+
+  it("names a successful response it could not read, with the cause's message and the key redacted", () => {
+    const error = new APICallError({
+      message: "Failed to process successful response",
+      url: "https://provider.example/v1/chat/completions",
+      requestBodyValues: {},
+      statusCode: 200,
+      cause: new TypeError(`Brotli decompression failed. ${TEST_KEY}`),
+    });
+    expect(classifyModelError(error, TEST_KEY)).toEqual({
+      reason: "provider response could not be read (HTTP 200): Brotli decompression failed. [redacted]",
+      contextLength: false,
+    });
   });
 
   it("names a request that got no status", () => {

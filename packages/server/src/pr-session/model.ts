@@ -124,6 +124,12 @@ function errorMessage(error: unknown): string {
 
 function classifyCause(cause: unknown): ModelFailure {
   if (APICallError.isInstance(cause)) {
+    const status = cause.statusCode;
+    // A 2xx the adapter could not process (its body failed to read or decode): no refusal; the reason is what failed.
+    if (status !== undefined && status >= 200 && status < 300) {
+      const failed = errorMessage(cause.cause ?? cause.message);
+      return { reason: `provider response could not be read (HTTP ${status}): ${failed}`, contextLength: false };
+    }
     const body = bodyError(cause);
     const message = body.message ?? (cause.responseBody || cause.message);
     const reason =

@@ -865,8 +865,10 @@ then a model that keeps calling tools runs until the provider refuses a call.
 
 - When the provider refuses a call (its spend limit, a key or a model it does not accept), the system shall end the job
   as `failed` with the provider's reason: `provider refused the request (HTTP <status>): <its message>`, or, for an
-  error sent inside the stream, `provider error during the answer (<its code or type>): <its message>`. A 429 or 5xx is
-  retried by the AI SDK first (twice, with exponential backoff), and the reason then says how many attempts were made.
+  error sent inside the stream, `provider error during the answer (<its code or type>): <its message>`. A 2xx whose body
+  cannot be read or decoded is no refusal: `provider response could not be read (HTTP <status>): <what failed>`. A 429
+  or 5xx is retried by the AI SDK first (twice, with exponential backoff), and the reason then says how many attempts
+  were made.
   The API key is replaced by `[redacted]` in every reason built from what the provider sent (these, a finish reason,
   a stream that fails midway) before it is cut to 500 characters, so a cut never leaves part of it. A stream that
   fails midway shows the client the same reason in place of the error's own text.
