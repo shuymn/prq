@@ -749,8 +749,9 @@ never summarized, and once answered it enters the kept part with its answer, whe
   fails it with the provider's reason.
 - **Parameters.** At windows of 131,072 tokens or more, the reserve, the kept part and the notes' output limit are Pi's
   defaults (16,384, 20,000 and 8,192 tokens); below, they are shares of the window (one eighth, three tenths, one
-  fifth), so none exceeds it. The kept part always exceeds the notes' output limit, and the difference holds the
-  summary prompt, so summarizing a context that fit the window fits it too.
+  fifth), so none exceeds it. That does not make a summary request fit the window: the count that triggers compaction
+  is the provider's, the kept part is an estimate, and a window can be made smaller. Each summary request is sized
+  instead (see Failure below).
 - **Token count.** The usage that the provider returned for the previous response is the main source, and only messages
   added since then are estimated. The estimate is characters ÷ 3, or a ratio measured in the session. Characters ÷ 4
   under-counted Japanese text and diffs by 1.3 to 1.7 times. The measurement is the last committed turn's last model
@@ -815,10 +816,17 @@ never summarized, and once answered it enters the kept part with its answer, whe
   notice), then the projection's kept part (a split turn's kept steps as a partial assistant message), then the job's
   own question or task. The full history is not changed: no Sessions overlay is stored (see
   [decisions.md](decisions.md)).
-- **Failure.** A summary that stalled, errored, ended other than `stop` (its output limit included) or is empty is not
-  adopted. Each summary is one streamed call under the same bounds as a turn's model requests (see
-  [Billing limits](#billing-limits)) and the notes' output limit, and it is tried once more. When compaction fails, the
-  stored notes and history stay as they were, and the next job runs on the full context.
+- **Failure.** A summary that stalled, errored, ended other than `stop` (its output limit included) or is empty once
+  the file list and tags prq generates are removed is not adopted. Each summary request, estimated as a turn's are
+  (characters ÷ 3) with the notes' output limit added, fits the window: a part too large for one request is summarized
+  in batches, oldest first, each updating the summary of the ones before, and a step too large alone is cut to fit. The
+  notes and the cut are adopted only once every batch has succeeded. Each batch is one streamed call under the same
+  bounds as a turn's model requests (see [Billing limits](#billing-limits)) and the notes' output limit, and it is tried
+  once more, so the gate's longest hold grows with the batches: when the provider stops sending, each attempt ends
+  within 120 s of its last output, at most two attempts per batch, and a provider still streaming is not cut, as for a
+  turn. A provider that counts the request higher than the estimate may still refuse it; that attempt fails like any
+  other. When compaction fails, the stored notes and history stay as they were, and the next job runs on the full
+  context.
 - Everything before the cut point is in the notes, so no message leaves the context without being reflected in them.
 - The notes are language-neutral: the compaction prompt does not ask for a particular language, and the prompts for
   analysis and answers decide how the final text reads.
@@ -1029,8 +1037,9 @@ Apart from these, bounds that keep a job from waiting forever (liveness, not spe
   the failure as text. The checkout a job's first model call needs is waited for the same way, and a job whose
   checkout cannot be made fails `workspace: <reason>`.
 - A cloud job's run is started at most 3 times across restarts, and the SDK's own recovery is declined (see
-  [Owner and jobs](#owner-and-jobs)). Each summary of a compaction is tried once more, and its requests have the bounds
-  above; a job whose request the provider refused for the context's length is run again once, after a compaction.
+  [Owner and jobs](#owner-and-jobs)). Each summary call of a compaction (one per batch) is tried once more, and its
+  requests have the bounds above; a job whose request the provider refused for the context's length is run again once,
+  after a compaction.
 
 ## Directory layout
 

@@ -342,35 +342,43 @@ function truncateForSummary(text: string, max: number): string {
   return `${text.slice(0, max)}\n\n[... ${text.length - max} more characters truncated]`;
 }
 
-// Steps as text the summarizer reads, so it does not continue them as a conversation. An analysis's first step is
-// preceded by its task, which is not stored.
-export function serializeSteps(steps: readonly Step[]): string {
+// Between the serialized steps of a request.
+const STEP_SEPARATOR = "\n\n";
+
+// One step as text the summarizer reads, so it does not continue it as a conversation (empty when it holds neither
+// text nor a tool call). An analysis's first step is preceded by its task, which is not stored.
+function serializeStep({ message, parts, turnStart }: Step): string {
   const lines: string[] = [];
-  for (const { message, parts, turnStart } of steps) {
-    const head = turnStart && message.role === "assistant" ? analysisHead(message) : null;
-    if (head !== null) {
-      lines.push(`[User]: ${analysisTask(head)}`);
-    }
-    const text = parts.map((part) => (part.type === "text" ? part.text : "")).join("");
-    if (text.trim() !== "") {
-      lines.push(`[${message.role === "user" ? "User" : "Assistant"}]: ${text}`);
-    }
-    const tools = parts.filter(isToolUIPart);
-    if (tools.length > 0) {
-      const calls = tools.map((part) => {
-        const input = typeof part.input === "object" && part.input !== null ? Object.entries(part.input) : [];
-        return `${getToolName(part)}(${input.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(", ")})`;
-      });
-      lines.push(`[Assistant tool calls]: ${calls.join("; ")}`);
-    }
-    for (const part of tools) {
-      const result = resultText(part);
-      if (result !== "") {
-        lines.push(`[Tool result]: ${truncateForSummary(result, TOOL_RESULT_MAX_CHARS)}`);
-      }
+  const head = turnStart && message.role === "assistant" ? analysisHead(message) : null;
+  if (head !== null) {
+    lines.push(`[User]: ${analysisTask(head)}`);
+  }
+  const text = parts.map((part) => (part.type === "text" ? part.text : "")).join("");
+  if (text.trim() !== "") {
+    lines.push(`[${message.role === "user" ? "User" : "Assistant"}]: ${text}`);
+  }
+  const tools = parts.filter(isToolUIPart);
+  if (tools.length > 0) {
+    const calls = tools.map((part) => {
+      const input = typeof part.input === "object" && part.input !== null ? Object.entries(part.input) : [];
+      return `${getToolName(part)}(${input.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(", ")})`;
+    });
+    lines.push(`[Assistant tool calls]: ${calls.join("; ")}`);
+  }
+  for (const part of tools) {
+    const result = resultText(part);
+    if (result !== "") {
+      lines.push(`[Tool result]: ${truncateForSummary(result, TOOL_RESULT_MAX_CHARS)}`);
     }
   }
-  return lines.join("\n\n");
+  return lines.join(STEP_SEPARATOR);
+}
+
+export function serializeSteps(steps: readonly Step[]): string {
+  return steps
+    .map(serializeStep)
+    .filter((text) => text !== "")
+    .join(STEP_SEPARATOR);
 }
 
 // Whether a tool call's result holds what it read: not an error, and not the note that the context had no room for it.
@@ -411,28 +419,82 @@ function cleanSummary(text: string): string {
 
 // --- The summary requests (Pi: generateSummary, compact) ---
 
-export type SummaryRequest = { kind: "notes" | "turn-prefix"; prompt: string };
+// Why a summary attempt was not adopted.
+class SummaryFailure extends Error {
+  override name = "SummaryFailure";
+}
+
+// The history's summary, or a split turn's checkpoint.
+export type SummaryKind = "notes" | "turn-prefix";
+export type SummaryRequest = { kind: SummaryKind; prompt: string };
+
+// A request for serialized steps: a new summary, or an update of `previous`.
+function summaryRequest(kind: SummaryKind, conversation: string, previous: string | null): SummaryRequest {
+  const earlier = previous === null ? "" : `<previous-summary>\n${previous}\n</previous-summary>\n\n`;
+  if (kind === "notes") {
+    const prompt = previous === null ? SUMMARIZATION_PROMPT : UPDATE_SUMMARIZATION_PROMPT;
+    return { kind, prompt: `<conversation>\n${conversation}\n</conversation>\n\n${earlier}${prompt}` };
+  }
+  const prompt = previous === null ? TURN_PREFIX_SUMMARIZATION_PROMPT : TURN_PREFIX_UPDATE_PROMPT;
+  return { kind, prompt: `# Conversation\n${conversation}\n\n${earlier}# Instructions\n${prompt}` };
+}
 
 export function notesRequest(toSummarize: readonly Step[], previous: string | null): SummaryRequest {
-  let prompt = `<conversation>\n${serializeSteps(toSummarize)}\n</conversation>\n\n`;
-  if (previous !== null) {
-    prompt += `<previous-summary>\n${previous}\n</previous-summary>\n\n`;
-  }
-  prompt += previous === null ? SUMMARIZATION_PROMPT : UPDATE_SUMMARIZATION_PROMPT;
-  return { kind: "notes", prompt };
+  return summaryRequest("notes", serializeSteps(toSummarize), previous);
 }
 
 // A split turn's first steps, summarized into its checkpoint, or added to the checkpoint `previous` when a later cut
 // falls further inside the same turn.
 export function turnPrefixRequest(turnPrefix: readonly Step[], previous: string | null = null): SummaryRequest {
-  const conversation = `# Conversation\n${serializeSteps(turnPrefix)}\n\n`;
-  return {
-    kind: "turn-prefix",
-    prompt:
-      previous === null
-        ? `${conversation}# Instructions\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`
-        : `${conversation}<previous-summary>\n${previous}\n</previous-summary>\n\n# Instructions\n${TURN_PREFIX_UPDATE_PROMPT}`,
-  };
+  return summaryRequest("turn-prefix", serializeSteps(turnPrefix), previous);
+}
+
+// A summary request's tokens as a turn's requests are estimated (characters ÷ 3, its system prompt included), with
+// its output allowance.
+export function requestTokens(request: SummaryRequest, maxOutputTokens: number): number {
+  return estimateTokens(SUMMARIZATION_SYSTEM_PROMPT.length + request.prompt.length) + maxOutputTokens;
+}
+
+// Room a step cut to fit keeps for the note that says so.
+const TRUNCATION_NOTE_CHARS = 64;
+
+// The request for the steps from `from` on that fit one summary call: as many as fit, oldest first, so that the request
+// with its output allowance is within the window (requestTokens). A step that alone does not fit is cut to the room
+// left. `end` is the index after the last step taken; the request is null when those steps hold nothing to summarize.
+export function nextBatch(
+  kind: SummaryKind,
+  steps: readonly Step[],
+  from: number,
+  previous: string | null,
+  window: number,
+  maxOutputTokens: number,
+): { request: SummaryRequest | null; end: number } {
+  const limit = (window - maxOutputTokens) * CHARS_PER_TOKEN - SUMMARIZATION_SYSTEM_PROMPT.length;
+  let room = limit - summaryRequest(kind, "", previous).prompt.length;
+  const texts: string[] = [];
+  let end = from;
+  for (; end < steps.length; end += 1) {
+    const step = steps[end];
+    const text = step === undefined ? "" : serializeStep(step);
+    if (text === "") {
+      continue;
+    }
+    const cost = text.length + (texts.length > 0 ? STEP_SEPARATOR.length : 0);
+    if (cost <= room) {
+      texts.push(text);
+      room -= cost;
+      continue;
+    }
+    if (texts.length === 0) {
+      if (room <= TRUNCATION_NOTE_CHARS) {
+        throw new SummaryFailure("the previous summary leaves no room in the window for a summary request");
+      }
+      texts.push(truncateForSummary(text, room - TRUNCATION_NOTE_CHARS));
+      end += 1;
+    }
+    break;
+  }
+  return { request: texts.length === 0 ? null : summaryRequest(kind, texts.join(STEP_SEPARATOR), previous), end };
 }
 
 // The notes from the summaries: the history's, a split turn's checkpoint after it, and the list of files read, made
@@ -445,11 +507,6 @@ export function assembleNotes(history: string, turnContext: string | null, files
 }
 
 // --- One summary call ---
-
-// Why a summary attempt was not adopted.
-class SummaryFailure extends Error {
-  override name = "SummaryFailure";
-}
 
 // One summary, streamed and consumed whole, under the turn's output bounds (firstChunkMs, chunkMs) and, through the
 // model, the response bound, and with the notes' output limit. A summary that stalled, errored, ended other than

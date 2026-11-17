@@ -4,7 +4,14 @@ import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { prSessionStub } from "./names.ts";
-import { assembleNotes, notesText, TURN_PREFIX_UPDATE_PROMPT } from "./pr-session/compaction.ts";
+import {
+  assembleNotes,
+  notesText,
+  requestTokens,
+  SUMMARIZATION_SYSTEM_PROMPT,
+  TURN_PREFIX_UPDATE_PROMPT,
+  UPDATE_SUMMARIZATION_PROMPT,
+} from "./pr-session/compaction.ts";
 import { PrSession } from "./pr-session/index.ts";
 import { CHARS_PER_TOKEN } from "./pr-session/room.ts";
 import { captureLogs, events } from "./test/access.ts";
@@ -15,6 +22,7 @@ import {
   contextRow,
   fourStepAnswer,
   isSummaryCall,
+  type NotesRow,
   notesRow,
   seedHistory,
   sized,
@@ -561,6 +569,30 @@ describe("the gate", () => {
   });
 });
 
+// Each summary call's request with its output allowance, estimated as compaction sizes it (characters ÷ 3) and as a
+// provider counting characters ÷ 5 would: both within the window.
+function expectWithinWindow(model: ScriptedModel): void {
+  for (const call of model.calls.filter(isSummaryCall)) {
+    const prompt = summaryPrompt(call);
+    const output = call.maxOutputTokens ?? 0;
+    expect(output).toBe(4000);
+    expect(requestTokens({ kind: "notes", prompt }, output)).toBeLessThanOrEqual(WINDOW);
+    expect(Math.ceil((SUMMARIZATION_SYSTEM_PROMPT.length + prompt.length) / 5) + output).toBeLessThanOrEqual(WINDOW);
+  }
+}
+
+// A conversation of ten exchanges, each answer 9,000 characters (3,000 estimated tokens): about 30,000 estimated
+// tokens, as a session that ran at a larger window holds when the window becomes 20,000.
+async function tenExchanges(stub: DurableObjectStub<PrSession>): Promise<void> {
+  await seedHistory(
+    stub,
+    Array.from({ length: 10 }, (_, index) => [
+      { id: `q${index}`, role: "user" as const, parts: [{ type: "text" as const, text: "x".repeat(100) }] },
+      cloudAnswer(`q${index}`, [{ type: "text", text: sized(`answer ${index}`, 3000) }]),
+    ]).flat(),
+  );
+}
+
 describe("a small window", () => {
   it("compacts a 20,000-token window's context at 18,000 tokens and not at 12,000, each request within the window", async () => {
     const logs = captureLogs();
@@ -596,6 +628,84 @@ describe("a small window", () => {
       expect(Math.ceil((system.length + prompt.length) / CHARS_PER_TOKEN) + 4000).toBeLessThanOrEqual(WINDOW);
     }
   });
+
+  it("summarizes a part too large for one request in batches, each updating the one before", async () => {
+    captureLogs();
+    const session = await cloudSession("compaction", sockets);
+    const { stub, client } = session;
+    // Text-heavy answers the provider measured below their estimate: the last turn measures 19,800, while the part
+    // before the kept answer is estimated at about 26,700 tokens.
+    const model = new ScriptedModel().add(
+      answerScript("a".repeat(40_000), { input: 200, output: 8000 }),
+      answerScript("b".repeat(40_000), { input: 8200, output: 8000 }),
+      answerScript("c".repeat(18_000), { input: 16_200, output: 3600 }),
+      notes("the first part"),
+      notes("both parts"),
+      notes("the turn's start"),
+    );
+    model.contextTokens = WINDOW;
+    useCloudModel(model);
+    for (const asked of [[Q1], [Q1, Q2], [Q1, Q2, Q3]]) {
+      await client.chat(asked);
+      await untilState(stub, asked.at(-1)?.id ?? "", "done");
+    }
+    await vi.waitFor(async () => expect((await notesRow(stub)).rev).toBe(1));
+
+    const prompts = model.calls.filter(isSummaryCall).map(summaryPrompt);
+    expect(prompts).toHaveLength(3);
+    expect(prompts[0]).toContain("[User]: question q2");
+    expect(prompts[0]).not.toContain("bbb");
+    expect(prompts[1]).toContain("<previous-summary>\nthe first part\n</previous-summary>");
+    expect(prompts[1]).toContain("bbb");
+    expect(prompts[1]?.endsWith(UPDATE_SUMMARIZATION_PROMPT)).toBe(true);
+    expect(prompts[2]).toContain("[User]: question q3");
+    expectWithinWindow(model);
+    expect(await notesRow(stub)).toMatchObject({
+      text: "both parts\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start",
+      cut_message_id: `answer-${(await jobOf(stub, "q3")).job_id}`,
+    });
+  });
+
+  const failedBatch: Script = [...text("cut"), finish("length")];
+  it.for([
+    [
+      "adopts the notes once every batch succeeded",
+      [notes("first"), notes("second"), notes("turn")],
+      { result: "adopted", notes: { history: "second", turn_context: "turn", rev: 1 }, failedThrough: null },
+    ],
+    [
+      "leaves the notes as they were when a batch fails",
+      [notes("first"), failedBatch, failedBatch],
+      { result: "failed", notes: { text: null, rev: 0 }, failedThrough: "answer-job-q9" },
+    ],
+  ] satisfies [string, Script[], { result: string; notes: Partial<NotesRow>; failedThrough: string | null }][])(
+    "after the window shrank, %s",
+    async ([, scripts, expected]) => {
+      captureLogs();
+      const session = await cloudSession("compaction", sockets);
+      const { stub } = session;
+      await tenExchanges(stub);
+      const model = new ScriptedModel().add(...scripts);
+      useCloudModel(model);
+
+      const result = await runInDurableObject(stub, (instance) =>
+        prSessionSeams(instance).compactContext(model.model, WINDOW, { jobId: "job" }),
+      );
+
+      expect(result).toBe(expected.result);
+      expectWithinWindow(model);
+      // Two batches of the part before the cut, the second updating the first's summary, then the split turn's start
+      // (or the second batch tried once more).
+      const prompts = model.calls.filter(isSummaryCall).map(summaryPrompt);
+      expect(prompts).toHaveLength(3);
+      expect(prompts[0]).toContain(sized("answer 0", 3000));
+      expect(prompts[0]).not.toContain(sized("answer 7", 3000));
+      expect(prompts[1]).toContain("<previous-summary>\nfirst\n</previous-summary>");
+      expect(prompts[1]).toContain(sized("answer 7", 3000));
+      expect(await notesRow(stub)).toMatchObject(expected.notes);
+      expect(await contextRow(stub)).toMatchObject({ compaction_failed_through: expected.failedThrough });
+    },
+  );
 });
 
 describe("the first step's room", () => {
