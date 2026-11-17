@@ -14,10 +14,11 @@ agent.
 ## Start
 
 1. `pnpm run build` in `packages/cli` (needs Bun from `mise.toml`): the binary `packages/cli/dist/prq`.
-2. `pnpm run stack` in `packages/cli`, as a background command, its output saved to a file. It is ready when it has
-   printed the `Control:` line: before that it prints the Worker's address, the session's environment (`export` lines,
-   also written to `session.env` in its temporary directory) and the control URL. A failure to start ends it with the
-   error and removes what it had made.
+2. `pnpm run stack` in `packages/cli`, as a background command, its output saved to a file. Its first line names its
+   temporary directory and the worker process, which runs the Worker in a process group of its own (the group's ID is
+   that process's ID). It is ready when it has printed the `Control:` line: before that it prints the Worker's address,
+   the session's environment (`export` lines, also written to `session.env` in the temporary directory) and the control
+   URL. A failure to start prints the error on stderr, ends what had started, prints `stopped` and exits 1.
 3. Check that the environment is the stack's before a session uses it: `PRQ_URL` is the printed `http://127.0.0.1:<port>`
    and `PATH` starts with this checkout's `packages/cli/dist`. Then run `prq reconcile` with it: exit 0 and
    `"next":"wait"` means the stack answers as the Worker does.
@@ -55,7 +56,8 @@ stopping it: both go with the stack's temporary directory.
 
 ## Stop
 
-Stop the session (its `prq wait` with it), then `curl -s -X POST <control>/stop`, or SIGINT or SIGTERM to the stack's
-`node` process. It closes its control server, its own `prq` runs, the stand-in and the Worker's runtime, removes its
-temporary directory, prints `stopped` and exits. Then check that its `node` process and the `workerd` and `esbuild`
-processes it started are gone, and that the directory `session.env` was in no longer exists.
+Stop the session (its `prq wait` with it), then `curl -s -X POST <control>/stop` (exit 0), or SIGINT, SIGTERM or
+SIGHUP to the stack's `node` process, at any point of its start too (it then ends by that signal). It closes its
+control server, its own `prq` runs, the stand-in and the Worker's runtime, ends what is left of the worker process's
+group, removes its temporary directory and prints `stopped`. Then check that no process is left in that group
+(`ps -A -o pid=,pgid=`) and that the temporary directory from the first line no longer exists.
