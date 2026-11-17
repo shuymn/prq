@@ -157,6 +157,10 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
     cached_input_tokens INTEGER NOT NULL DEFAULT 0,
     started_at INTEGER NOT NULL,
     PRIMARY KEY (job_id, run))`,
+  // The GitHub App installation a delivery came through (NULL when it named none), and the latest one the session took
+  // in with the details: the installation whose token reads the pull request.
+  "ALTER TABLE prq_inbox ADD COLUMN installation_id INTEGER",
+  "ALTER TABLE prq_session ADD COLUMN installation_id INTEGER",
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {

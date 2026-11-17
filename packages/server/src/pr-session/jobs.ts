@@ -76,13 +76,14 @@ export function readDetails(sql: SqlStorage): PrDetails | null {
 
 // A verified webhook delivery, as the route hands it to the session and the inbox keeps it. at is GitHub's time of the
 // pull request's state the event carries (pull_request.updated_at, epoch ms); before is the head a synchronize event
-// moved from (none for other actions).
+// moved from (none for other actions); installationId is the GitHub App installation it came through.
 export type Delivery = {
   deliveryId: string;
   action: string;
   push: boolean;
   at: number;
   before: string | null;
+  installationId: number | null;
   details: PrDetails;
 };
 
@@ -92,6 +93,7 @@ type InboxRow = {
   push: 0 | 1;
   at: number;
   before_sha: string | null;
+  installation_id: number | null;
   head_sha: string;
   base_sha: string;
   full_name: string;
@@ -105,13 +107,15 @@ export function addInbox(sql: SqlStorage, delivery: Delivery): "new" | "pending"
   const { details } = delivery;
   const added = sql
     .exec(
-      `INSERT INTO prq_inbox (delivery_id, action, push, at, before_sha, head_sha, base_sha, full_name, title, pr_state,
-         url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (delivery_id) DO NOTHING RETURNING seq`,
+      `INSERT INTO prq_inbox (delivery_id, action, push, at, before_sha, installation_id, head_sha, base_sha, full_name,
+         title, pr_state, url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (delivery_id) DO NOTHING
+       RETURNING seq`,
       delivery.deliveryId,
       delivery.action,
       delivery.push ? 1 : 0,
       delivery.at,
       delivery.before,
+      delivery.installationId,
       details.headSha,
       details.baseSha,
       details.fullName,
@@ -140,6 +144,7 @@ export function pendingInbox(sql: SqlStorage): Delivery[] {
       push: row.push === 1,
       at: row.at,
       before: row.before_sha,
+      installationId: row.installation_id,
       details: {
         fullName: row.full_name,
         title: row.title,
@@ -186,14 +191,14 @@ export function moveHead(sql: SqlStorage, delivery: Delivery): boolean {
   );
 }
 
-// Stores a webhook's details (all but the head) unless a webhook with a later GitHub time has stored them; among
-// webhooks of the same second the last one taken in wins. The head is a push's to move, except that a session with no
-// head takes the event's.
+// Stores a webhook's details (all but the head) and its App installation unless a webhook with a later GitHub time has
+// stored them; among webhooks of the same second the last one taken in wins. A delivery that names no installation
+// keeps the one stored. The head is a push's to move, except that a session with no head takes the event's.
 export function writeDetails(sql: SqlStorage, delivery: Delivery): void {
   const { at, details } = delivery;
   sql.exec(
     `UPDATE prq_session SET head_sha = coalesce(head_sha, ?), base_sha = ?, full_name = ?, title = ?, pr_state = ?,
-       url = ?, details_at = ?
+       url = ?, installation_id = coalesce(?, installation_id), details_at = ?
      WHERE id = 1 AND (details_at IS NULL OR ? >= details_at)`,
     details.headSha,
     details.baseSha,
@@ -201,6 +206,7 @@ export function writeDetails(sql: SqlStorage, delivery: Delivery): void {
     details.title,
     details.state,
     details.url,
+    delivery.installationId,
     at,
     at,
   );
