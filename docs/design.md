@@ -58,7 +58,7 @@ Worker (Hono)
         ledger of PRs (for the list), agent pool (local presence), queue of notifications for local agents
         instructions: the two prompts and the registered skills (pinned to commit SHAs)
 
-Local: prq (CLI, Node 24)   wait / claim / context / checkout / submit / reconcile
+Local: prq (CLI, one binary) wait / claim / context / checkout / submit / reconcile
 UI:    React + Vite (Workers Static Assets), connected to PrSession with useAgentChat
 ```
 
@@ -312,10 +312,13 @@ UI, webhook and CLI input all enter through PrSession.
 
 ### Local CLI (`prq`)
 
-- **Install.** `pnpm add --global link:.` in `packages/cli` puts `prq` on the host's `PATH` as a link to the checkout
-  (pnpm 12 has no `pnpm link --global`), and `pnpm remove --global @prq/cli` removes it. Node 24 runs its TypeScript
-  source directly (type stripping), so there is no build. `prq --version` prints `v` + `packages/cli/package.json`
-  `version`, and `prq --help` the usage.
+- **Install.** `prq` is one file: `bun build --compile` makes it from `packages/cli/src/main.ts` (`pnpm run build` in
+  `packages/cli` writes `packages/cli/dist/prq`; Bun's `--target` builds for another platform), and the host puts it on
+  its `PATH`. The host's machine then needs neither this repository nor Node or pnpm. A release workflow that builds the
+  binaries for each platform and attaches them to a release, with build provenance attestations, comes with release
+  versioning (#8); until then the host builds its own. The source uses no Bun-only API, so Node 24 runs it as well
+  (`node packages/cli/src/main.ts`); the unit tests run its modules there, and the end-to-end tests run the compiled
+  binary. `prq --version` prints `v` + `packages/cli/package.json` `version`, and `prq --help` the usage.
 - **Configuration**, from the environment the AI session runs the commands in. Environment variables rather than a
   config file: a file would hold the same secret, readable by the same AI, and direnv or mise can scope the variables
   per directory.
@@ -750,16 +753,16 @@ prq/
 │  │   ├─ wrangler.jsonc
 │  │   ├─ vite.config.ts
 │  │   └─ vitest.config.ts
-│  └─ cli/                 @prq/cli: prq (Node 24, run from its TypeScript source)
+│  └─ cli/                 @prq/cli: prq, compiled by Bun into one binary (dist/prq; Node 24 runs the source too)
 │      └─ src/
-│          ├─ main.ts            the bin: arguments, the command, the exit code
+│          ├─ main.ts            the entry the binary is built from: arguments, the command, the exit code
 │          ├─ config.ts          the Worker's URL, the service token, the agent ID, the state root
 │          ├─ client.ts          /cli/* over HTTP: the token headers, validation, authentication failures, the version notice
 │          ├─ retry.ts           client timeouts from the routes' bounds, retries and their window
 │          ├─ state.ts           the claim record and the job directories
 │          ├─ commands/          one module per command
-│          ├─ e2e/               the real CLI against the real Worker
-│          └─ test/              the Worker through wrangler's test harness, a stand-in for Access, the CLI as a child process
+│          ├─ e2e/               the compiled binary against the real Worker
+│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
 ├─ docs/                   design.md, decisions.md, ui.md, spikes.md
 ├─ design/                 design tokens, component inventory, screens ↔ Pencil frames, the Pencil document (the UI design's source for code)
