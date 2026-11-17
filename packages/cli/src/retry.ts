@@ -15,8 +15,8 @@ export function waitTimeoutMs(timeoutMs: number | undefined): number {
 }
 
 // Retries: 1 s after the first failure, doubling to 15 s. A command other than wait starts no attempt later than
-// RETRY_WINDOW_MS after its first, so it ends within that plus one CALL_TIMEOUT_MS, under the 120 s a foreground command
-// gets by default in Claude Code.
+// RETRY_WINDOW_MS after its first, whichever of its requests the attempt is for, so it ends within that plus one
+// CALL_TIMEOUT_MS, under the 120 s a foreground command gets by default in Claude Code.
 const RETRY_FIRST_MS = 1_000;
 const RETRY_MAX_MS = 15_000;
 export const RETRY_WINDOW_MS = 60_000;
@@ -43,17 +43,50 @@ export const systemClock: Clock = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
-// Makes attempts until one is not Retryable, starting none later than RETRY_WINDOW_MS after the first; then the
-// command ends with exit 1. The window is checked before a backoff, so no sleep is spent on an attempt it rules out,
-// and again before the attempt, since a sleep can end late (a machine that slept). onStreak hears the first failure
-// only: one stderr line per streak, not one per attempt.
+// One command's retry window: it opens at the command's first attempt and is shared by every request the command
+// makes (a context's pages, a submit's claim and resubmit), so a later request does not start a window of its own.
+export class RetryWindow {
+  readonly clock: Clock;
+  #first: number | null = null;
+  #failure: string | null = null;
+
+  constructor(clock: Clock) {
+    this.clock = clock;
+  }
+
+  // Before every attempt: the window opens at the first, and none starts after it closed.
+  open(): void {
+    const now = this.clock.now();
+    this.#first ??= now;
+    if (now - this.#first > RETRY_WINDOW_MS) {
+      throw this.closed();
+    }
+  }
+
+  // After a failed attempt: whether a backoff of delayMs still ends inside the window.
+  failed(failure: Retryable, delayMs: number): boolean {
+    this.#failure = failure.reason;
+    return this.#first !== null && this.clock.now() + delayMs - this.#first <= RETRY_WINDOW_MS;
+  }
+
+  // The error that ends the command, naming the last failure.
+  closed(): CliError {
+    const reason = this.#failure ?? `its requests took more than ${RETRY_WINDOW_MS / 1000} s`;
+    return new CliError(EXIT.error, `the server is unavailable (${reason}); try again`);
+  }
+}
+
+// Makes attempts until one is not Retryable, within the command's window; past it, the command ends with exit 1. The
+// window is checked before a backoff, so no sleep is spent on an attempt it rules out, and again before every attempt,
+// since a sleep can end late (a machine that slept) and an earlier request can have used the window up. onStreak hears
+// the first failure only: one stderr line per streak, not one per attempt.
 export async function withRetry<T>(
   attempt: () => Promise<T | Retryable>,
-  clock: Clock,
+  window: RetryWindow,
   onStreak: (failure: Retryable) => void,
 ): Promise<T> {
-  const first = clock.now();
   for (let failures = 1; ; failures += 1) {
+    window.open();
     const result = await attempt();
     if (!(result instanceof Retryable)) {
       return result;
@@ -62,13 +95,9 @@ export async function withRetry<T>(
       onStreak(result);
     }
     const delay = backoffMs(failures);
-    const unavailable = () => new CliError(EXIT.error, `the server is unavailable (${result.reason}); try again`);
-    if (clock.now() + delay - first > RETRY_WINDOW_MS) {
-      throw unavailable();
+    if (!window.failed(result, delay)) {
+      throw window.closed();
     }
-    await clock.sleep(delay);
-    if (clock.now() - first > RETRY_WINDOW_MS) {
-      throw unavailable();
-    }
+    await window.clock.sleep(delay);
   }
 }

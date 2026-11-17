@@ -22,6 +22,9 @@ type Plan =
   | { kind: "drop" }
   // Forward; once the Worker answered, discard its answer and answer 503 instead.
   | { kind: "lose" }
+  // Answer 503 at once, as a route that stopped waiting does, and forward the request only when release opens: a call
+  // that lands after its route answered. answered opens once the Worker answered it.
+  | { kind: "defer"; release: Latch; answered: Latch }
   // Forward, and answer the Worker's status and headers with this body.
   | { kind: "body"; body: string };
 
@@ -124,14 +127,17 @@ export async function startAccess(worker: Worker): Promise<Access> {
       return;
     }
     const plan = nextPlan(route);
-    if (plan?.kind === "reply") {
-      const error = plan.status === 503 ? "unavailable" : "internal";
+    if (plan?.kind === "reply" || plan?.kind === "defer") {
+      const status = plan.kind === "reply" ? plan.status : 503;
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       const sent = version(worker.version);
       if (sent !== null) {
         headers["Prq-Version"] = sent;
       }
-      answer(plan.status, headers, JSON.stringify({ error }));
+      answer(status, headers, JSON.stringify({ error: status === 503 ? "unavailable" : "internal" }));
+      if (plan.kind === "defer") {
+        void forwardLate(route, body, plan.release, plan.answered);
+      }
       return;
     }
 
@@ -188,6 +194,24 @@ export async function startAccess(worker: Worker): Promise<Access> {
       return;
     }
     answer(upstream.status, headers, plan?.kind === "body" ? plan.body : payload);
+  }
+
+  // A request forwarded once release opens, its client already answered.
+  async function forwardLate(route: string, body: string, release: Latch, answered: Latch): Promise<void> {
+    await release.promise;
+    try {
+      const upstream = await fetch(new URL(route, worker.url()), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": await worker.token() },
+        body,
+        redirect: "manual",
+      });
+      await upstream.text();
+    } catch {
+      // A failure to forward shows in what the test then finds in the Worker.
+    } finally {
+      answered.open();
+    }
   }
 
   const server = createServer((req, res) => {

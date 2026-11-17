@@ -8,10 +8,12 @@ import type { Client } from "../client.ts";
 import { EXIT, type ExitCode } from "../errors.ts";
 import { type Claim, type State, UnreadableRecord } from "../state.ts";
 
+// What a claim gives the AI: no job, or the server's answer with the claim's directory, its answer file and whether an
+// answer is saved there.
+export type ClaimResult = { job: null } | (Claim & { dir: string; answer: string; saved: boolean });
+
 // prq claim: the agent's own claimed job first (resumed), else the next waiting one, saved as the agent's record
-// before it is printed. The output names the claim's directory and its answer file; next is answer when an answer is
-// saved there (a claim that resumed the same job, run and workspace), else context. With no job the record is removed.
-// A record replaced by a claim on another directory, or removed, ended that claim: its answer must not be submitted.
+// before it is printed.
 export async function claim(
   client: Client,
   state: State,
@@ -20,14 +22,28 @@ export async function claim(
   stderr: (line: string) => void,
 ): Promise<ExitCode> {
   const previous = await previousClaim(state, stderr);
+  const result = await claimJob(client, state, agentId, previous, stderr);
+  print({ ...result, next: claimNext(result) });
+  return EXIT.ok;
+}
+
+// One claim, adopted as the agent's record: a job is saved as the record and its directory created; with no job the
+// record is removed. A record replaced by a claim on another directory, or removed, ended that claim: its answer must
+// not be submitted, which a stderr line says.
+export async function claimJob(
+  client: Client,
+  state: State,
+  agentId: string,
+  previous: Claim | null,
+  stderr: (line: string) => void,
+): Promise<ClaimResult> {
   const response = await client.call("/cli/claim", v.parse(ClaimRequest, { agentId }), ClaimResponse);
   if (response.job === null) {
     await state.removeRecord();
     if (previous !== null) {
       stderr(ended(state, previous));
     }
-    print({ job: null, next: "wait" });
-    return EXIT.ok;
+    return { job: null };
   }
   await state.saveRecord(response);
   const dir = state.jobDir(response.job);
@@ -37,9 +53,16 @@ export async function claim(
     stderr(ended(state, previous));
   }
   const answer = join(dir, "answer.md");
-  const saved = await exists(answer);
-  print({ ...response, dir, answer, saved, next: saved ? "answer" : "context" });
-  return EXIT.ok;
+  return { ...response, dir, answer, saved: await exists(answer) };
+}
+
+// The step after a claim: wait with no job; answer when an answer is saved in the claim's directory (a claim that
+// resumed the same job, run and workspace), to be checked and finished before it is submitted; else context.
+export function claimNext(result: ClaimResult): "wait" | "answer" | "context" {
+  if (result.job === null) {
+    return "wait";
+  }
+  return result.saved ? "answer" : "context";
 }
 
 // The record before this claim; an unreadable one is replaced.
