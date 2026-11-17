@@ -2,8 +2,11 @@ import { streamText, type ToolSet } from "ai";
 import { runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { Page } from "./pr-session/pages.ts";
 import { ContextRoom } from "./pr-session/room.ts";
 import {
+  MIN_RESULT_CHARS,
+  NO_ROOM,
   TOOL_RESULT_CHARS,
   toolArgv,
   toolLoop,
@@ -72,6 +75,13 @@ async function tools(options: FakeWorkspaceOptions = {}, room = new ContextRoom(
 function stubTools(run: WorkspaceClient["run"], room = new ContextRoom(1_048_576)) {
   const workspace: WorkspaceClient = { prepare: async () => ({ sha: HEAD, mergeBase: BASE }), run };
   return workspaceTools({ workspace, target: TARGET, prepared: { sha: HEAD, mergeBase: BASE }, room });
+}
+
+// A room with `left` characters left.
+function roomOf(left: number): ContextRoom {
+  const room = new ContextRoom(1_048_576);
+  room.take(room.leftChars() - left);
+  return room;
 }
 
 // A tool's result as the model receives it.
@@ -226,6 +236,58 @@ describe("tools", () => {
     expect(grepped.split("\n").at(-1)).toBe(
       `[${3000 - matches.length} more matching lines not shown; narrow the pattern or the path]`,
     );
+  });
+});
+
+// An error far over a result's cap.
+const LONG_ERROR = "e".repeat(20_000);
+
+// A command's empty page, from where it was asked to start.
+function emptyPage(start: Page["start"]): Page {
+  return { start, lines: [], next: null, rest: 0, lineCount: 0, binaryBytes: null };
+}
+
+describe("result bounds", () => {
+  it.each<[string, WorkspaceClient["run"]]>([
+    [
+      "git's message",
+      async (_target, command) => ({ exitCode: 128, page: emptyPage(command.page.start), stderr: LONG_ERROR }),
+    ],
+    [
+      "a failed call",
+      async () => {
+        throw new Error(LONG_ERROR);
+      },
+    ],
+  ])("cuts a 20,000-character error (%s) to 12,000 characters and to the room left", async (_what, run) => {
+    for (const left of [1_000_000, 5000]) {
+      const room = roomOf(left);
+
+      const result = await call(stubTools(run, room), "read_file", { path: "src/rates.ts" });
+
+      expect(result.length).toBeLessThanOrEqual(Math.min(TOOL_RESULT_CHARS, left));
+      expect(result.startsWith("error: eeee")).toBe(true);
+      expect(room.leftChars()).toBe(left - result.length);
+    }
+  });
+
+  it("takes at most the room left or one notice for each of ten calls that fail together near the threshold", async () => {
+    const released = Promise.withResolvers<void>();
+    let started = 0;
+    const room = roomOf(MIN_RESULT_CHARS + 100);
+    const set = stubTools(async () => {
+      started += 1;
+      await released.promise;
+      throw new Error(LONG_ERROR);
+    }, room);
+
+    const results = Array.from({ length: 10 }, (_, index) => call(set, "read_file", { path: `f${index}.ts` }));
+    await until(() => started === 10, "the ten calls");
+    released.resolve();
+    const texts = await Promise.all(results);
+
+    expect(room.leftChars()).toBeGreaterThanOrEqual(-10 * NO_ROOM.length);
+    expect(texts.filter((text) => text === NO_ROOM)).toHaveLength(9);
   });
 });
 

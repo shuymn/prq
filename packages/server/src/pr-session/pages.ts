@@ -45,7 +45,7 @@ function isHighSurrogate(unit: number): boolean {
 }
 
 // The first `take` characters of text, one fewer when that would split a surrogate pair (never fewer than one pair).
-function cutAt(text: string, take: number): string {
+export function cutAt(text: string, take: number): string {
   const end = take > 1 && isHighSurrogate(text.charCodeAt(take - 1)) ? take - 1 : take;
   return text.slice(0, end);
 }

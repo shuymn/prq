@@ -758,9 +758,9 @@ Pi's copyright notice.
   model's window, less the reserve, less the newest request the provider measured (its input and output tokens), less
   characters ÷ 3 of what was added after it (the tool results taken since). Before the first response, the whole
   request is estimated. The newest measurement already holds every earlier step, so a long turn is never charged twice
-  for what it read. Each tool result is cut to the room left, in the order results complete; when less room is left
-  than one result needs, the next model call gets `toolChoice: "none"` (the tool definitions stay, so the cached prefix
-  does too) and the agent answers from what it has read. A turn has no step limit: it goes on while the model calls
+  for what it read. Each tool result, an `error: …` text included, is cut to the room left, in the order results
+  complete; when less room is left than one result needs, the next model call gets `toolChoice: "none"` (the tool
+  definitions stay, so the cached prefix does too) and the agent answers from what it has read. A turn has no step limit: it goes on while the model calls
   tools (see [Billing limits](#billing-limits)).
 - **Cut point.** Going back from the newest message, the system keeps the most recent part (Pi's default: 20,000
   tokens). A tool call and its result are never separated. If the cut falls inside a turn, the first half of that turn is

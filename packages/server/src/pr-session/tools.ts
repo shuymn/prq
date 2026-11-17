@@ -11,7 +11,7 @@ import {
 import * as v from "valibot";
 
 import { STREAM_TIMEOUT } from "./model.ts";
-import { fitPage, MIN_PAGE_CHARS, type Page, type PageRequest } from "./pages.ts";
+import { cutAt, fitPage, MIN_PAGE_CHARS, type Page, type PageRequest } from "./pages.ts";
 import { ContextRoom } from "./room.ts";
 import {
   type CommandResult,
@@ -37,6 +37,8 @@ export const MIN_RESULT_CHARS = MIN_PAGE_CHARS + NOTE_CHARS;
 // What diff says when the history did not reach the merge base.
 export const TWO_TIPS = "comparison of the two tips (base and head), not the pull request's merge-base diff";
 export const NO_ROOM = "[no room left in the context for this result; answer from what you have read]";
+// The end of a result cut by the final cut.
+const RESULT_CUT = "\n[cut: the rest of this result does not fit]";
 export const WORKSPACE_TIMED_OUT = `error: the workspace did not answer within ${WORKSPACE_CALL_MS / 60_000} minutes`;
 
 const Path = v.pipe(
@@ -157,35 +159,46 @@ function cutByRoom(byRoom: boolean): string {
 }
 
 // Runs a tool's command and shows its result within the result cap and the room the context has left: the page is
-// asked for at the room when the call starts, and cut again to the room when it completes (results are taken in the
-// order they complete).
+// asked for at the room when the call starts, cut again to the room when it completes, and the result, whatever
+// produced it, passes the final cut before it is taken. Nothing awaits between the call's end and the take, so results
+// are taken in the order they complete and each sees the room the earlier ones left.
 async function runPaged(context: ToolContext, signal: AbortSignal | undefined, paged: Paged): Promise<string> {
   const header = paged.header === undefined ? "" : `${paged.header}\n`;
   const capFor = (available: number) => Math.min(TOOL_RESULT_CHARS, available) - header.length - NOTE_CHARS;
   const startCap = capFor(context.room.leftChars());
-  if (startCap < MIN_PAGE_CHARS) {
-    context.room.take(NO_ROOM.length);
-    return NO_ROOM;
-  }
-  let text: string;
-  try {
-    const callSignal = signal ?? new AbortController().signal;
-    const command = { argv: paged.argv, page: { ...paged.request, capChars: startCap } };
-    const result = await raceAbort(() => context.workspace.run(context.target, command, callSignal), callSignal);
-    const numbered = paged.request.numbered === true;
-    const cap = Math.min(startCap, capFor(context.room.leftChars()));
-    if (cap < MIN_PAGE_CHARS) {
-      text = NO_ROOM;
-    } else {
-      const page = cap < startCap ? fitPage(result.page, cap, numbered) : result.page;
-      const byRoom = page !== result.page || startCap < capFor(TOOL_RESULT_CHARS);
-      text = header + paged.render(result, page, byRoom);
+  let text = NO_ROOM;
+  if (startCap >= MIN_PAGE_CHARS) {
+    try {
+      const callSignal = signal ?? new AbortController().signal;
+      const command = { argv: paged.argv, page: { ...paged.request, capChars: startCap } };
+      const result = await raceAbort(() => context.workspace.run(context.target, command, callSignal), callSignal);
+      const cap = Math.min(startCap, capFor(context.room.leftChars()));
+      if (cap >= MIN_PAGE_CHARS) {
+        const page = cap < startCap ? fitPage(result.page, cap, paged.request.numbered === true) : result.page;
+        const byRoom = page !== result.page || startCap < capFor(TOOL_RESULT_CHARS);
+        text = header + paged.render(result, page, byRoom);
+      }
+    } catch (error) {
+      text = callError(error);
     }
-  } catch (error) {
-    text = callError(error);
   }
+  text = fitResult(text, context.room.leftChars());
   context.room.take(text.length);
   return text;
+}
+
+// The last cut of every result, a page, git's error or a failed call alike: at most 12,000 characters and at most the
+// room left, or, with less room left than a result needs, the no-room notice. Each result thus takes at most the room
+// left or one notice.
+function fitResult(text: string, left: number): string {
+  const limit = Math.min(TOOL_RESULT_CHARS, left);
+  if (text.length <= limit) {
+    return text;
+  }
+  if (limit < MIN_RESULT_CHARS) {
+    return NO_ROOM;
+  }
+  return `${cutAt(text, limit - RESULT_CUT.length)}${RESULT_CUT}`;
 }
 
 function listFilesResult(path: string | undefined) {
