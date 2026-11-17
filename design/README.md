@@ -133,4 +133,5 @@ Components are at the top of the canvas and screens below them, one column per s
 [screens.md](screens.md).
 
 Pencil saves the document as JSON, so changes show in a diff. It also writes a top-level `fileToken`, its handle for
-share links and comments; the committed document leaves it out.
+share links and comments; the committed document leaves it out, and the pre-commit hook rejects a staged document
+that keeps it.

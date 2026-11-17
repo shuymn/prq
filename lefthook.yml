@@ -27,6 +27,17 @@ pre-commit:
     - name: ghalint
       glob: ".github/workflows/*.{yml,yaml}"
       run: mise exec -- ghalint run
+    # Blocks a staged design/prq.pen whose top-level object keeps the fileToken Pencil writes (design/README.md), or
+    # that is empty; a staged deletion has nothing to check.
+    - name: pen-file-token
+      glob: "design/prq.pen"
+      run: >-
+        git cat-file -e :design/prq.pen 2>/dev/null || exit 0;
+        git show :design/prq.pen | mise exec -- node -e
+        'const s = require("node:fs").readFileSync(0, "utf8");
+        const e = s.trim() === "" ? "the staged file is empty"
+        : Object.hasOwn(JSON.parse(s), "fileToken") ? "remove the top-level fileToken key before committing" : "";
+        if (e) { console.error(`design/prq.pen: ${e} (design/README.md)`); process.exit(1); }'
 
 commit-msg:
   jobs:
