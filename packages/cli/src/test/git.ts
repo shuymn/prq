@@ -51,6 +51,34 @@ export function gitEnv(root: string): Record<string, string> {
 // Options that would point a command at another repository than its -C directory.
 const ELSEWHERE = /^(?:-C|--git-dir(?:=.*)?|--work-tree(?:=.*)?|--namespace(?:=.*)?)$/;
 
+// git's options before the subcommand that take the next argument as their value.
+const GLOBAL_WITH_VALUE = new Set(["-c", "--config-env", "--attr-source"]);
+
+// The subcommand: the first argument after git's own options.
+function subcommand(args: readonly string[]): string | undefined {
+  let index = 0;
+  while (args[index]?.startsWith("-") === true) {
+    index += GLOBAL_WITH_VALUE.has(args[index] ?? "") ? 2 : 1;
+  }
+  return args[index];
+}
+
+// What in args may name a path: the value of every --option=value, and every other argument that looks like a path
+// (absolute, a file URL, holding a /, . or ..). That covers an option's path given as the next argument (--file <path>)
+// too: one that does not look like a path resolves inside the directory git runs in.
+function pathsIn(args: readonly string[]): string[] {
+  const paths: string[] = [];
+  for (const arg of args) {
+    const value = /^--[^=]+=(.*)$/s.exec(arg)?.[1];
+    if (value !== undefined) {
+      paths.push(value);
+    } else if (arg.includes("/") || arg === "." || arg === "..") {
+      paths.push(arg);
+    }
+  }
+  return paths.map((path) => path.replace(/^file:\/\//, ""));
+}
+
 export class FixtureGit {
   readonly root: string;
   readonly env: Record<string, string>;
@@ -86,19 +114,20 @@ export class FixtureGit {
     return fixture;
   }
 
-  // git -C dir args. dir, and every argument that is an absolute path or a file URL, must resolve inside the root; no
-  // option may name another repository, and no config write may be global, system or of user.*. No hook runs.
+  // git -C dir args, checked before git runs: dir, and every path in args (pathsIn) resolved against dir, must be
+  // inside the root; no option may name another repository; no config write may be global, system or of user.*. Not a
+  // parser of git's arguments: a guard against a test's mistake, with the canary (canary.ts) behind it. No hook runs.
   async git(dir: string, ...args: string[]): Promise<string> {
-    await this.#assertInside(dir, await realpath(dir));
-    for (const arg of args) {
-      if (ELSEWHERE.test(arg)) {
-        throw new Error(`a fixture git command may not pass ${arg}`);
-      }
-      if (arg.startsWith("/") || arg.startsWith("file://")) {
-        await this.#assertInside(arg, resolve(arg.replace(/^file:\/\//, "")));
-      }
+    const cwd = await realpath(dir);
+    await this.#assertInside(dir, cwd);
+    const elsewhere = args.find((arg) => ELSEWHERE.test(arg));
+    if (elsewhere !== undefined) {
+      throw new Error(`a fixture git command may not pass ${elsewhere}`);
     }
-    if (args[0] === "config" && args.some((arg) => /^(?:--global|--system|user\..*)$/i.test(arg))) {
+    for (const path of pathsIn(args)) {
+      await this.#assertInside(path, resolve(cwd, path));
+    }
+    if (subcommand(args) === "config" && args.some((arg) => /^(?:--global|--system|user\..*)$/i.test(arg))) {
       throw new Error(`a fixture may not run git ${args.join(" ")}`);
     }
     const { stdout } = await run("git", ["-C", dir, "-c", `core.hooksPath=${this.#noHooks}`, ...args], {
