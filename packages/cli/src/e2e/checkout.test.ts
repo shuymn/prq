@@ -483,21 +483,27 @@ describe("prq checkout", () => {
     expect(await repo.clone.worktrees()).toEqual(registrations);
   });
 
-  it("ended by a signal while git runs: stops git and the filters git runs, then ends by that signal", async () => {
-    const repo = await makeRepo(stack.dir(), pr);
-    const { files, pids } = await slowFilter(repo);
-    const head = await repo.head("h1", files);
-    await present("laptop");
-    await push(stack.worker(), pr, head, repo.base);
-    await claim("laptop");
+  it.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
+    "ended by %s while git runs: passes it on to git's group as it came, kills what ignores it after the grace, then ends by it",
+    async (signal) => {
+      const repo = await makeRepo(stack.dir(), pr);
+      const { files, pids, signals } = await slowFilter(repo, { stubborn: true });
+      const head = await repo.head("h1", files);
+      await present("laptop");
+      await push(stack.worker(), pr, head, repo.base);
+      await claim("laptop");
 
-    const running = stack.start(["checkout", "--agent-id", "laptop"], repo.env);
-    await vi.waitFor(async () => expect((await readFile(pids, "utf8").catch(() => "")).split("\n")).toHaveLength(3), {
-      timeout: 20_000,
-      interval: 50,
-    });
-    const exit = await running.kill("SIGTERM");
-    expect(exit.signal).toBe("SIGTERM");
-    await vi.waitFor(async () => expect(await liveProcesses(pids)).toEqual([]), { timeout: 3_000 });
-  }, 60_000);
+      const running = stack.start(["checkout", "--agent-id", "laptop"], repo.env);
+      await vi.waitFor(async () => expect(await liveProcesses(pids)).toHaveLength(2), {
+        timeout: 20_000,
+        interval: 50,
+      });
+
+      const exit = await running.kill(signal);
+      expect(exit).toMatchObject({ code: null, signal, stdout: "" });
+      expect(await readFile(signals, "utf8")).toBe(`${signal.slice("SIG".length)}\n`);
+      await vi.waitFor(async () => expect(await liveProcesses(pids)).toEqual([]), { timeout: 1_000 });
+    },
+    60_000,
+  );
 });

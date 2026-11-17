@@ -11,11 +11,38 @@ export const GIT_QUICK_MS = 60_000;
 // How long git has to exit after SIGTERM (it removes its lock files then) before it is killed.
 const KILL_GRACE_MS = 5_000;
 
-// The process groups of the git calls running. Each git runs in a group of its own, with the programs it starts (a
-// filter such as Git LFS's, a credential helper, ssh), so stopping the group stops them all; a signal to prq does not
-// reach a group of its own, so prq passes SIGINT, SIGTERM and SIGHUP on to the groups, then ends by the signal.
-const groups = new Set<number>();
-let forwarding = false;
+// The git calls running, each in a process group of its own with the programs it starts (a filter such as Git LFS's, a
+// credential helper, ssh), so stopping the group stops them all. A signal to prq does not reach a group of its own, so
+// prq passes SIGINT, SIGTERM and SIGHUP on to each group as they came, stops each as a timeout does (stopGroup), and
+// then ends by the signal. Until then no git call settles and none starts, so the command neither goes on nor prints.
+const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+const running = new Set<{ stop(signal: NodeJS.Signals): Promise<void> }>();
+const listeners = new Map(SIGNALS.map((signal) => [signal, () => end(signal)]));
+let listening = false;
+let ending: NodeJS.Signals | null = null;
+
+function listen(): void {
+  if (!listening) {
+    listening = true;
+    for (const [signal, listener] of listeners) {
+      process.on(signal, listener);
+    }
+  }
+}
+
+function end(signal: NodeJS.Signals): void {
+  if (ending !== null) {
+    return;
+  }
+  ending = signal;
+  void Promise.all([...running].map(async (git) => git.stop(signal))).then(() => {
+    // With the listeners gone, this ends prq as the signal would have.
+    for (const [name, listener] of listeners) {
+      process.off(name, listener);
+    }
+    process.kill(process.pid, signal);
+  });
+}
 
 function signalGroup(pid: number, signal: NodeJS.Signals): void {
   try {
@@ -25,20 +52,15 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
   }
 }
 
-function forwardSignals(): void {
-  if (forwarding) {
-    return;
-  }
-  forwarding = true;
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    process.once(signal, () => {
-      for (const pid of groups) {
-        signalGroup(pid, "SIGTERM");
-      }
-      // The listener is gone, so this ends prq as the signal would have.
-      process.kill(process.pid, signal);
-    });
-  }
+// Stops a git's group: signal to the group, which then has KILL_GRACE_MS to end and close git's output, then SIGKILL to
+// what is left of it (a program that ignored the signal, or outlived git); settles once git itself has exited.
+async function stopGroup(pid: number, signal: NodeJS.Signals, closed: Promise<void>, exited: Promise<void>) {
+  signalGroup(pid, signal);
+  let grace: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([closed, new Promise((resolve) => (grace = setTimeout(resolve, KILL_GRACE_MS)))]);
+  clearTimeout(grace);
+  signalGroup(pid, "SIGKILL");
+  await exited;
 }
 
 export type GitResult = { code: number; stdout: string; stderr: string };
@@ -105,16 +127,15 @@ export class Git {
   // git -C dir args: its exit code and output. A git that cannot start, or does not end within timeoutMs, ends the
   // command; one that does not end is stopped with every program it started.
   run(dir: string, args: readonly string[], timeoutMs: number): Promise<GitResult> {
-    forwardSignals();
+    if (ending !== null) {
+      return new Promise(() => {});
+    }
+    listen();
     const child = spawn(this.#binary, ["-C", dir, "-c", `core.hooksPath=${this.#hooks}`, ...args], {
       env: this.#env,
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
     });
-    const { pid } = child;
-    if (pid !== undefined) {
-      groups.add(pid);
-    }
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
@@ -124,38 +145,42 @@ export class Git {
       stderr += chunk;
     });
     const what = args.slice(0, 2).join(" ");
+    const settled = (event: "exit" | "close") =>
+      new Promise<void>((resolve) => {
+        child.once(event, () => resolve()).once("error", () => resolve());
+      });
+    const [exited, closed] = [settled("exit"), settled("close")];
     return new Promise((resolve, reject) => {
-      let timedOut = false;
-      let kill: ReturnType<typeof setTimeout> | undefined;
+      let stopping: Promise<void> | null = null;
+      const call = {
+        stop: async (signal: NodeJS.Signals) => {
+          const { pid } = child;
+          stopping ??= pid === undefined ? exited : stopGroup(pid, signal, closed, exited);
+          return stopping;
+        },
+      };
+      running.add(call);
       const timer = setTimeout(() => {
-        timedOut = true;
-        if (pid !== undefined) {
-          signalGroup(pid, "SIGTERM");
-          kill = setTimeout(() => signalGroup(pid, "SIGKILL"), KILL_GRACE_MS);
-        }
-      }, timeoutMs);
-      const done = () => {
-        clearTimeout(timer);
-        clearTimeout(kill);
-        if (pid !== undefined) {
-          groups.delete(pid);
-          // What of a stopped git's group outlived it and closed its output.
-          if (timedOut) {
-            signalGroup(pid, "SIGKILL");
+        void call.stop("SIGTERM").then(() => {
+          running.delete(call);
+          if (ending === null) {
+            reject(new GitTimeout(what, timeoutMs));
           }
+        });
+      }, timeoutMs);
+      // A git stopped, by its timeout or a signal to prq (which stops every git running), settles as that stop does.
+      const finish = (settle: () => void) => {
+        if (stopping === null) {
+          clearTimeout(timer);
+          running.delete(call);
+          settle();
         }
       };
       child.on("error", (error) => {
-        done();
-        reject(new CliError(EXIT.error, `git could not run: ${error.message}`));
+        finish(() => reject(new CliError(EXIT.error, `git could not run: ${error.message}`)));
       });
       child.on("close", (code) => {
-        done();
-        if (timedOut) {
-          reject(new GitTimeout(what, timeoutMs));
-        } else {
-          resolve({ code: code ?? 1, stdout, stderr });
-        }
+        finish(() => resolve({ code: code ?? 1, stdout, stderr }));
       });
     });
   }

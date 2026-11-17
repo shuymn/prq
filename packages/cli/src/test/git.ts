@@ -413,16 +413,36 @@ export async function makeRepo(root: string, pr: PrRef): Promise<Repo> {
 }
 
 // A smudge filter that does not end in time, as a stalled Git LFS download would be: a shell waiting on a sleep it
-// started, each writing its pid to pids. Configured in the clone as the required filter "slow"; files, committed, make a
-// checkout run it.
-export async function slowFilter(repo: Repo): Promise<{ files: Record<string, string>; pids: string }> {
+// started, each writing its pid to pids. A stubborn one ignores SIGINT, SIGTERM and SIGHUP, its sleep too, so only
+// SIGKILL ends them, and the shell writes the name of each of those signals it gets to signals. Both keep git's stderr
+// open, as a filter's output is, unless quiet: then git's output closes as soon as git exits. Configured in the clone
+// as the required filter "slow"; files, committed, make a checkout run it.
+export async function slowFilter(
+  repo: Repo,
+  { stubborn = false, quiet = false } = {},
+): Promise<{ files: Record<string, string>; pids: string; signals: string }> {
   const pids = join(repo.fixture.root, "filter-pids");
+  const signals = join(repo.fixture.root, "filter-signals");
   const filter = join(repo.fixture.root, "slow-filter");
-  await writeFile(filter, `#!/bin/sh\necho $$ >> '${pids}'\nsleep 20 &\necho $! >> '${pids}'\nwait $!\ncat\n`);
+  const names = ["INT", "TERM", "HUP"];
+  const script = [
+    "#!/bin/sh",
+    ...(stubborn ? [`trap '' ${names.join(" ")}`] : []),
+    ...(quiet ? ["exec 2>/dev/null"] : []),
+    `echo $$ >> '${pids}'`,
+    "sleep 20 &",
+    `echo $! >> '${pids}'`,
+    ...(stubborn ? names.map((name) => `trap 'echo ${name} >> "${signals}"' ${name}`) : []),
+    // A signal the shell traps ends a wait early.
+    "while kill -0 $! 2>/dev/null; do wait $!; done",
+    "cat",
+    "",
+  ];
+  await writeFile(filter, script.join("\n"));
   await chmod(filter, 0o755);
   await repo.clone.configSet("filter.slow.smudge", filter);
   await repo.clone.configSet("filter.slow.required", "true");
-  return { files: { ".gitattributes": "large.bin filter=slow\n", "large.bin": "pointer\n" }, pids };
+  return { files: { ".gitattributes": "large.bin filter=slow\n", "large.bin": "pointer\n" }, pids, signals };
 }
 
 // The processes of a pids file that are still running.

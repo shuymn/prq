@@ -2,8 +2,8 @@
 // Real git against fixture repositories (src/test/git.ts), the git under test given the fixtures' environment; a slow
 // or a failing git is a script in git's place.
 
-import { execFile } from "node:child_process";
-import { chmod, lstat, mkdir, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { chmod, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -163,6 +163,60 @@ describe("addWorktree", () => {
     expect(await exists(join(dir, "job"))).toBe(true);
     expect(await clone()).toEqual(before);
   });
+});
+
+describe("a signal to prq while a worktree add runs", () => {
+  it.each([
+    ["SIGINT", "keeps git's output open", false],
+    ["SIGTERM", "keeps git's output open", false],
+    ["SIGHUP", "keeps git's output open", false],
+    ["SIGTERM", "closes its end of git's output", true],
+  ] as const)(
+    "under Node, %s goes on to git's group as it came; a filter that ignores it and %s is killed, and then prq ends by it with the git call unsettled",
+    async (signal, _output, quiet) => {
+      const { files, pids, signals } = await slowFilter(repo, { stubborn: true, quiet });
+      const head = await repo.head("filtered", files);
+      await repo.clone.fetchPull(pr.number);
+      await mkdir(join(dir, "job"));
+      const driver = join(dir, "driver.ts");
+      await writeFile(
+        driver,
+        [
+          `import { Git, GIT_LONG_MS } from ${source("./git.ts")};`,
+          "const [hooks, clone, path, sha] = process.argv.slice(2);",
+          "const git = await Git.create(hooks, { env: process.env });",
+          "const add = git.run(clone, ['worktree', 'add', '--detach', path, sha], GIT_LONG_MS);",
+          // What the call settled with, were it to settle.
+          "console.log(JSON.stringify(await add.catch((error) => error.message)));",
+          "",
+        ].join("\n"),
+      );
+      const args = [driver, join(dir, "hooks"), repo.clone.path, join(dir, "job", "worktree"), head];
+      const child = spawn(process.execPath, args, {
+        cwd: dir,
+        env: repo.fixture.env,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      let stdout = "";
+      child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+        stdout += chunk;
+      });
+      const exited = new Promise<NodeJS.Signals | null>((resolve) => {
+        child.on("close", (_, killedBy) => resolve(killedBy));
+      });
+      await vi.waitFor(async () => expect(await liveProcesses(pids)).toHaveLength(2), {
+        timeout: 20_000,
+        interval: 50,
+      });
+
+      child.kill(signal);
+      expect(await exited).toBe(signal);
+      expect(stdout).toBe("");
+      expect(await readFile(signals, "utf8")).toBe(`${signal.slice("SIG".length)}\n`);
+      await vi.waitFor(async () => expect(await liveProcesses(pids)).toEqual([]), { timeout: 1_000 });
+    },
+    60_000,
+  );
 });
 
 describe("removeWorktree", () => {

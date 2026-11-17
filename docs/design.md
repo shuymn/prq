@@ -421,8 +421,9 @@ UI, webhook and CLI input all enter through PrSession.
     own with the programs it starts (a filter such as Git LFS's smudge, a credential helper, ssh). A git that does not
     end in time gets SIGTERM to its group, then SIGKILL 5 s later, and the command ends with exit 1. A worktree add that
     failed or did not finish is removed by its exact path, with whatever it left in the directory. Since a signal to
-    `prq` does not reach a group of its own, `prq` passes SIGINT, SIGTERM and SIGHUP on to the running groups and then
-    ends by the signal; a SIGKILL to `prq` leaves its git running.
+    `prq` does not reach a group of its own, `prq` passes SIGINT, SIGTERM or SIGHUP on to each running group as it
+    came, stops the group as a timeout does (SIGKILL to what is left of it 5 s later), waits for git to exit, and then
+    ends by that signal, with nothing printed; a SIGKILL to `prq` leaves its git running.
 - **Cleanup**, by `reconcile` and by `checkout` before it adds a worktree, removes the job directories no record names.
   It lists `jobs/` and then reads every agent's record: a job directory is created only after the record that names it,
   so one listed first is never newer than its record. The records it reads must be those of the job directories it
