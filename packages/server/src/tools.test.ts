@@ -8,7 +8,6 @@ import {
   MIN_RESULT_CHARS,
   NO_ROOM,
   TOOL_RESULT_CHARS,
-  toolArgv,
   toolLoop,
   TURN_LOOP,
   TWO_TIPS,
@@ -151,7 +150,6 @@ describe("tools", () => {
     );
     expect(await call(set, "grep", { pattern: "absent" })).toBe("no matches");
     expect(await call(set, "grep", { pattern: "a(" })).toMatch(/^error: fatal: -e option, 'a\(': /);
-    expect(workspace.commands[1]?.argv).toEqual(toolArgv.grep(HEAD, "limit", "src/rates.ts", true));
     expect(workspace.commands[1]?.argv).toEqual([
       "grep",
       "-n",

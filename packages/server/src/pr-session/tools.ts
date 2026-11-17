@@ -76,7 +76,7 @@ const DiffInput = v.object({
 });
 
 // The git command each tool runs, as argv after `git`.
-export const toolArgv = {
+const toolArgv = {
   listFiles: (sha: string, path?: string) => ["ls-tree", "-r", "--name-only", "--end-of-options", sha, ...opt(path)],
   readFile: (sha: string, path: string) => ["show", "--end-of-options", `${sha}:${path}`],
   grep: (sha: string, pattern: string, path?: string, ignoreCase?: boolean) => [
