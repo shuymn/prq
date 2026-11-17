@@ -143,9 +143,34 @@ function events(worker: Worker, from: number, pattern: RegExp): string[] {
     .map((line) => line.replace(/\s+/g, " "));
 }
 
+// A field of a log line, as the Worker's log prints it (`name: 'value'` or `name: 1`).
+function field(line: string, name: string): string {
+  return new RegExp(`\\b${name}: '?([^',}\\s]*)`).exec(line)?.[1] ?? "";
+}
+
 // The message a compaction's start names as its cut, from its log line.
 function cutOf(line: string): string {
-  return /cutMessageId: '([^']*)'/.exec(line)?.[1] ?? "";
+  return field(line, "cutMessageId");
+}
+
+// Whether jobs started after a compaction ended, from the Worker's log lines from `from` on: the compaction's end is
+// the done event with the job, notes revision and cut of its start (`started`), and each job's start is its
+// prq.job.started event. Not when the end was not logged. The positions, -1 for one not logged.
+export function startedAfterCompaction(
+  lines: readonly string[],
+  from: number,
+  started: string,
+  jobIds: readonly string[],
+): { doneAt: number; startedAt: number[]; after: boolean } {
+  const same = (line: string) =>
+    ["jobId", "notesRev", "cutMessageId", "cutStep"].every((name) => field(line, name) === field(started, name));
+  const doneAt = lines.findIndex((line, index) => index >= from && line.includes("prq.compaction.done") && same(line));
+  const startedAt = jobIds.map((jobId) =>
+    lines.findIndex(
+      (line, index) => index >= from && line.includes("prq.job.started") && field(line, "jobId") === jobId,
+    ),
+  );
+  return { doneAt, startedAt, after: doneAt >= 0 && startedAt.every((index) => index > doneAt) };
 }
 
 function firstLine(text: string): string {
@@ -273,7 +298,7 @@ export async function checkCompaction(
       return false;
     }
     const decisionAnswer = `answer-${decided.jobId}`;
-    let trigger: { before: unknown[]; rev: number; from: number; id: string } | null = null;
+    let trigger: { before: unknown[]; rev: number; from: number; id: string; started: string } | null = null;
     for (let index = 0; index < MAX_QUESTIONS && trigger === null; index += 1) {
       const file = files[index % Math.max(files.length, 1)] ?? "README.md";
       const id = `code-${index + 1}`;
@@ -311,7 +336,7 @@ export async function checkCompaction(
         `  a compaction started ${at}; its cut (message ${cut + 1}) follows the decision (message ${decision + 1}) ` +
           `(get-messages ${hash(before)})`,
       );
-      trigger = { before, rev, from, id };
+      trigger = { before, rev, from, id, started };
     }
     if (trigger === null) {
       print(`step 1: NOT as expected: no compaction after ${MAX_QUESTIONS} code questions`);
@@ -319,7 +344,6 @@ export async function checkCompaction(
     }
 
     print("step 3: two questions asked while the summary runs");
-    const logFrom = worker.logs().length;
     await ask(worker, pr, "queued-1", "Which file of this pull request did you read last? Answer with its path only.");
     await ask(worker, pr, "queued-2", RECALL);
     const waiting = (await view(worker, pr)).jobs.filter(
@@ -374,19 +398,22 @@ export async function checkCompaction(
     const finalIds = idsOf(final);
     const order = [first, second].map((job) => (job === undefined ? -1 : finalIds.indexOf(`answer-${job.jobId}`)));
     const recall = second?.state === "done" ? textOf(final, `answer-${second.jobId}`) : "";
-    const logged = events(worker, logFrom, /prq\.(compaction\.(done|failed)|job\.started)/);
-    const doneAt = logged.findIndex((line) => line.includes("prq.compaction.done"));
-    const startedAt = [first, second].map((job) =>
-      job === undefined ? -1 : logged.findIndex((line) => line.includes("prq.job.started") && line.includes(job.jobId)),
+    const ordering = startedAfterCompaction(
+      worker.logs(),
+      trigger.from,
+      trigger.started,
+      [first, second].map((job) => job?.jobId ?? ""),
     );
     print(
       `  queued-1: ${first?.state ?? "none"}: ${first?.state === "done" ? firstLine(textOf(final, `answer-${first.jobId}`)) : ""}`,
     );
     print(`  queued-2: ${second?.state ?? "none"}: ${firstLine(recall)}`);
+    print(`  answers at messages ${order.map((index) => index + 1).join(" and ")}`);
     print(
-      `  answers at messages ${order.map((index) => index + 1).join(" and ")}; started after the compaction's end: ${startedAt.map((index) => index > doneAt).join(", ")}`,
+      `  the compaction's end: ${ordering.doneAt < 0 ? "NOT logged" : `log line ${ordering.doneAt}`}; the questions' ` +
+        `jobs started at log lines ${ordering.startedAt.join(" and ")}, after it: ${ordering.after ? "yes" : "NO"}`,
     );
-    for (const line of logged) {
+    for (const line of events(worker, trigger.from, /prq\.(compaction\.(done|failed)|job\.started)/)) {
       print(`  ${line}`);
     }
     results.queued =
@@ -396,7 +423,7 @@ export async function checkCompaction(
       order[1] !== undefined &&
       order[0] >= 0 &&
       order[0] < order[1] &&
-      startedAt.every((index) => index > doneAt) &&
+      ordering.after &&
       recall.toLowerCase().includes(NAME.toLowerCase());
     print(
       results.queued
