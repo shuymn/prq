@@ -36,9 +36,10 @@ const CONTAINER_ID = /^[0-9a-f]{64}$/;
 // GitHub's token formats, and the words of an Authorization header a token would come with.
 const SECRET_LIKE = /\bgh[opsur]_[A-Za-z0-9_]+|x-access-token|authorization|extraheader/i;
 
+// Questions only a tool call answers, whatever the repository and whatever the analysis already read.
 const QUESTIONS = [
-  "Look it up with the tools: which file defines the read_file tool, and what is the most characters one tool result may hold? Answer in one sentence with the path and the number.",
-  "Look it up with the tools again: which file defines the grep tool, and which git command does it run? Answer in one sentence.",
+  "Call the list_files tool now, even if you listed files before, and name three paths from its result. Answer in one sentence.",
+  "Call the read_file tool now on README.md (or, if there is none, on any file list_files shows) and quote its first line. Answer in one sentence.",
 ];
 
 const Pull = v.object({
