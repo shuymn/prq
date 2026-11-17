@@ -797,8 +797,8 @@ afterEach(() => {
 });
 
 // Each test stays well under the default timeout: CI is slower than a laptop.
-const BATCHES = 6;
-const RUNS_PER_BATCH = 80;
+const BATCHES = 12;
+const RUNS_PER_BATCH = 40;
 // The batches' seeds: every machine generates the same runs, so the shape check below is the same everywhere. A
 // failure prints its seed and path, which replay it.
 const SEED = 20_261_117;
