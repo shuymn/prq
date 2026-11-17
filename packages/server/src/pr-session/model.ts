@@ -31,27 +31,26 @@ class ProviderNoResponseError extends Error {
 
 // Bounds the wait for each request's response. The middleware makes the request itself, with a signal that also aborts
 // at the bound (the doStream it is handed takes no arguments, so it cannot carry one); once the response has arrived
-// the timer is cleared and the AI SDK's output bounds take over. At the bound it rejects at once, whether or not the
-// request honours the abort.
+// the timer is cleared and the AI SDK's output bounds take over. At the bound, or at the caller's abort, it rejects at
+// once, whether or not the request honours the abort; every ending clears the timer and the abort listener.
 const responseBound: LanguageModelMiddleware = {
   wrapStream: async ({ params, model }) => {
+    params.abortSignal?.throwIfAborted();
     const bound = new AbortController();
     const abortSignal =
       params.abortSignal === undefined ? bound.signal : AbortSignal.any([params.abortSignal, bound.signal]);
-    const request = Promise.resolve(model.doStream({ ...params, abortSignal }));
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        const error = new ProviderNoResponseError();
-        bound.abort(error);
-        reject(error);
-      }, RESPONSE_BOUND_MS);
+    const listening = new AbortController();
+    const aborted = new Promise<never>((_, reject) => {
+      abortSignal.addEventListener("abort", () => reject(abortSignal.reason), { once: true, signal: listening.signal });
     });
+    const timer = setTimeout(() => bound.abort(new ProviderNoResponseError()), RESPONSE_BOUND_MS);
+    const request = Promise.resolve(model.doStream({ ...params, abortSignal }));
     try {
-      return await Promise.race([request, timedOut]);
+      return await Promise.race([request, aborted]);
     } finally {
       clearTimeout(timer);
-      // A request left at the bound rejects when its abort lands, or never; nothing waits for it.
+      listening.abort();
+      // A request left at an abort rejects when the abort lands, or never; nothing waits for it.
       request.catch(() => undefined);
     }
   },

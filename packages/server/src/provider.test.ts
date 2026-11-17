@@ -3,7 +3,8 @@ import type { UIMessage } from "ai";
 import * as v from "valibot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { NO_RESPONSE, RESPONSE_BOUND_MS } from "./pr-session/model.ts";
+import { readModelConfig } from "./config.ts";
+import { createModel, NO_RESPONSE, RESPONSE_BOUND_MS } from "./pr-session/model.ts";
 import { captureLogs, events } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import { type CloudSession, cloudSession, textOf, untilState } from "./test/cloud.ts";
@@ -254,6 +255,44 @@ describe("no response", () => {
       // The next job was handed over: its request went out, and its answer is stored.
       await until(async () => (await stateOf(session, "q2")) === "done", "Q2 done");
       expect(provider.requests).toHaveLength(2);
+    },
+  );
+
+  it(
+    "ends a call at its caller's abort though the request ignores it, and leaves no timer behind",
+    { timeout: 10_000 },
+    async () => {
+      const config = readModelConfig({ ...MODEL_ENV });
+      if (config?.ok !== true) {
+        throw new Error("MODEL_ENV is not a valid configuration");
+      }
+      const provider = serveProvider();
+      provider.reply(noResponse({ ignoreAbort: true }));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const caller = new AbortController();
+      let ended: unknown = "pending";
+      createModel(config.config)
+        .doStream({
+          prompt: [{ role: "user", content: [{ type: "text", text: "Hello" }] }],
+          abortSignal: caller.signal,
+        })
+        .then(
+          () => {
+            ended = "answered";
+          },
+          (error: unknown) => {
+            ended = error;
+          },
+        );
+      await until(() => provider.requests.length === 1, "the request");
+      expect(vi.getTimerCount()).toBe(1);
+
+      const reason = new Error("the caller is gone");
+      caller.abort(reason);
+
+      await until(() => ended !== "pending", "the call's end");
+      expect(ended).toBe(reason);
+      expect(vi.getTimerCount()).toBe(0);
     },
   );
 

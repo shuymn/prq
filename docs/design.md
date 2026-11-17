@@ -883,7 +883,8 @@ Apart from these, bounds that keep a job from waiting forever (liveness, not spe
   after that, before the first chunk or between chunks. The job then fails with `the provider sent no response for
   120 s` or `the provider stopped sending output for 120 s`. The first bound is prq's (a middleware on the model, since
   the AI SDK's bounds start only at the response); the second is the AI SDK's. Each request is bounded on its own, a
-  retry included. A job's total time is not bounded.
+  retry included, and also ends at once when its caller aborts it, whether or not the request honours the abort. A
+  job's total time is not bounded.
 - A cloud job's run is started at most 3 times across restarts, and the SDK's own recovery is declined (see
   [Owner and jobs](#owner-and-jobs)). A compaction is retried once.
 
