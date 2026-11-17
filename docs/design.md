@@ -250,9 +250,33 @@ UI, webhook and CLI input all enter through PrSession.
     earlier head. A force-push sequence A, B, A, B within one second whose middle A is taken in last leaves A current,
     and a delivery lost inside a same-second chain (A, B, C with B lost) leaves A current, because C names a head the
     session never saw. A same-second push not linked to the current head leaves the head as it is.
-  - What heals them: the next push, a second or more later; and, once the Worker can call GitHub (#5), reconciling a
-    same-second tie against GitHub's current head. The limit is accepted because it takes several pushes within one
-    second, the head it leaves is the one shown with the pull request, and the next push corrects it.
+  - What heals them: the next push, a second or more later; and, with the GitHub App configured, head reconciliation
+    (below). The limit is accepted because it takes several pushes within one second, the head it leaves is the one
+    shown with the pull request, and the next push corrects it.
+- Head reconciliation keeps one invariant: in GitHub's order (whole seconds, and within one second the `before` links),
+  the head is never older than a push taken in, and an answer from GitHub's API becomes the head only when it is at
+  least as new as every push taken in.
+  - A push of the head's second that is kept out, or that moves the head to another head through `before`, is a tie
+    and marks the session with that second. A push of a later second clears the mark, since it is newer than every
+    state of the tied second, so the mark is always empty or the head's second.
+  - While the session is marked, `settle` reads the pull request once (its head and `updated_at`) with a token of the
+    App installation the deliveries name; one read is in flight at a time, and a settle never reads twice. The answer
+    is judged against the session as it is when the answer lands. If a push was taken in since the read was sent, the
+    answer is discarded and the mark waits for settle's retry wake. An answer older than the head (an earlier
+    `updated_at`, or the head's second with a head that a push of that second already taken in had left, unless that
+    second's `before` links return to it) is a failed try. Any other answer is adopted: a different head becomes
+    current as a push makes it (analyses folded, created or revived), and the head is dated by the answer's
+    `updated_at`, so a late push stamped in that second ties rather than counting as newer.
+  - A failed try (a lagging answer, a network error, a 5xx or 429, or no answer within 10 s) waits for settle's retry
+    wake; after 5 the mark is cleared and logged. Any other 4xx clears it, and the next push heals the head as before.
+    Edits that move `updated_at` are safe: an answer is one snapshot, and edits never move the head's time.
+  - Guaranteed: when a same-second tie's deliveries have all been taken in, the head becomes GitHub's, unless a push
+    is taken in after the read was sent; that read is discarded and the next one decides.
+  - Not guaranteed: `before` cannot order a same-second return (A, B, A, B), so a lagging answer inside one can be
+    adopted until the next push a second or more later. A delivery lost inside a same-second return reads the same
+    as a lagging answer: the head before the return can stay until the next push, or until the lost delivery is
+    redelivered from the App's recent deliveries, which completes the return for the next read. Without the App
+    configured, there is no reconciliation and the limits above stay as they are.
 - If an analysis job for the current head SHA already exists (waiting, claimed, running, done or failed), the system
   shall create no job and leave that job as it is; a push back to an already analyzed head (after a force-push, for
   example) shows that head's stored summary, and a failed one stays failed until the host retries it. A new delivery
@@ -836,14 +860,19 @@ Server:
   `PrDetails` allows, or without `X-GitHub-Delivery`) or ignored (another event, author or action; 200) reaches no
   PrSession. When the webhook secret or the host's ID is missing or malformed, the Worker shall refuse every delivery
   with 500; the Access check needs neither.
-- The GitHub App's private key is stored as PKCS#8. GitHub issues PKCS#1, which the WebCrypto-based path in workerd
-  cannot read; convert it once with `openssl pkcs8 -topk8` before storing it as a secret.
+- The GitHub App's ID and private key (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`) are secrets, both or neither. With
+  neither, the Worker makes no GitHub API call (no head reconciliation); with one, or a malformed one, it logs
+  `prq.config.invalid` naming the variable and makes none either. The private key is stored as PKCS#8: GitHub issues
+  PKCS#1, which the WebCrypto-based path in workerd cannot read, so convert it once with `openssl pkcs8 -topk8` before
+  storing it. `pnpm run check:github` in `packages/server` mints an installation token and reads a pull request with
+  it, printing neither the key nor the token.
 
 ### Observability
 
-- Workers observability (logs) is enabled. Webhook receipt, job state changes, LLM and tool errors, and compactions are
-  logged with the PR key and `jobId`. A claim that reaches 60 minutes is logged (`prq.job.stalled`), and so is a
-  ledger entry the Hub refuses as older than the one it has (`prq.ledger.stale_rev`).
+- Workers observability (logs) is enabled. Webhook receipt, job state changes, head reconciliation's reads
+  (`prq.head.*`), LLM and tool errors, and compactions are logged with the PR key and `jobId`. A claim that reaches 60
+  minutes is logged (`prq.job.stalled`), and so is a ledger entry the Hub refuses as older than the one it has
+  (`prq.ledger.stale_rev`).
 - When a cloud job's run ends (`done` or `failed`), `prq.job.usage` logs the PR key, `jobId`, kind, run, outcome, the
   model, the steps (model calls), the input, output and cached input tokens, the time from the run's first start to its
   end (`wallMs`, on the session's clock) and its starts. Each finished step is added to the run's row as it ends, so
@@ -930,6 +959,7 @@ prq/
 │  │   │   │   ├─ index.ts       the class: intake, jobs, the wake and the outbox, its chat hooks
 │  │   │   │   ├─ history.ts     append-only history: refused client frames, insert-only writes
 │  │   │   │   ├─ jobs.ts        job rows and their guarded transitions, the webhook inbox and GitHub's order
+│  │   │   │   ├─ reconcile.ts   head reconciliation's marks and how a read of GitHub's head is judged
 │  │   │   │   ├─ context.ts     the conversation's pages for /cli/context
 │  │   │   │   ├─ cloud.ts       the cloud agent seam and its failure reasons
 │  │   │   │   ├─ turn.ts        a cloud turn: its binding, how it ended, what its commit stores
@@ -937,11 +967,12 @@ prq/
 │  │   │   │   ├─ context-budget.ts  the context parameters scaled to the model's window
 │  │   │   │   ├─ projection.ts  what a job's model reads of the conversation
 │  │   │   │   └─ prompt.ts      the system prompt and an analysis's task
-│  │   │   ├─ github/            App token; attaching the token to outbound git traffic
+│  │   │   ├─ github.ts          the GitHub App: installation tokens and pull request reads, each bounded
 │  │   │   ├─ instructions/      prompts, skill registry, activate_skill / read_skill_resource
 │  │   │   ├─ workspace.ts       Sandbox
 │  │   │   └─ client/            React UI (Vite)
-│  │   ├─ scripts/           a manual check of a model provider (`pnpm run check:provider`), not part of the Worker
+│  │   ├─ scripts/           manual checks of a model provider and of the GitHub App (`pnpm run check:provider`,
+│  │   │                     `check:github`), not part of the Worker
 │  │   ├─ wrangler.jsonc
 │  │   ├─ vite.config.ts
 │  │   └─ vitest.config.ts
@@ -991,7 +1022,8 @@ Only a deployment can show these.
   takes from GitHub's documentation is checked on a deployment too: that `pull_request.updated_at` advances with each
   push and `synchronize` carries `before`, that a redelivery repeats `X-GitHub-Delivery`, and the 10 s limit. And
   fetching by SHA a commit that a force-push left behind `pull/<n>/head`, as `prq checkout` does for an answer's
-  workspace: when GitHub refuses it, `checkout` exits 1 naming the commit.
+  workspace: when GitHub refuses it, `checkout` exits 1 naming the commit. Head reconciliation against GitHub's API
+  (an answer's `updated_at` and how far a replica lags) is tested only with a served API.
 - **Sandbox in production.** Start and rebuild times, and checkout time of a large repository. The local Docker
   numbers are not production values.
 - **Bundling by wrangler.** That the PKCS#8-only crypto path of `@octokit/auth-app` is the one wrangler bundles was
