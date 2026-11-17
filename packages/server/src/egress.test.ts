@@ -117,6 +117,44 @@ describe("allowed: a git fetch from github.com", () => {
   });
 });
 
+describe("URL forms the parser normalizes", () => {
+  it.for([
+    {
+      name: "a host in mixed case on the default port",
+      url: "https://GitHub.COM:443/octo/demo.git/info/refs?service=git-upload-pack",
+    },
+    { name: "dot segments", url: "https://github.com/octo/x/../demo.git/info/refs?service=git-upload-pack" },
+  ])("passes $name as the URL it stands for, and fetches only that", async ({ url }) => {
+    captureLogs();
+    const res = await send(url);
+
+    expect(res.status).toBe(200);
+    expect(upstream.map((request) => request.url)).toEqual([
+      "https://github.com/octo/demo.git/info/refs?service=git-upload-pack",
+    ]);
+  });
+
+  // The credentials do not reach the egress (the request it is handed has none); were they there, it would refuse
+  // the request (isGitFetch).
+  it("passes a URL with credentials in it as the URL without them, with only the installation token", async () => {
+    captureLogs();
+    const url = new URL("https://github.com/octo/demo.git/info/refs?service=git-upload-pack");
+    url.username = "container";
+    const res = await send(url.href);
+
+    expect(res.status).toBe(200);
+    expect(upstream).toEqual([
+      {
+        url: "https://github.com/octo/demo.git/info/refs?service=git-upload-pack",
+        method: "GET",
+        authorization: BASIC,
+        redirect: "manual",
+        body: "",
+      },
+    ]);
+  });
+});
+
 describe("denied: everything else", () => {
   it.for([
     { name: "another host", url: "https://example.com/octo/demo.git/info/refs?service=git-upload-pack" },
@@ -128,6 +166,10 @@ describe("denied: everything else", () => {
     { name: "a push's ref advertisement", url: "https://github.com/octo/demo.git/info/refs?service=git-receive-pack" },
     { name: "another query", url: "https://github.com/octo/demo.git/info/refs?service=git-upload-pack&x=1" },
     { name: "a nested path", url: "https://github.com/octo/demo/sub/info/refs?service=git-upload-pack" },
+    { name: "port 80 over https", url: "https://github.com:80/octo/demo.git/info/refs?service=git-upload-pack" },
+    { name: "an encoded slash", url: "https://github.com/octo%2Fdemo.git/info/refs?service=git-upload-pack" },
+    { name: "an encoded segment", url: "https://github.com/octo/demo.git/info/%72efs?service=git-upload-pack" },
+    { name: "a trailing slash", url: "https://github.com/octo/demo.git/info/refs/?service=git-upload-pack" },
   ])("refuses $name with 403, reaching no upstream", async ({ url }) => {
     const logs = captureLogs();
     const res = await send(url);
