@@ -866,8 +866,9 @@ prq/
 │          ├─ answer.ts          the answer prq submit sends: answer.md, checked before any request
 │          ├─ commands/          one module per command
 │          ├─ e2e/               the compiled binary against the real Worker
-│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process
+│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`)
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
+├─ .claude/skills/verify-prq/  running the local stack with scripted jobs for a local agent, and reading its request log
 ├─ docs/                   design.md, decisions.md, ui.md, spikes.md
 ├─ design/                 design tokens, component inventory, screens ↔ Pencil frames, the Pencil document (the UI design's source for code)
 ├─ pnpm-workspace.yaml     catalog
