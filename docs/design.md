@@ -185,15 +185,17 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   without the code it is about. A question asked before any push has no workspace commit and runs without one.
 - When the SDK's turn has ended, the session commits it inside the history write queue, against the job's state and
   turn ID: a commit whose job has moved on (a restart, a retry) appends nothing and is logged as `prq.turn.stale`. A
-  turn whose final finish reason is `stop` appends its result as `<kind>-<jobId>`, without reasoning and with only the
-  tool parts whose result is settled, its metadata naming the cloud model and the run's usage; the job then becomes
-  `done` in one statement that also clears a failure it had and advances `rev`. Any other ending (an error, a cancel,
-  the output limit, the content filter, any other finish reason) fails the job with the reason, and text already
-  produced is appended as `<kind>-<jobId>-r<run>-incomplete`, marked incomplete with the reason, which leaves
-  `<kind>-<jobId>` for a later success.
+  turn whose final finish reason is `stop` and whose result holds answer text that is not blank appends that result as
+  `<kind>-<jobId>`, without reasoning and with only the tool parts whose result is settled, its metadata naming the
+  cloud model and the run's usage; the job then becomes `done` in one statement that also clears a failure it had and
+  advances `rev`. Any other ending (an error, a cancel, the output limit, the content filter, any other finish reason,
+  or a `stop` with no answer text, "the model returned no answer text") fails the job with the reason, so the host can
+  retry it, and text already produced is appended as `<kind>-<jobId>-r<run>-incomplete`, marked incomplete with the
+  reason, which leaves `<kind>-<jobId>` for a later success.
 - After a reset, `settle` takes each running cloud job whose turn is no longer live and, in one statement guarded by
-  that turn, marks it `done` when its result is stored (the commit stopped between its append and its statement),
-  starts it again under a new turn while its run has had fewer than 3 starts, or fails it "the turn was interrupted 3
+  that turn, marks it `done` when its result is stored, fails it with the stored reason when its run's incomplete text
+  is stored (either way the commit stopped between its append and its statement, and the run had ended), starts it
+  again under a new turn while its run has had fewer than 3 starts, or fails it "the turn was interrupted 3
   times by restarts; retry to run it again". Two restarts cover a deploy or an eviction, and a turn that brings the
   object down every time cannot restart forever. A commit that failed is taken up the same way at the next `settle`.
   The SDK's own durable recovery cannot be turned off and is declined in `onChatRecovery`: its retry needs the turn's
