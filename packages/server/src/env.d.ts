@@ -28,6 +28,11 @@ declare global {
       MODEL_ID?: string;
       // The model's context window in tokens, at least 16,384.
       MODEL_CONTEXT_TOKENS?: string;
+      // The GitHub App's API access, both or none (none: no head reconciliation).
+      // The App's numeric ID.
+      GITHUB_APP_ID?: string;
+      // The App's private key, PKCS#8 PEM.
+      GITHUB_APP_PRIVATE_KEY?: string;
     }
   }
 

@@ -88,11 +88,50 @@ export const readWebhookConfig = configReader(webhookSchema);
 
 const readModelGroup = configReader(modelSchema);
 
-// What the cloud agent's model needs. Unlike the other groups it may be left out: with none of its variables set, or
-// all four empty (as a local runtime's overrides leave them), the cloud agent is not configured (null); with some set,
-// or some empty and others unset, or any malformed, it is misconfigured.
+// Whether a group that may be left out is: none of its variables set, or all of them empty (as a local runtime's
+// overrides leave them).
+function absent(env: object, names: readonly string[]): boolean {
+  const values = names.map((name) => Reflect.get(env, name));
+  return values.every((value) => value === undefined) || values.every((value) => value === "");
+}
+
+// What the cloud agent's model needs. Unlike the first groups it may be left out: then the cloud agent is not
+// configured (null); with some set, or some empty and others unset, or any malformed, it is misconfigured.
 export function readModelConfig(env: object): ConfigResult<ModelConfig> | null {
-  const values = MODEL_VARS.map((name) => Reflect.get(env, name));
-  const absent = values.every((value) => value === undefined) || values.every((value) => value === "");
-  return absent ? null : readModelGroup(env);
+  return absent(env, MODEL_VARS) ? null : readModelGroup(env);
+}
+
+// A private key in PEM as WebCrypto imports it: PKCS#8. GitHub issues PKCS#1 (BEGIN RSA PRIVATE KEY), which the
+// Worker's runtime cannot read.
+function isPkcs8Pem(value: string): boolean {
+  return value.includes("-----BEGIN PRIVATE KEY-----") && value.includes("-----END PRIVATE KEY-----");
+}
+
+const githubAppSchema = v.object(
+  {
+    // The GitHub App's numeric ID.
+    GITHUB_APP_ID: v.pipe(
+      v.string("is not a string"),
+      v.regex(/^[1-9][0-9]*$/, "is not a numeric GitHub App ID"),
+      v.transform(Number),
+    ),
+    // The App's private key in PKCS#8 PEM (docs/design.md, Authentication boundary).
+    GITHUB_APP_PRIVATE_KEY: v.pipe(
+      v.string("is not a string"),
+      v.check(isPkcs8Pem, "is not a PKCS#8 private key (convert GitHub's key with openssl pkcs8 -topk8)"),
+    ),
+  },
+  "is missing",
+);
+
+const GITHUB_APP_VARS = ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"] as const;
+
+export type GithubAppConfig = v.InferOutput<typeof githubAppSchema>;
+
+const readGithubAppGroup = configReader(githubAppSchema);
+
+// What the GitHub App's API calls need (installation tokens, head reconciliation). It may be left out as the model's
+// group may: not configured (null), or misconfigured when only partly set or malformed.
+export function readGithubAppConfig(env: object): ConfigResult<GithubAppConfig> | null {
+  return absent(env, GITHUB_APP_VARS) ? null : readGithubAppGroup(env);
 }

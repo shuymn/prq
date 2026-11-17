@@ -71,6 +71,9 @@ export type ModelSettings = Record<"MODEL_BASE_URL" | "MODEL_API_KEY" | "MODEL_I
 // Empty settings override any the harness loaded from .dev.vars: the Worker reads them as no model configured.
 const NO_MODEL: ModelSettings = { MODEL_BASE_URL: "", MODEL_API_KEY: "", MODEL_ID: "", MODEL_CONTEXT_TOKENS: "" };
 
+// Likewise no GitHub App, so no test reaches GitHub through credentials in .dev.vars.
+const NO_GITHUB_APP = { GITHUB_APP_ID: "", GITHUB_APP_PRIVATE_KEY: "" };
+
 export async function startWorker({ model = NO_MODEL }: { model?: ModelSettings } = {}): Promise<Worker> {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const jwk: JWK = { ...(await exportJWK(publicKey)), kid: KEY_ID, alg: "RS256", use: "sig" };
@@ -100,6 +103,7 @@ export async function startWorker({ model = NO_MODEL }: { model?: ModelSettings 
           ACCESS_AUD: AUDIENCE,
           WEBHOOK_SECRET,
           HOST_GITHUB_ID: String(HOST_ID),
+          ...NO_GITHUB_APP,
           ...model,
         },
       },

@@ -1,9 +1,10 @@
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { readModelConfig } from "./config.ts";
+import { readGithubAppConfig, readModelConfig } from "./config.ts";
 import app from "./index.ts";
 import { accessToken, captureLogs, envFor, freshTeamDomain, request, runKey, serveKeys } from "./test/access.ts";
+import { appEnv } from "./test/github.ts";
 import { MODEL_ENV, TEST_KEY } from "./test/provider.ts";
 
 afterEach(() => {
@@ -150,5 +151,45 @@ describe("the model group", () => {
     const result = readModelConfig(vars);
     expect(result).toEqual({ ok: false, issues });
     expect(JSON.stringify(result)).not.toContain(TEST_KEY);
+  });
+});
+
+describe("the GitHub App group", () => {
+  it("is not configured while neither variable is set, or both are empty", () => {
+    // The tests' runtime sets both empty (vitest.config.ts), so a .dev.vars holding a real App gives no test GitHub.
+    expect([env.GITHUB_APP_ID, env.GITHUB_APP_PRIVATE_KEY]).toEqual(["", ""]);
+    expect(readGithubAppConfig(env)).toBeNull();
+    expect(readGithubAppConfig({})).toBeNull();
+  });
+
+  it("accepts a numeric App ID and a PKCS#8 key", () => {
+    const vars = appEnv();
+    expect(readGithubAppConfig(vars)).toEqual({
+      ok: true,
+      config: { GITHUB_APP_ID: 4242, GITHUB_APP_PRIVATE_KEY: vars.GITHUB_APP_PRIVATE_KEY },
+    });
+  });
+
+  const PKCS1 = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n";
+  const invalid: Record<string, [Record<string, unknown>, string[]]> = {
+    "a PKCS#1 key, as GitHub issues it": [
+      { GITHUB_APP_ID: "4242", GITHUB_APP_PRIVATE_KEY: PKCS1 },
+      ["GITHUB_APP_PRIVATE_KEY is not a PKCS#8 private key (convert GitHub's key with openssl pkcs8 -topk8)"],
+    ],
+    "an App ID that is not a number": [
+      { ...appEnv(), GITHUB_APP_ID: "prq" },
+      ["GITHUB_APP_ID is not a numeric GitHub App ID"],
+    ],
+    "the key alone": [{ GITHUB_APP_PRIVATE_KEY: appEnv().GITHUB_APP_PRIVATE_KEY }, ["GITHUB_APP_ID is missing"]],
+    "an empty ID beside a key": [
+      { GITHUB_APP_ID: "", GITHUB_APP_PRIVATE_KEY: appEnv().GITHUB_APP_PRIVATE_KEY },
+      ["GITHUB_APP_ID is not a numeric GitHub App ID"],
+    ],
+  };
+
+  it.for(Object.entries(invalid))("refuses %s, naming the variables without their values", ([, [vars, issues]]) => {
+    const result = readGithubAppConfig(vars);
+    expect(result).toEqual({ ok: false, issues });
+    expect(JSON.stringify(result)).not.toContain("MIIE");
   });
 });
