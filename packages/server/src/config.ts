@@ -88,9 +88,11 @@ export const readWebhookConfig = configReader(webhookSchema);
 
 const readModelGroup = configReader(modelSchema);
 
-// What the cloud agent's model needs. Unlike the other groups it may be left out: with none of its variables set
-// (absent, or empty, as a local runtime's override leaves one) the cloud agent is not configured (null); with some set,
-// or any malformed, it is misconfigured.
+// What the cloud agent's model needs. Unlike the other groups it may be left out: with none of its variables set, or
+// all four empty (as a local runtime's overrides leave them), the cloud agent is not configured (null); with some set,
+// or some empty and others unset, or any malformed, it is misconfigured.
 export function readModelConfig(env: object): ConfigResult<ModelConfig> | null {
-  return MODEL_VARS.every((name) => [undefined, ""].includes(Reflect.get(env, name))) ? null : readModelGroup(env);
+  const values = MODEL_VARS.map((name) => Reflect.get(env, name));
+  const absent = values.every((value) => value === undefined) || values.every((value) => value === "");
+  return absent ? null : readModelGroup(env);
 }

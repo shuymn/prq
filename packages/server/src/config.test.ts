@@ -88,6 +88,9 @@ describe("fails closed", () => {
 
 describe("the model group", () => {
   it("is not configured while none of its variables is set, or each is empty", () => {
+    // The tests' runtime sets each one empty (vitest.config.ts), so a .dev.vars holding a provider's key for a manual
+    // check gives no test a model.
+    expect([env.MODEL_BASE_URL, env.MODEL_API_KEY, env.MODEL_ID, env.MODEL_CONTEXT_TOKENS]).toEqual(["", "", "", ""]);
     expect(readModelConfig(env)).toBeNull();
     expect(
       readModelConfig({ MODEL_BASE_URL: "", MODEL_API_KEY: "", MODEL_ID: "", MODEL_CONTEXT_TOKENS: "" }),
@@ -126,6 +129,20 @@ describe("the model group", () => {
     "only the key": [
       { MODEL_API_KEY: TEST_KEY },
       ["MODEL_BASE_URL is missing", "MODEL_ID is missing", "MODEL_CONTEXT_TOKENS is missing"],
+    ],
+    // Empty reads as unset only when all four are empty, as the test runtime leaves them.
+    "an empty key alone": [
+      { MODEL_API_KEY: "" },
+      ["MODEL_BASE_URL is missing", "MODEL_API_KEY is empty", "MODEL_ID is missing", "MODEL_CONTEXT_TOKENS is missing"],
+    ],
+    "two empty, two unset": [
+      { MODEL_BASE_URL: "", MODEL_ID: "" },
+      [
+        "MODEL_BASE_URL is not an https URL",
+        "MODEL_API_KEY is missing",
+        "MODEL_ID is empty",
+        "MODEL_CONTEXT_TOKENS is missing",
+      ],
     ],
   };
 

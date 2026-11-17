@@ -83,9 +83,10 @@ UI:    React + Vite (Workers Static Assets), connected to PrSession with useAgen
   SDK's `@ai-sdk/openai-compatible`, built once per isolate from four secrets: `MODEL_BASE_URL` (the API's https
   root), `MODEL_API_KEY`, `MODEL_ID` and `MODEL_CONTEXT_TOKENS` (the model's context window in tokens, since providers
   do not report it reliably). The window is at least 16,384: below that the system prompt, the tool definitions and one
-  cut tool result leave no room for a conversation, and every turn would compact. With none of the four set, a cloud
-  job fails `cloud agent not configured`; with some set or one malformed, it fails `cloud agent misconfigured: <each
-  variable and what is wrong with it>`, never a value, and `prq.config.invalid` is logged. `pnpm run check:provider`
+  cut tool result leave no room for a conversation, and every turn would compact. With none of the four set (or all
+  four empty, as the tests' runtime sets them), a cloud job fails `cloud agent not configured`; with some set or one
+  malformed, it fails `cloud agent misconfigured: <each variable and what is wrong with it>`, never a value, and
+  `prq.config.invalid` is logged. `pnpm run check:provider`
   in `packages/server` shows what a provider does with the requests a turn makes.
 - **prq CLI.** Runs on the host's machine, talks to the Worker over HTTP with a service token, and uses the host's own
   git and `gh`.
