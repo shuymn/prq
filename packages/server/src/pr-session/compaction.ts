@@ -34,7 +34,7 @@ import { STREAM_TIMEOUT } from "./model.ts";
 import type { ContextState, Notes } from "./notes.ts";
 import { analysisTask } from "./prompt.ts";
 import { CHARS_PER_TOKEN } from "./room.ts";
-import { NO_ROOM } from "./tools.ts";
+import { NO_ROOM, TWO_TIPS } from "./tools.ts";
 import type { CloudModel } from "./turn.ts";
 
 // Context compaction (docs/design.md, Model context): the projection before a cut point is summarized into the notes,
@@ -381,14 +381,15 @@ export function serializeSteps(steps: readonly Step[]): string {
     .join(STEP_SEPARATOR);
 }
 
-// Whether a tool call's result holds what it read: not an error, and not the note that the context had no room for it.
+// Whether a tool call's result holds what it read: not an error, and not the note that the context had no room for it,
+// after the line diff puts first when it compares the two tips.
 function readSomething(part: ToolUIPart | DynamicToolUIPart): boolean {
-  return (
-    part.state === "output-available" &&
-    typeof part.output === "string" &&
-    part.output !== NO_ROOM &&
-    !part.output.startsWith("error:")
-  );
+  if (part.state !== "output-available" || typeof part.output !== "string") {
+    return false;
+  }
+  const header = `${TWO_TIPS}\n`;
+  const output = part.output.startsWith(header) ? part.output.slice(header.length) : part.output;
+  return output !== NO_ROOM && !output.startsWith("error:");
 }
 
 // The files the steps read (read_file, and diff of one file, whose result holds what it read), added to the ones read

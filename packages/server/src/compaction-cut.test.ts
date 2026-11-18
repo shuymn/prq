@@ -17,9 +17,13 @@ import {
   UPDATE_SUMMARIZATION_PROMPT,
 } from "./pr-session/compaction.ts";
 import { contextBudget } from "./pr-session/context-budget.ts";
-import { NO_ROOM } from "./pr-session/tools.ts";
+import { ContextRoom } from "./pr-session/room.ts";
+import { NO_ROOM, TWO_TIPS, workspaceTools } from "./pr-session/tools.ts";
+import type { WorkspaceTarget } from "./pr-session/workspace.ts";
 import { question } from "./test/chat.ts";
 import { cloudAnswer, fourStepAnswer, sized, WINDOW } from "./test/compaction.ts";
+import { sha } from "./test/webhook.ts";
+import { FakeWorkspace } from "./test/workspace.ts";
 
 // The cut over built projections, with the kept tail of the test window (6,000 estimated tokens).
 
@@ -214,6 +218,37 @@ describe("the files read", () => {
       "src/changed.ts",
       "src/read.ts",
     ]);
+  });
+
+  it("sees past the line a diff of the two tips starts with, so its error is no read", async () => {
+    const target: WorkspaceTarget = {
+      fullName: "octo/rates",
+      installationId: null,
+      sha: sha("head"),
+      baseSha: sha("base"),
+      seq: 1,
+    };
+    const workspace = new FakeWorkspace({
+      base: { "src/old.ts": "a\n", "src/new.ts": "a\n" },
+      head: { "src/old.ts": "b\n", "src/new.ts": "b\n" },
+      mergeBase: false,
+    });
+    const prepared = await workspace.prepare(target, new AbortController().signal);
+    const { diff } = workspaceTools({ workspace, target, prepared, room: new ContextRoom(1_048_576) });
+    const run = async (input: Record<string, unknown>) =>
+      String(await diff?.execute?.(input, { toolCallId: "call", messages: [], context: undefined }));
+    const failed = await run({ path: "src/old.ts", startLine: 99 });
+    const changed = await run({ path: "src/new.ts" });
+    expect(failed.split("\n")).toEqual([TWO_TIPS, expect.stringMatching(/^error: startLine 99 is past the end/)]);
+    expect(changed.split("\n")[0]).toBe(TWO_TIPS);
+
+    const diffs = cloudAnswer("q1", [
+      { type: "step-start" },
+      toolCallOf(0, "diff", "src/old.ts", { output: failed }),
+      toolCallOf(1, "diff", "src/new.ts", { output: changed }),
+    ]);
+
+    expect(readFiles(projectionSteps([Q1, diffs]), [])).toEqual(["src/new.ts"]);
   });
 });
 
