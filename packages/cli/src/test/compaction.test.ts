@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { inLanguage, promptsHeld, proseLetters, startedAfterCompaction } from "./compaction.ts";
+import { UsageError } from "./app-check.ts";
+import {
+  analysisLanguage,
+  analysisOnlyVerdict,
+  checkVerdict,
+  inLanguage,
+  promptsHeld,
+  proseLetters,
+  startedAfterCompaction,
+} from "./compaction.ts";
 
 // How the compaction check (compaction.ts) decides that the questions asked during a compaction started after it
 // ended, from log lines as the Worker's log prints them; which prompts the requests it recorded hold; and the language
@@ -107,5 +116,52 @@ describe("an answer's prose", () => {
     expect(inLanguage(`${"あ".repeat(99)}${"a".repeat(101)}`, "japanese").ok).toBe(false);
     expect(inLanguage(`${"a".repeat(180)}${"あ".repeat(20)}`, "english").ok).toBe(true);
     expect(inLanguage(`${"a".repeat(179)}${"あ".repeat(21)}`, "english").ok).toBe(false);
+  });
+});
+
+describe("the analysis's language in the verdicts", () => {
+  // English prose of more than 200 letters, English progress text as an analysis at a small window stored it, and a
+  // Japanese summary.
+  const english =
+    "This pull request stores the host's two prompts in the Hub and gives each cloud turn the prompt of its job's " +
+    "kind. The system prompt puts the host's prompt after the core's lines and before the pull request's facts, and " +
+    "compaction counts the prefix, so a long prompt never pushes a request past the model's window.";
+  const progress =
+    "I'll start by looking at the changed files. Let me read the diff first, then the tests that cover the new " +
+    "prompts, so that I can see how the summary is put together before I write it.";
+  const japanese = `## 概要\n${"この変更はホストのプロンプトを保存する。".repeat(12)}`;
+  const steps = { compacted: true, unchanged: true, queued: true, refused: true, prompts: true };
+
+  it("the measure: the English prose is long enough, and in English", () => {
+    expect(inLanguage(english, "english").ok).toBe(true);
+    expect(proseLetters(english).letters).toBeGreaterThan(200);
+  });
+
+  it("the analysis-only run's: in the expected language only", () => {
+    expect(analysisOnlyVerdict("done", english, "japanese")).toBe(false);
+    expect(analysisOnlyVerdict("done", progress, "japanese")).toBe(false);
+    expect(analysisOnlyVerdict("done", japanese, "japanese")).toBe(true);
+    expect(analysisOnlyVerdict("done", english, "english")).toBe(true);
+    expect(analysisOnlyVerdict("done", japanese, "english")).toBe(false);
+    expect(analysisOnlyVerdict("done", english, null)).toBe(true);
+    expect(analysisOnlyVerdict("failed", japanese, "japanese")).toBe(false);
+  });
+
+  it("the whole check's: its steps, and the analysis in the expected language", () => {
+    expect(checkVerdict(steps, english, "japanese")).toBe(false);
+    expect(checkVerdict(steps, progress, "japanese")).toBe(false);
+    expect(checkVerdict(steps, japanese, "japanese")).toBe(true);
+    expect(checkVerdict(steps, english, "english")).toBe(true);
+    expect(checkVerdict(steps, progress, null)).toBe(true);
+    expect(checkVerdict({ ...steps, prompts: false }, japanese, "japanese")).toBe(false);
+  });
+
+  it("takes the expected language from --analysis-language, whatever the prompt says", () => {
+    expect(analysisLanguage("ja")).toBe("japanese");
+    expect(analysisLanguage("en")).toBe("english");
+    expect(analysisLanguage(undefined)).toBeNull();
+    expect(() => analysisLanguage("fr")).toThrow(new UsageError("--analysis-language takes ja or en, not fr"));
+    // A key every object inherits is not a language either.
+    expect(() => analysisLanguage("constructor")).toThrow(UsageError);
   });
 });

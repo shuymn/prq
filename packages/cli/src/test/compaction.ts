@@ -14,6 +14,8 @@
 // With host prompts (saved through PUT /api/prompts/:kind before the analysis), also:
 // - prompts: each request the Worker sent to the model holds only its own kind's prompt: an analysis turn's the
 //   analysis prompt, an answer turn's the answer prompt, and a summary request neither.
+// - the analysis (with `--analysis-language ja|en`, the language the analysis prompt asks for): its stored text's
+//   prose in that language by the languages' measure below, in the verdict.
 // - languages (with an answer prompt; reported apart from the check's verdict, since only a prompt such as "Answer in
 //   the language of the question." asks for it): one question in each language at the end, and each answer's prose,
 //   its letters outside code, headings, links and markup: at least 200, Japanese scripts at least half of the
@@ -26,6 +28,7 @@ import { type PrRef, type PrSessionView, sessionName } from "@prq/protocol";
 import * as v from "valibot";
 
 import { contextLimit } from "../../../server/src/pr-session/context-budget.ts";
+import { UsageError } from "./app-check.ts";
 import { ask, deliver, getMessages, savePrompt, sessionView } from "./pr.ts";
 import type { GithubApp } from "./reconcile.ts";
 import { type ModelRequest, type ModelSettings, startWorker, type Worker } from "./worker.ts";
@@ -42,10 +45,12 @@ const WRONG_KEY = "sk-prq-check-wrong-key-000000000000";
 // The name the decision fixes; the recall question needs it.
 const NAME = "Kestrel";
 
+type Language = "english" | "japanese";
+
 // The check's questions in one language: the decision, a code question about a file, the question about the last file
 // read, the recall of the decision's name, and the question of the languages step.
 type Questions = {
-  language: "english" | "japanese";
+  language: Language;
   decision: string;
   code: (file: string) => string;
   lastFile: string;
@@ -77,6 +82,11 @@ export const JAPANESE: Questions = {
 
 // The host's prompts the check saves before the analysis; empty for one it leaves unsaved.
 export type Prompts = { analysis: string; answer: string };
+
+// How a run goes: the push's analysis alone or the whole check, and the language expected of the analysis.
+export type Run = { analysisOnly: boolean; analysisLanguage: Language | null };
+
+type Steps = { compacted: boolean; unchanged: boolean; queued: boolean; refused: boolean; prompts: boolean };
 
 // What a request the Worker sent to the model is, by its system message: a turn of the analysis or of an answer (by
 // the job's line), a summary request (the summarizer's system prompt, SUMMARIZATION_SYSTEM_PROMPT in
@@ -192,8 +202,50 @@ export function inLanguage(text: string, language: Questions["language"]): { ok:
   };
 }
 
+// The language the analysis is expected in, as `--analysis-language` gives it (ja or en), or null when none is. Any
+// other value is a usage error.
+export function analysisLanguage(option: string | undefined): Language | null {
+  switch (option) {
+    case undefined:
+      return null;
+    case "ja":
+      return "japanese";
+    case "en":
+      return "english";
+    default:
+      throw new UsageError(`--analysis-language takes ja or en, not ${option}`);
+  }
+}
+
+// Whether the analysis's stored text is in the language expected of it, by the languages' measure; any text is when
+// none is expected.
+function analysisIn(summary: string, language: Language | null): boolean {
+  return language === null || inLanguage(summary, language).ok;
+}
+
+// The analysis-only run's verdict: the analysis done, with text, no tool call written as text, and in the expected
+// language.
+export function analysisOnlyVerdict(state: string | undefined, summary: string, language: Language | null): boolean {
+  return state === "done" && summary.trim() !== "" && !TOOL_CALL_MARKUP.test(summary) && analysisIn(summary, language);
+}
+
+// The check's verdict: its four steps and the prompts as expected, and the analysis in the expected language.
+export function checkVerdict(steps: Steps, summary: string, language: Language | null): boolean {
+  return (
+    steps.compacted &&
+    steps.unchanged &&
+    steps.queued &&
+    steps.refused &&
+    steps.prompts &&
+    analysisIn(summary, language)
+  );
+}
+
 // A Markdown heading line, at any level.
 const HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
+
+// A tool call written as text: DeepSeek's markup (`<｜｜DSML｜｜ …>`, `<｜tool▁calls▁begin｜>`) or a generic tag.
+const TOOL_CALL_MARKUP = /<｜|DSML|<\/?(?:tool_calls?|function_calls?|invoke)\b/i;
 
 // Each heading of a text with the first non-blank line under it, up to the next heading.
 function outline(text: string): string[] {
@@ -368,7 +420,8 @@ async function askUntil(
   return null;
 }
 
-// Waits for a question's job to end; prints how it ended, the count against the limit, and the notes' revision.
+// Waits for a question's job to end; prints how it ended, the provider's raw measurement against the limit, and the
+// notes' revision.
 async function report(
   worker: Worker,
   pr: PrRef,
@@ -384,7 +437,7 @@ async function report(
   const tools = done === null ? [] : partsOf(list, done).filter((part) => part.type.startsWith("tool-"));
   print(`  ${job?.state ?? "no job"} (${tools.length} tool calls): ${answer}`);
   print(
-    `  context count ${count.context_tokens ?? "estimated"} (limit ${limit}), notes rev ${(await notes(worker, pr)).rev}`,
+    `  the provider's raw measurement ${count.context_tokens ?? "none"} (limit ${limit}), notes rev ${(await notes(worker, pr)).rev}`,
   );
   return job;
 }
@@ -412,6 +465,7 @@ export async function checkCompaction(
   print: (line: string) => void,
   questions: Questions,
   prompts: Prompts,
+  { analysisOnly, analysisLanguage: expected }: Run,
 ): Promise<boolean> {
   const window = Number(settings.model.MODEL_CONTEXT_TOKENS);
   const limit = contextLimit(window);
@@ -422,7 +476,8 @@ export async function checkCompaction(
       `window ${window} (compacted above ${limit}); ${files.length} changed files`,
   );
   const prompted = prompts.analysis !== "" || prompts.answer !== "";
-  const results = { compacted: false, unchanged: false, queued: false, refused: false, prompts: !prompted };
+  const results: Steps = { compacted: false, unchanged: false, queued: false, refused: false, prompts: !prompted };
+  let summary = "";
   let languages: boolean | null = null;
   const tracked = await workspaceContainers();
   const worker = await startWorker({ model: settings.model, githubApp: settings.app.settings, containers: true });
@@ -433,7 +488,11 @@ export async function checkCompaction(
         print(`the ${kind} prompt saved: ${prompts[kind]}`);
       }
     }
-    print("step 1: the analysis, the decision, then code questions until a compaction is adopted after the decision");
+    print(
+      analysisOnly
+        ? "the push's analysis alone"
+        : "step 1: the analysis, the decision, then code questions until a compaction is adopted after the decision",
+    );
     await deliver(worker, pr, {
       action: "opened",
       head: pull.head.sha,
@@ -444,12 +503,27 @@ export async function checkCompaction(
     await (await worker.durableObject("PrSession", sessionName(pr)))["settle"]?.();
     const analysis = await untilEnded(worker, pr, (job) => job.target.kind === "analysis");
     print(`  analysis: ${analysis?.state ?? "none"}${analysis?.failure == null ? "" : `: ${analysis.failure}`}`);
+    summary = analysis?.state === "done" ? textOf(await messages(worker, pr), `analysis-${analysis.jobId}`) : "";
+    if (analysisOnly) {
+      const markup = TOOL_CALL_MARKUP.test(summary);
+      print(`  the analysis's stored text: ${summary.length} characters; ${inLanguage(summary, "japanese").line}`);
+      print(`  tool-call markup in it: ${markup ? "yes" : "no"}`);
+      print(`  its first 400 characters: ${summary.slice(0, 400).replace(/\s+/g, " ")}`);
+      const ok = analysisOnlyVerdict(analysis?.state, summary, expected);
+      print(ok ? "as expected" : "NOT as expected");
+      return ok;
+    }
     if (analysis?.state === "done" && prompts.analysis !== "") {
-      const summary = textOf(await messages(worker, pr), `analysis-${analysis.jobId}`);
       print(`  the analysis: ${inLanguage(summary, "japanese").line}; ${firstLine(summary)}`);
     }
+    if (expected !== null) {
+      print(`  the analysis in ${expected}: ${analysisIn(summary, expected) ? "as expected" : "NOT as expected"}`);
+    }
+    // The provider's measurement of the analysis's last request, as stored. The Worker's count after the commit can be
+    // higher (it adds the tool definitions a step without tools left out), but the Worker logs nothing when it does
+    // not compact, so the wait below starts only when this raw measurement is over the limit.
     const afterAnalysis = (await context(worker, pr)).context_tokens;
-    print(`  context count ${afterAnalysis ?? "estimated"} (limit ${limit})`);
+    print(`  the provider's raw measurement ${afterAnalysis ?? "none"} (limit ${limit})`);
     // A compaction the analysis started ends before the decision is asked, so a later one summarizes the decision.
     if (afterAnalysis !== null && afterAnalysis > limit) {
       print(
@@ -660,7 +734,7 @@ export async function checkCompaction(
     await refusing.close();
   }
 
-  const ok = results.compacted && results.unchanged && results.queued && results.refused && results.prompts;
+  const ok = checkVerdict(results, summary, expected);
   print(
     `${ok ? "as expected" : "NOT as expected"}${languages === null ? "" : `; languages: ${languages ? "as expected" : "NOT as expected"}`}`,
   );

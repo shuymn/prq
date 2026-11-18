@@ -32,6 +32,10 @@ type Values<O extends ParseArgsOptionsConfig> = ReturnType<
   typeof parseArgs<{ options: O; allowPositionals: true }>
 >["values"];
 
+// An option's value a check does not take, thrown before the check starts anything: reported with the usage, as
+// parseArgs's own errors are.
+export class UsageError extends Error {}
+
 export type AppCheck<O extends ParseArgsOptionsConfig = ParseArgsOptionsConfig> = (
   settings: { app: GithubApp; model: ModelSettings },
   pr: PrRef,
@@ -127,6 +131,9 @@ export async function runAppCheck<const O extends ParseArgsOptionsConfig>(
     );
     process.exitCode = ok ? 0 : 1;
   } catch (error) {
+    if (error instanceof UsageError) {
+      fail(`${error.message}; usage: check:${name} ${usage}<owner>/<repo>#<number>`);
+    }
     print(`${name} check: failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   }

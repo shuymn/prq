@@ -35,6 +35,8 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
   `MODEL_CONTEXT_TOKENS` (such as 20000) and checks compaction. The prompt options save the host's prompts before the
   analysis (give two different texts) and check that every model request holds only its own kind's prompt; with an
   answer prompt it also reports the language of an answer to a question in each language, apart from its verdict.
+  `--analysis-only` runs the push's analysis alone and reports its stored text, at any window, and
+  `--analysis-language ja|en` holds the analysis to the language its prompt asks for, in the verdict.
 - lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows, a
   `fileToken` check on `design/prq.pen`, and commitlint on the message.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
