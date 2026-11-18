@@ -26,23 +26,8 @@ export function systemPrompt({
   // The host's prompt of the job's kind, as saved.
   hostPrompt: string;
 }): SystemPrompt {
-  const instructions = ["You work on one GitHub pull request: you summarize it and answer questions about it."];
-  if (tools) {
-    instructions.push(
-      `A tool's result is cut at ${TOOL_RESULT_CHARS} characters; a note at its end says how to read the next page.`,
-      "When the conversation has no room for more, the tools are withdrawn: answer from what you have read.",
-    );
-  }
-  if (hostPrompt.trim() !== "") {
-    const kind = job.target.kind === "analysis" ? "summaries" : "answers";
-    instructions.push(
-      `Instructions from the host for ${kind}:`,
-      "<host-instructions>",
-      hostPrompt,
-      "</host-instructions>",
-    );
-  }
-  const lines = [...instructions, `Pull request: ${pr.owner}/${pr.repo}#${pr.number}`];
+  const instructions = instructionPart({ kind: job.target.kind, tools, hostPrompt });
+  const lines = [instructions, `Pull request: ${pr.owner}/${pr.repo}#${pr.number}`];
   if (details === null) {
     lines.push("Its details are not known yet: no webhook has arrived.");
   } else {
@@ -67,7 +52,35 @@ export function systemPrompt({
         "read that commit, and diff shows the pull request's change against its base.",
     );
   }
-  return { text: lines.join("\n"), instructions: instructions.join("\n") };
+  return { text: lines.join("\n"), instructions };
+}
+
+// The system prompt's instruction part: the core's lines and the host's prompt of the job's kind.
+export function instructionPart({
+  kind,
+  tools,
+  hostPrompt,
+}: {
+  kind: Job["target"]["kind"];
+  tools: boolean;
+  hostPrompt: string;
+}): string {
+  const lines = ["You work on one GitHub pull request: you summarize it and answer questions about it."];
+  if (tools) {
+    lines.push(
+      `A tool's result is cut at ${TOOL_RESULT_CHARS} characters; a note at its end says how to read the next page.`,
+      "When the conversation has no room for more, the tools are withdrawn: answer from what you have read.",
+    );
+  }
+  if (hostPrompt.trim() !== "") {
+    lines.push(
+      `Instructions from the host for ${kind === "analysis" ? "summaries" : "answers"}:`,
+      "<host-instructions>",
+      hostPrompt,
+      "</host-instructions>",
+    );
+  }
+  return lines.join("\n");
 }
 
 // An analysis's request, which is not stored: a local analysis stores none either.

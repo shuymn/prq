@@ -128,7 +128,7 @@ import {
   recordContext,
   recordOverflow,
 } from "./notes.ts";
-import { instructionPrefix, type Prefix } from "./prefix.ts";
+import { type Prefix, prefixWith, type TurnInstructions, turnInstructions } from "./prefix.ts";
 import { projection } from "./projection.ts";
 import { analysisTask } from "./prompt.ts";
 import { adoptAnswer, clearMark, failTry, isLagging, notePush, readReconcile } from "./reconcile.ts";
@@ -1364,7 +1364,8 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (hostPrompt === null) {
       return undefined;
     }
-    const counted = await this.#prefixFor(row, job, readDetails(this.#sql), own, hostPrompt, outcome);
+    const instructions = await turnInstructions(job, job.workspaceSha !== null, hostPrompt);
+    const counted = this.#prefixFor(row, job, readDetails(this.#sql), own, instructions, outcome);
     if (counted === null) {
       return undefined;
     }
@@ -1376,7 +1377,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     // The pull request's facts and base as a delivery taken in during the compaction left them: the first request's
     // prefix and the workspace's base are read from them, with the prompt read at the turn's start.
     const details = readDetails(this.#sql);
-    const prefix = await this.#prefixFor(row, job, details, own, hostPrompt, outcome);
+    const prefix = this.#prefixFor(row, job, details, own, instructions, outcome);
     if (prefix === null) {
       return undefined;
     }
@@ -1492,19 +1493,19 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     }
   }
 
-  // The turn's instruction prefix: its system message with the host's prompt and the pull request's `details`, and the
-  // definitions of the tools it is offered. Null, with the job's failure in the outcome, when the prefix and the job's
-  // own message leave the window no room for the answer, or, with tools, for one tool result.
-  async #prefixFor(
+  // The turn's instruction prefix: its system message with the turn's instructions and the pull request's `details`,
+  // and the definitions of the tools it is offered. Null, with the job's failure in the outcome, when the prefix and
+  // the job's own message leave the window no room for the answer, or, with tools, for one tool result.
+  #prefixFor(
     row: JobRow,
     job: Job,
     details: PrDetails | null,
     own: UIMessage,
-    hostPrompt: string,
+    instructions: TurnInstructions,
     outcome: TurnOutcome,
-  ): Promise<Prefix | null> {
-    const tools = job.workspaceSha !== null;
-    const prefix = await instructionPrefix({ pr: this.#pr(), details, job, tools, hostPrompt });
+  ): Prefix | null {
+    const { tools } = instructions;
+    const prefix = prefixWith(instructions, { pr: this.#pr(), details, job });
     const room = contextLimit(this.contextTokens());
     const ownChars = partsChars(own.parts);
     if (estimateTokens(prefix.chars + ownChars + (tools ? MIN_RESULT_CHARS : 0)) > room) {
