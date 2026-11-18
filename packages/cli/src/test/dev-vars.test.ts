@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { chmod, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, open, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
@@ -150,15 +150,33 @@ describe("dev-vars write", () => {
     expect(Buffer.from(String(wrangler["GITHUB_APP_PRIVATE_KEY"]))).toStrictEqual(Buffer.from(PRIVATE_KEY));
   });
 
-  it("leaves only the file, readable by the owner alone, in place of one that was not", async () => {
+  it("renames a whole new file, readable by the owner alone, over one that was not", async () => {
     await writeFile(target, "STALE=1\n");
     await chmod(target, 0o644);
+    const old = await open(target, "r");
+    try {
+      expect((await devVars("write")).code).toBe(0);
 
-    expect((await devVars("write")).code).toBe(0);
-
+      // The old file as it was: the new one replaced it, nothing was written into it.
+      expect(await old.readFile("utf8")).toBe("STALE=1\n");
+    } finally {
+      await old.close();
+    }
     expect((await stat(target)).mode & 0o777).toBe(0o600);
     expect(await readdir(join(repo, "packages", "server"))).toStrictEqual([".dev.vars"]);
-    expect((await written()).node["STALE"]).toBeUndefined();
+    expect((await written()).node).toStrictEqual(EXPECTED);
+  });
+
+  it("removes its unfinished file when the rename fails", async () => {
+    // A directory, which no file can be renamed over.
+    await mkdir(join(target, "in-the-way"), { recursive: true });
+
+    expect(await devVars("write")).toMatchObject({
+      code: 1,
+      stdout: "",
+      stderr: expect.stringMatching(/^dev-vars: failed \(E[A-Z]+\)\n$/),
+    });
+    expect(await readdir(join(repo, "packages", "server"))).toStrictEqual([".dev.vars"]);
   });
 
   it("passes git none of its environment but what git needs, which child-process diagnostics would print", async () => {
