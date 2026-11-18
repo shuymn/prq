@@ -1,5 +1,6 @@
 import * as v from "valibot";
 
+import { ContextInstructions } from "./instructions.ts";
 import { MessageMetadata } from "./messages.ts";
 import { AgentId, MessageId, PrDetails, PrRef, Sha } from "./pr.ts";
 
@@ -120,11 +121,13 @@ const ContextMessage = v.object({
 // The answer to a context request: the canonical pull request, its details (null before its first webhook), the job as
 // its claim fixed it (workspaceSha included), and one page of the conversation, oldest first. nextCursor asks for the
 // next page; null when this page reached the end. The conversation is append-only, so a cursor stays valid while
-// messages are added. The whole response, not only its messages, stays within the server's page budget.
+// messages are added. The first page (no cursor) also carries the host's instructions as the Hub held them when it was
+// read; later pages carry none. The whole response, not only its messages, stays within the server's page budget.
 export const ContextResponse = v.object({
   pr: PrRef,
   details: v.nullable(PrDetails),
   job: Job,
+  instructions: v.optional(ContextInstructions),
   messages: v.array(ContextMessage),
   nextCursor: v.nullable(v.string()),
 });

@@ -5,6 +5,7 @@ import {
   MAX_FULL_NAME_CHARS,
   MAX_TITLE_CHARS,
   MAX_URL_CHARS,
+  PROMPT_CHARS,
   PRQ_VERSION_HEADER,
   ROUTE_CALL_MS,
 } from "@prq/protocol";
@@ -29,7 +30,18 @@ import {
   postRequest,
   submitOver,
 } from "./test/cli.ts";
-import { clearQueue, gate, holdInsert, hub, jobRows, tracked, within } from "./test/session.ts";
+import {
+  clearQueue,
+  gate,
+  clearPrompts,
+  holdInsert,
+  hub,
+  jobRows,
+  prSessionSeams,
+  retryIn,
+  tracked,
+  within,
+} from "./test/session.ts";
 import { BASE, push, send, sha } from "./test/webhook.ts";
 import { SERVER_VERSION } from "./version.ts";
 
@@ -38,6 +50,7 @@ const sockets: AgentSocket[] = [];
 // Each test starts from an empty queue: the sessions of earlier tests may still have work.
 beforeEach(async () => {
   await clearQueue();
+  await clearPrompts();
 });
 
 afterEach(() => {
@@ -86,10 +99,12 @@ describe("context", () => {
     const asked = { ...ref, owner: "OCTO" };
 
     const before = await contextOf(post("/cli/context", token, contextBody(asked, claim, "laptop")));
+    const never = { text: "", savedAt: null };
     expect(before).toEqual({
       pr: ref,
       details: null,
       job: claim.job,
+      instructions: { prompts: { analysis: never, answer: never } },
       messages: [{ id: "q1", role: "user", text: "question q1" }],
       nextCursor: null,
     });
@@ -185,6 +200,68 @@ describe("context", () => {
     await held.open();
 
     expect(await refused(res.promise)).toEqual({ status: 409, error: "stale_claim", version: SERVER_VERSION });
+  });
+
+  it("refuses a claim that a retry ended while the host's instructions were read", async () => {
+    captureLogs();
+    const { ref, token, stub } = await localSession("context", sockets, question("q1"));
+    const claim = holding(await claimOver(token, "laptop"));
+    const held = await gate(stub);
+    await runInDurableObject(stub, (instance) => {
+      const seams = prSessionSeams(instance);
+      const read = seams.readInstructions.bind(instance);
+      vi.spyOn(seams, "readInstructions").mockImplementationOnce(async () => {
+        await held.wait();
+        return read();
+      });
+    });
+    const res = tracked(post("/cli/context", token, contextBody(ref, claim, "laptop")));
+    await held.reached();
+
+    expect(await retryIn(stub, claim.job.jobId)).toEqual({ status: "retried" });
+    expect(res.settled()).toBe(false);
+    await held.open();
+
+    expect(await refused(res.promise)).toEqual({ status: 409, error: "stale_claim", version: SERVER_VERSION });
+  });
+
+  it("refuses a claim that a retry ended while a read of the host's instructions failed, rather than answer 503", async () => {
+    captureLogs();
+    const { ref, token, stub } = await localSession("context", sockets, question("q1"));
+    const claim = holding(await claimOver(token, "laptop"));
+    const held = await gate(stub);
+    await runInDurableObject(stub, (instance) => {
+      vi.spyOn(prSessionSeams(instance), "readInstructions").mockImplementationOnce(async () => {
+        await held.wait();
+        throw new Error("the Hub is away");
+      });
+    });
+    const res = tracked(post("/cli/context", token, contextBody(ref, claim, "laptop")));
+    await held.reached();
+
+    expect(await retryIn(stub, claim.job.jobId)).toEqual({ status: "retried" });
+    expect(res.settled()).toBe(false);
+    await held.open();
+
+    expect(await refused(res.promise)).toEqual({ status: 409, error: "stale_claim", version: SERVER_VERSION });
+  });
+
+  it("answers 503 when the host's instructions cannot be read, so the agent asks again", async () => {
+    captureLogs();
+    const { ref, token, stub } = await localSession("context", sockets, question("q1"));
+    const claim = holding(await claimOver(token, "laptop"));
+    await runInDurableObject(stub, (instance) => {
+      vi.spyOn(prSessionSeams(instance), "readInstructions").mockRejectedValueOnce(new Error("the Hub is away"));
+    });
+
+    expect(await refused(post("/cli/context", token, contextBody(ref, claim, "laptop")))).toEqual({
+      status: 503,
+      error: "unavailable",
+      version: SERVER_VERSION,
+    });
+    expect((await contextOf(post("/cli/context", token, contextBody(ref, claim, "laptop")))).instructions).toEqual({
+      prompts: { analysis: { text: "", savedAt: null }, answer: { text: "", savedAt: null } },
+    });
   });
 
   it("refuses any other claim with 409, and an unknown job with 404", async () => {
@@ -367,6 +444,30 @@ describe("context pages", () => {
     expect(full?.details?.title).toBe(title);
     expect(full?.nextCursor).toContain(longId);
     expect(new TextEncoder().encode(JSON.stringify(full)).length).toBeGreaterThan(CONTEXT_PAGE_BYTES - 64);
+  });
+
+  it("carries both prompts at their cap on the first page only, the page within the budget", async () => {
+    captureLogs();
+    // Each prompt at its cap, each character a six-byte escape in JSON; and a question larger than a page, which the
+    // first page holds as much of as its room allows.
+    const analysis = "\u0001".repeat(PROMPT_CHARS);
+    const answer = "\u0002".repeat(PROMPT_CHARS);
+    await (await hub()).savePrompt("analysis", analysis);
+    await (await hub()).savePrompt("answer", answer);
+    const { ref, token } = await localSession("pages", sockets, question("huge-q", "x".repeat(12 * 1024 * 1024)));
+    const claim = holding(await claimOver(token, "laptop"));
+
+    const pages = await allPages(contextBody(ref, claim, "laptop"), token);
+
+    expect(pages.length).toBeGreaterThan(1);
+    const [first, ...later] = pages;
+    expect(first?.instructions?.prompts.analysis.text).toBe(analysis);
+    expect(first?.instructions?.prompts.answer.text).toBe(answer);
+    expect(later.every((page) => page.instructions === undefined)).toBe(true);
+    // The first page is filled to the room the instructions leave.
+    const bytes = new TextEncoder().encode(JSON.stringify(first)).length;
+    expect(bytes).toBeGreaterThan(CONTEXT_PAGE_BYTES - 64 * 1024);
+    expect(bytes).toBeLessThanOrEqual(CONTEXT_PAGE_BYTES);
   });
 
   it("refuses a page that cannot hold the first character of its message, from a row stored before IDs were bounded", async () => {

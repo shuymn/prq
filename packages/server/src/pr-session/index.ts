@@ -2,6 +2,7 @@ import { AIChatAgent, type ChatRecoveryOptions, type OnChatMessageOptions } from
 import { MessageType } from "@cloudflare/ai-chat/types";
 import {
   type ClaimResponse,
+  type ContextInstructions,
   type ContextResponse,
   type ErrorResponse,
   type HistoryChangedMessage,
@@ -1019,10 +1020,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // What a local agent works on its claimed job from (/cli/context): the pull request, its details, the job as its claim
-  // fixed it, and a page of the conversation from the cursor (the start when there is none), the whole response within
-  // CONTEXT_PAGE_BYTES. Only the job's current claim, held by the agent, gets it. The claim is checked before the
-  // conversation is read, to size the page around the job, and again after it, in the step that answers, so the answer
-  // never carries a claim that had already ended.
+  // fixed it, on the first page the host's instructions (read from the Hub; 503 when it does not answer), and a page of
+  // the conversation from the cursor (the start when there is none), the whole response within CONTEXT_PAGE_BYTES. Only
+  // the job's current claim, held by the agent, gets it. The claim is checked before the instructions and the
+  // conversation are read, to size the page around the job, and again after them, in the step that answers, so the
+  // answer never carries a claim that had already ended.
   async context(
     agentId: string,
     jobId: string,
@@ -1037,7 +1039,22 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if ("error" in before) {
       return before;
     }
-    const page = await this.#contextPage(start.id, start.offset, { pr: this.#pr(), job: this.#job(before) });
+    let instructions: ContextInstructions | undefined;
+    if (cursor === undefined) {
+      try {
+        instructions = { prompts: (await this.readInstructions()).prompts };
+      } catch (error) {
+        log("prq.context.instructions_failed", { pr: this.name, jobId, error: errorName(error) }, "warn");
+        // A claim that ended during the read is stale, whatever the read gave: asking again cannot help.
+        const held = this.#heldJob(agentId, jobId, claimId);
+        if ("error" in held) {
+          return held;
+        }
+        return { error: "unavailable", detail: "the host's instructions could not be read; try again" };
+      }
+    }
+    const first = instructions === undefined ? {} : { instructions };
+    const page = await this.#contextPage(start.id, start.offset, { pr: this.#pr(), job: this.#job(before), ...first });
     if ("error" in page) {
       return page;
     }
@@ -1049,6 +1066,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       pr: this.#pr(),
       details: readDetails(this.#sql),
       job: this.#job(row),
+      ...first,
       messages: page.messages,
       nextCursor: page.next === null ? null : cursorText(page.next),
     };
@@ -1076,7 +1094,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   async #contextPage(
     id: string | null,
     offset: number,
-    around: Pick<ContextResponse, "pr" | "job">,
+    around: Pick<ContextResponse, "pr" | "job" | "instructions">,
   ): Promise<{ messages: ContextMessage[]; next: Cursor | null } | ErrorResponse> {
     const session = this.sessions.session();
     const ids = (await session.getHistoryRowStats()).map((stat) => stat.id);
