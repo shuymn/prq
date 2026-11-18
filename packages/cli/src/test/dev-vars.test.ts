@@ -189,6 +189,14 @@ describe("dev-vars write", () => {
     expect(result.stderr).toMatch(/CHILD_PROCESS \d+: spawn[\s\S]*env: \{[\s\S]*PATH: /);
   });
 
+  it("prints its usage, not the arguments, when it cannot parse them", async () => {
+    expect(await devVars("write", "--sentinel-typed-as-an-option")).toMatchObject({
+      code: 1,
+      stdout: "",
+      stderr: "dev-vars: usage: dev-vars write [--window <tokens>] | status | remove\n",
+    });
+  });
+
   it("takes the window from --window over model.env's, or in place of it", async () => {
     const result = await devVars("write", "--window", "20000");
     expect(result.stdout).toContain("window: 20000 tokens (--window)\n");
@@ -319,13 +327,12 @@ describe("dev-vars status", () => {
 describe("dev-vars remove", () => {
   it("deletes the file and an unfinished write's, and says whether the file was there", async () => {
     await devVars("write");
-    await writeFile(join(repo, "packages", "server", ".dev.vars.tmp-0123456789abcdef"), modelEnv(MODEL));
+    // A name the writer never makes, its rest not printed.
+    await writeFile(join(repo, "packages", "server", ".dev.vars.tmp-sentinel-suffix"), modelEnv(MODEL));
 
     expect(await devVars("remove")).toMatchObject({
       code: 0,
-      stdout:
-        "removed packages/server/.dev.vars\n" +
-        "removed an unfinished write, packages/server/.dev.vars.tmp-0123456789abcdef\n",
+      stdout: "removed packages/server/.dev.vars\nremoved an unfinished write beside packages/server/.dev.vars\n",
     });
     expect(await readdir(join(repo, "packages", "server"))).toStrictEqual([]);
 

@@ -227,11 +227,11 @@ async function remove(): Promise<void> {
     },
   );
   print(existed ? `removed ${TARGET}` : `no ${TARGET} to remove`);
-  // A write that was stopped before its rename.
+  // A write that was stopped before its rename. Not named: a name the writer did not make could hold anything.
   for (const name of await readdir(join(root, SERVER))) {
     if (name.startsWith(TEMPORARY)) {
       await unlink(join(root, SERVER, name));
-      print(`removed an unfinished write, ${SERVER}/${name}`);
+      print(`removed an unfinished write beside ${TARGET}`);
     }
   }
 }
@@ -247,8 +247,9 @@ try {
   if (positionals.length !== 1 || (window !== undefined && command !== "write")) {
     command = undefined;
   }
-} catch (error) {
-  process.stderr.write(`dev-vars: ${error instanceof Error ? error.message : String(error)}; ${USAGE}\n`);
+} catch {
+  // The usage alone: parseArgs's message quotes the argument, which could be a value typed in the wrong place.
+  process.stderr.write(`dev-vars: ${USAGE}\n`);
   process.exit(1);
 }
 
