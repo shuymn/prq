@@ -84,12 +84,15 @@ export function adoptNotes(
 }
 
 // The context count's measurement: the tokens of the last committed turn's last model call (input and output), the
-// result it ended with, and the notes revision its context was built on; and the projection's end at which a
-// compaction last failed.
+// result it ended with, the notes revision its context was built on and the fingerprint of the prefix it was taken
+// under (null for a refusal, or one taken before fingerprints were kept), and whether it is a provider's
+// context-length refusal; and the projection's end at which a compaction last failed.
 export type ContextState = {
   tokens: number | null;
   through: string | null;
   notesRev: number | null;
+  fingerprint: string | null;
+  overflow: boolean;
   failedThrough: string | null;
 };
 
@@ -99,42 +102,51 @@ export function readContextState(sql: SqlStorage): ContextState {
       context_tokens: number | null;
       context_through: string | null;
       context_notes_rev: number | null;
+      context_fingerprint: string | null;
+      context_overflow: number;
       compaction_failed_through: string | null;
     }>(
-      `SELECT context_tokens, context_through, context_notes_rev, compaction_failed_through FROM prq_session
-       WHERE id = 1`,
+      `SELECT context_tokens, context_through, context_notes_rev, context_fingerprint, context_overflow,
+         compaction_failed_through FROM prq_session WHERE id = 1`,
     )
     .one();
   return {
     tokens: row.context_tokens,
     through: row.context_through,
     notesRev: row.context_notes_rev,
+    fingerprint: row.context_fingerprint,
+    overflow: row.context_overflow === 1,
     failedThrough: row.compaction_failed_through,
   };
 }
 
-// A committed turn's measurement (tokens null when the provider reported no usage, so the context is estimated).
+// A committed turn's measurement (tokens null when the provider reported no usage, so the context is estimated), under
+// the fingerprint of the turn's prefix.
 export function recordContext(
   sql: SqlStorage,
-  measure: { tokens: number | null; through: string; notesRev: number },
+  measure: { tokens: number | null; through: string; notesRev: number; fingerprint: string | null },
 ): void {
   sql.exec(
-    "UPDATE prq_session SET context_tokens = ?, context_through = ?, context_notes_rev = ? WHERE id = 1",
+    `UPDATE prq_session SET context_tokens = ?, context_through = ?, context_notes_rev = ?, context_fingerprint = ?,
+       context_overflow = 0
+     WHERE id = 1`,
     measure.tokens,
     measure.through,
     measure.notesRev,
+    measure.fingerprint,
   );
 }
 
-// A context-length refusal: the provider measured the context as over its window. It counts as the whole window, and
-// it asks for a compaction even where one failed at the same projection end.
+// A context-length refusal: the provider measured the context as over its window. It counts as the whole window under
+// any prefix, so the re-run's start compacts whatever prompt it reads, and it asks for a compaction even where one
+// failed at the same projection end.
 export function recordOverflow(
   sql: SqlStorage,
   measure: { tokens: number; through: string | null; notesRev: number },
 ): void {
   sql.exec(
-    `UPDATE prq_session SET context_tokens = ?, context_through = ?, context_notes_rev = ?,
-       compaction_failed_through = NULL
+    `UPDATE prq_session SET context_tokens = ?, context_through = ?, context_notes_rev = ?, context_fingerprint = NULL,
+       context_overflow = 1, compaction_failed_through = NULL
      WHERE id = 1`,
     measure.tokens,
     measure.through,

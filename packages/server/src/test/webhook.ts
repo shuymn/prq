@@ -37,6 +37,8 @@ type EventOptions = {
   at?: number;
   // The head a synchronize event moved from.
   before?: string;
+  // The base's SHA (BASE unless given).
+  base?: string;
   title?: string;
   url?: string;
   fullName?: string;
@@ -66,7 +68,7 @@ export function pullRequestEvent(pr: PrRef, options: EventOptions = {}) {
       html_url: options.url ?? `https://github.com/${fullName}/pull/${pr.number}`,
       user: { id: options.author ?? HOST_ID, login: "host" },
       head: { sha: head, ref: "topic" },
-      base: { sha: BASE, ref: "main" },
+      base: { sha: options.base ?? BASE, ref: "main" },
     },
     repository: { name: pr.repo, full_name: fullName, owner: { login: pr.owner } },
     sender: { id: options.sender ?? HOST_ID, login: "sender" },

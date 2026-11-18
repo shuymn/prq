@@ -121,7 +121,7 @@ export async function checkTools(
   const workspace = new FakeWorkspace({ base: BASE_FILES, head: HEAD_FILES });
   const target = { fullName: `${PR.owner}/${PR.repo}`, installationId: null, sha: HEAD, baseSha: BASE, seq: 1 };
   const prepared = await workspace.prepare(target, new AbortController().signal);
-  const system = systemPrompt({ pr: PR, details: DETAILS, job: JOB, tools: true });
+  const { text: system } = systemPrompt({ pr: PR, details: DETAILS, job: JOB, tools: true, hostPrompt: "" });
   const messages = [{ role: "user" as const, content: QUESTION }];
   const loop = await toolLoop({ workspace, target, prepared }, window, { system, messages });
   say(`tools check: model ${model.modelId}, window ${window} (reserve ${contextBudget(window).reserve})`);

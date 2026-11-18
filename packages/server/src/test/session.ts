@@ -4,6 +4,7 @@
 import type { AIChatAgent } from "@cloudflare/ai-chat";
 import {
   type ClaimResponse,
+  type Instructions,
   type Job,
   LedgerPage,
   type LedgerRow,
@@ -22,6 +23,7 @@ import type { Hub } from "../hub.ts";
 import type { LedgerEntry } from "../ledger.ts";
 import { hubStub, prSessionStub } from "../names.ts";
 import type { CloudAgent } from "../pr-session/cloud.ts";
+import type { CountedPrefix } from "../pr-session/compaction.ts";
 import type { PrSession, Submission } from "../pr-session/index.ts";
 import type { JobRow, Peek } from "../pr-session/jobs.ts";
 import type { CloudModel } from "../pr-session/turn.ts";
@@ -307,9 +309,10 @@ export type PrSessionSeams = {
   compactContext(
     model: CloudModel,
     window: number,
-    options: { jobId: string; signal?: AbortSignal },
+    options: { jobId: string; signal?: AbortSignal; turn?: { prefixChars: number; own: UIMessage } },
   ): Promise<"adopted" | "discarded" | "failed" | "skipped">;
-  measureContext(own: UIMessage | null): Promise<{ tokens: number; end: string | null }>;
+  measureContext(own: UIMessage, prefix: CountedPrefix): Promise<{ tokens: number; end: string | null }>;
+  readInstructions(): Promise<Instructions>;
   // AIChatAgent's own.
   waitUntilStable(options?: { timeout?: number }): Promise<boolean>;
   abortAllRequests(reason?: unknown): void;
@@ -328,6 +331,7 @@ const PR_SESSION_SEAMS = [
   "github",
   "compactContext",
   "measureContext",
+  "readInstructions",
   "waitUntilStable",
   "abortAllRequests",
 ] as const;

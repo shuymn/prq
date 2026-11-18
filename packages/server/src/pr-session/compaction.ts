@@ -131,6 +131,11 @@ export function notesText(notes: string): string {
   return `${NOTES_PREFIX}${notes}${NOTES_SUFFIX}`;
 }
 
+// The message the notes are sent in, first in a turn's context.
+export function notesMessage(notes: string): UIMessage {
+  return { id: "notes", role: "user", parts: [{ type: "text", text: notesText(notes) }] };
+}
+
 // --- The projection in steps ---
 
 // A message of the projection: a question, or a result (an answer or an analysis) with its metadata.
@@ -203,44 +208,63 @@ export function partsChars(parts: UIMessage["parts"]): number {
   return chars;
 }
 
-function estimateTokens(chars: number): number {
+export function estimateTokens(chars: number): number {
   return Math.ceil(chars / CHARS_PER_TOKEN);
 }
 
-function messagesChars(messages: readonly Projected[]): number {
+export function messagesChars(messages: readonly Projected[]): number {
   return messages.reduce((chars, message) => chars + partsChars(message.parts), 0);
 }
 
-// The context's tokens from a measurement (docs/design.md, Model context: Token count): the last committed turn's last
-// model call, plus characters ÷ 3 of the projection after its result and of `ownChars` (the job's own question or task,
-// at a turn's start). Null without a measurement taken on the current notes.
-export function measuredCount(
-  state: Pick<ContextState, "tokens" | "through" | "notesRev">,
-  notes: Pick<Notes, "rev">,
-  projection: readonly Projected[],
-  ownChars = 0,
-): number | null {
-  const through = state.through === null ? -1 : projection.findIndex((message) => message.id === state.through);
-  if (state.tokens === null || state.notesRev !== notes.rev || through < 0) {
-    return null;
-  }
-  return state.tokens + estimateTokens(messagesChars(projection.slice(through + 1)) + ownChars);
+// A turn's request estimated as the context count takes it: the prefix's characters and its messages', summed, then
+// rounded once.
+export function turnRequestTokens(prefixChars: number, messages: readonly Projected[]): number {
+  return estimateTokens(prefixChars + messagesChars(messages));
 }
 
-// The context's tokens as the model would read it now: the measured count, or, without one, the estimate of the notes
-// and the projection's kept part.
+// What a turn's requests carry besides the conversation, as the count takes it (pr-session/prefix.ts).
+export type CountedPrefix = { chars: number; fingerprint: string | null; bare: string | null; toolChars: number };
+
+// No prefix: a count of the conversation alone, which no measurement counts under.
+export const NO_PREFIX: CountedPrefix = { chars: 0, fingerprint: null, bare: null, toolChars: 0 };
+
+// The context's tokens from a measurement (docs/design.md, Model context: Token count): the last committed turn's last
+// model call, plus characters ÷ 3 of the projection after its result and of `ownChars` (the job's own question or task,
+// at a turn's start). A measurement counts on the current notes under the same prefix; one whose request carried no
+// tool definitions (its tools withdrawn) counts under the same instruction part (`bare`), with the definitions the
+// prefix's requests carry (`toolChars`) estimated on top. Null otherwise. A provider's context-length refusal counts
+// whatever the prefix: it asks the re-run's start to compact.
+export function measuredCount(
+  state: Pick<ContextState, "tokens" | "through" | "notesRev" | "fingerprint" | "overflow">,
+  notes: Pick<Notes, "rev">,
+  projection: readonly Projected[],
+  ownChars: number,
+  prefix: Omit<CountedPrefix, "chars">,
+): number | null {
+  const through = state.through === null ? -1 : projection.findIndex((message) => message.id === state.through);
+  const under = (fingerprint: string | null) => state.fingerprint !== null && state.fingerprint === fingerprint;
+  const added = state.overflow || under(prefix.fingerprint) ? 0 : under(prefix.bare) ? prefix.toolChars : null;
+  if (state.tokens === null || state.notesRev !== notes.rev || through < 0 || added === null) {
+    return null;
+  }
+  return state.tokens + estimateTokens(messagesChars(projection.slice(through + 1)) + ownChars + added);
+}
+
+// The context's tokens as the model would read it now: the measured count, or, without one, the estimate of the
+// prefix, the notes and the projection's kept part.
 export function contextCount(
-  state: Pick<ContextState, "tokens" | "through" | "notesRev">,
+  state: Pick<ContextState, "tokens" | "through" | "notesRev" | "fingerprint" | "overflow">,
   notes: Pick<Notes, "text" | "rev" | "cut">,
   projection: readonly Projected[],
-  ownChars = 0,
+  ownChars: number,
+  prefix: CountedPrefix,
 ): number {
-  const measured = measuredCount(state, notes, projection, ownChars);
+  const measured = measuredCount(state, notes, projection, ownChars, prefix);
   if (measured !== null) {
     return measured;
   }
-  const notesChars = notes.text === null ? 0 : notesText(notes.text).length;
-  return estimateTokens(notesChars + messagesChars(keptPart(projection, notes.cut)) + ownChars);
+  const sent = notes.text === null ? [] : [notesMessage(notes.text)];
+  return turnRequestTokens(prefix.chars + ownChars, [...sent, ...keptPart(projection, notes.cut)]);
 }
 
 // --- The cut (Pi: findCutPoint, prepareCompaction) ---
@@ -266,24 +290,67 @@ function stepIndex(steps: readonly Step[], at: CutPosition | null): number {
   return found < 0 ? 0 : found;
 }
 
+// What a turn's start gives a compaction to choose its cut by: `limit`, the window less the reserve; the request's
+// prefix (`prefixChars`) and the job's own message (`own`), which every candidate's request carries; `summary`, the
+// notes' output limit in tokens, at which each summary a candidate makes is taken; and the files the notes list already
+// (`readFiles`).
+export type CutRoom = {
+  limit: number;
+  prefixChars: number;
+  own: Projected;
+  summary: number;
+  readFiles: readonly string[];
+};
+
+// The first request of a cut at `at`, after the `removed` steps, estimated as the turn's check estimates the one it
+// sends: the notes the cut makes, rendered as they are sent (a summary at the output limit for the history, and
+// another for the turn's checkpoint with its heading when the cut falls inside a turn, then the files the removed steps
+// read), the kept part from the cut, and the job's own message, beside the prefix.
+function candidateTokens(projection: readonly Projected[], removed: readonly Step[], at: Step, room: CutRoom): number {
+  const summary = "x".repeat(room.summary * CHARS_PER_TOKEN);
+  const notes = assembleNotes(summary, at.turnStart ? null : summary, readFiles(removed, room.readFiles));
+  const kept = keptPart(projection, { messageId: at.message.id, step: at.step });
+  return turnRequestTokens(room.prefixChars, [notesMessage(notes), ...kept, room.own]);
+}
+
 // The cut over the projection from the previous cut on: going back from the newest step, at least keptTail estimated
 // tokens are kept (the characters summed, then rounded once, as the context count is), and the cut falls at the start
-// of the step where they are reached (a question, or a step of a result). A cut inside a turn sets the turn's earlier
-// steps apart, and while later cuts stay inside that turn, its newly removed steps go to its checkpoint too; they reach
-// the history only once a cut leaves the turn. Null when nothing before the cut is left to summarize. The cut never
-// moves back: the walk starts at the previous cut, and the projection only grows at its end.
-export function findCut(projection: readonly Projected[], previous: CutPosition | null, keptTail: number): Cut | null {
+// of the step where they are reached (a question, or a step of a result). At a turn's start (`room`), each step start
+// from the newest back to that one is a candidate, and the cut is the oldest candidate whose first request, with the
+// notes it makes rendered as they are sent (candidateTokens), fits the limit. When none fits, the cut keeps the newest
+// step alone, and the turn's check of its first request fails it. A cut inside a turn sets the turn's earlier steps
+// apart, and while later cuts stay inside that turn, its newly removed steps go to its checkpoint too; they reach the
+// history only once a cut leaves the turn. Null when nothing before the cut is left to summarize. The cut never moves
+// back: the walk starts at the previous cut, and the projection only grows at its end.
+export function findCut(
+  projection: readonly Projected[],
+  previous: CutPosition | null,
+  keptTail: number,
+  room?: CutRoom,
+): Cut | null {
   const steps = projectionSteps(projection);
   const start = stepIndex(steps, previous);
   let cut = start;
+  let fits: number | null = null;
   let keptChars = 0;
   for (let index = steps.length - 1; index >= start; index -= 1) {
     const step = steps[index];
     keptChars += step === undefined ? 0 : partsChars(step.parts);
-    if (estimateTokens(keptChars) >= keptTail) {
+    const kept = estimateTokens(keptChars);
+    if (
+      room !== undefined &&
+      step !== undefined &&
+      candidateTokens(projection, steps.slice(start, index), step, room) <= room.limit
+    ) {
+      fits = index;
+    }
+    if (kept >= keptTail) {
       cut = index;
       break;
     }
+  }
+  if (room !== undefined) {
+    cut = fits ?? steps.length - 1;
   }
   const at = steps[cut];
   if (at === undefined || cut <= start) {

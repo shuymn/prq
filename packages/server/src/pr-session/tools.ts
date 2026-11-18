@@ -233,6 +233,45 @@ function diffResult(path: string | undefined) {
   };
 }
 
+// What the provider is told of each tool: its description and its input's schema, the same in every turn.
+const DEFINITIONS = {
+  diff: {
+    description:
+      "The pull request's change. Without a path: the changed files, each with its added and removed line counts. " +
+      "With a path: that file's patch. Long output comes in pages, as read_file's.",
+    inputSchema: valibotSchema(DiffInput),
+  },
+  grep: {
+    description:
+      "Search the repository's text files for a regular expression, in the whole repository or under a path. " +
+      "Each match is path:line:text.",
+    inputSchema: valibotSchema(GrepInput),
+  },
+  list_files: {
+    description: "List the repository's files: all of them, or those under a path.",
+    inputSchema: valibotSchema(ListFilesInput),
+  },
+  read_file: {
+    description:
+      "Read a file of the repository, with line numbers. A long file comes in pages: a note at the end of a page " +
+      "says where the next one starts (startLine, and startChar inside a long line).",
+    inputSchema: valibotSchema(ReadFileInput),
+  },
+};
+
+// The tool definitions as the provider is sent them (each name, description and JSON schema, sorted by name), as JSON:
+// what a turn's requests carry of its tools before any call. Known before the workspace is prepared.
+export async function toolDefinitionsJson(): Promise<string> {
+  const definitions = await Promise.all(
+    Object.entries(DEFINITIONS).map(async ([name, definition]) => ({
+      name,
+      description: definition.description,
+      parameters: await asSchema(definition.inputSchema).jsonSchema,
+    })),
+  );
+  return JSON.stringify(definitions);
+}
+
 // The tools of a turn with a workspace, sorted by name (the order the provider sees them in, for its prompt cache). No
 // tool has needsApproval: the SDK's approval paths write the history around prq's commit.
 export function workspaceTools(context: ToolContext): ToolSet {
@@ -241,10 +280,7 @@ export function workspaceTools(context: ToolContext): ToolSet {
   const twoTips = context.prepared.mergeBase === null ? TWO_TIPS : undefined;
   return {
     diff: tool({
-      description:
-        "The pull request's change. Without a path: the changed files, each with its added and removed line counts. " +
-        "With a path: that file's patch. Long output comes in pages, as read_file's.",
-      inputSchema: valibotSchema(DiffInput),
+      ...DEFINITIONS.diff,
       execute: ({ path, startLine = 1, startChar = 0 }, { abortSignal }) =>
         runPaged(context, abortSignal, {
           argv: toolArgv.diff(base, sha, path),
@@ -254,10 +290,7 @@ export function workspaceTools(context: ToolContext): ToolSet {
         }),
     }),
     grep: tool({
-      description:
-        "Search the repository's text files for a regular expression, in the whole repository or under a path. " +
-        "Each match is path:line:text.",
-      inputSchema: valibotSchema(GrepInput),
+      ...DEFINITIONS.grep,
       execute: ({ pattern, path, ignoreCase }, { abortSignal }) =>
         runPaged(context, abortSignal, {
           argv: toolArgv.grep(sha, pattern, path, ignoreCase),
@@ -266,8 +299,7 @@ export function workspaceTools(context: ToolContext): ToolSet {
         }),
     }),
     list_files: tool({
-      description: "List the repository's files: all of them, or those under a path.",
-      inputSchema: valibotSchema(ListFilesInput),
+      ...DEFINITIONS.list_files,
       execute: ({ path }, { abortSignal }) =>
         runPaged(context, abortSignal, {
           argv: toolArgv.listFiles(sha, path),
@@ -276,10 +308,7 @@ export function workspaceTools(context: ToolContext): ToolSet {
         }),
     }),
     read_file: tool({
-      description:
-        "Read a file of the repository, with line numbers. A long file comes in pages: a note at the end of a page " +
-        "says where the next one starts (startLine, and startChar inside a long line).",
-      inputSchema: valibotSchema(ReadFileInput),
+      ...DEFINITIONS.read_file,
       execute: ({ path, startLine = 1, startChar = 0 }, { abortSignal }) =>
         runPaged(context, abortSignal, {
           argv: toolArgv.readFile(sha, path),
@@ -320,7 +349,7 @@ export async function toolLoop(
 ): Promise<ToolLoop> {
   const room = new ContextRoom(window);
   const tools = workspaceTools({ ...context, room });
-  room.start(measured ?? Math.ceil((await requestChars(request, tools)) / CHARS_PER_TOKEN));
+  room.start(measured ?? Math.ceil((await requestChars(request)) / CHARS_PER_TOKEN));
   let withdrawn: number | null = null;
   return {
     tools,
@@ -340,13 +369,6 @@ export async function toolLoop(
 
 // The characters of a turn's first request, as the provider will be sent it: the system prompt, the tool definitions
 // and the messages.
-async function requestChars(request: { system: string; messages: ModelMessage[] }, tools: ToolSet): Promise<number> {
-  const definitions = await Promise.all(
-    Object.entries(tools).map(async ([name, definition]) => ({
-      name,
-      description: definition.description,
-      parameters: await asSchema(definition.inputSchema).jsonSchema,
-    })),
-  );
-  return request.system.length + JSON.stringify(definitions).length + JSON.stringify(request.messages).length;
+async function requestChars(request: { system: string; messages: ModelMessage[] }): Promise<number> {
+  return request.system.length + (await toolDefinitionsJson()).length + JSON.stringify(request.messages).length;
 }
