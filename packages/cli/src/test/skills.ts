@@ -12,6 +12,7 @@
 //    apply with an old revision gets 409, a remove leaves no skill, and the next turn lists none and offers no tool.
 // 5. G3, with a pull request argument: the scripts step with containers on and the scripted model (skill-scripts.ts),
 //    then the smoke with the model of packages/server/.dev.vars (skill-smoke.ts).
+// 6. G8, with --local and a pull request: the compiled prq as a local agent, yomiyasu registered again (skill-local.ts).
 // It prints what each step saw (never a token or the key) and passes when every step held.
 
 import { Instructions, type PrRef, Skill, SkillPreview, SkillUpdatePreview } from "@prq/protocol";
@@ -20,7 +21,17 @@ import * as v from "valibot";
 import type { GithubApp } from "./reconcile.ts";
 import { SCRIPTED_MODEL, serveScripted } from "./scripted.ts";
 import { checkAfterRemoval, checkContext, type Verdict } from "./skill-context.ts";
-import { api, appGithub, type Github, type Manifest, sha1Blob, skillLink, YOMIYASU } from "./skill-github.ts";
+import {
+  api,
+  appGithub,
+  type Github,
+  type Manifest,
+  sameAsTree,
+  skillLink,
+  skillPages,
+  YOMIYASU,
+} from "./skill-github.ts";
+import { checkLocal } from "./skill-local.ts";
 import { checkScripts } from "./skill-scripts.ts";
 import { checkSmoke } from "./skill-smoke.ts";
 import { type GithubAppSettings, type ModelSettings, startWorker, type Worker } from "./worker.ts";
@@ -70,24 +81,16 @@ function countGithub(): { count: () => number; stop: () => void } {
   };
 }
 
-// The stored copy against the manifest: the same paths, modes and sizes, and each stored file's bytes hashing to its
-// tree blob.
+// The stored copy against the manifest, read through the Hub's bundle and again through /cli/skill as a local agent
+// reads it: the same paths, modes and sizes, and each file's bytes hashing to its tree blob.
 async function checkStored(worker: Worker, manifest: Manifest, verdict: Verdict): Promise<void> {
   const hub = await worker.durableObject("Hub", "hub");
   const bundle = v.parse(Bundle, await hub["skillBundle"]?.(NAME));
-  const stored = bundle.files.map(({ path, mode, size }) => ({ path, mode, size }));
-  const expected = manifest.files.map(({ path, mode, size }) => ({ path, mode, size }));
-  const mismatched = bundle.files.filter((file) => {
-    const tree = manifest.files.find((entry) => entry.path === file.path);
-    return tree === undefined || sha1Blob(file.content) !== tree.blob || file.blob !== tree.blob;
-  });
-  const bytes = bundle.files.reduce((sum, file) => sum + file.content.byteLength, 0);
-  verdict(
-    bundle.skill.sha === manifest.sha && JSON.stringify(stored) === JSON.stringify(expected) && mismatched.length === 0,
-    `stored at ${manifest.sha.slice(0, 7)}: ${bundle.files.length} files, ${bytes} bytes; GitHub's tree: ${manifest.files.length} files; ` +
-      `paths, modes and sizes ${JSON.stringify(stored) === JSON.stringify(expected) ? "equal" : "differ"}; ` +
-      `blob SHA-1 of the stored bytes ${mismatched.length === 0 ? "equal to the tree's" : `differ for ${mismatched.map((f) => f.path).join(", ")}`}`,
-  );
+  const stored = sameAsTree("stored", bundle.files, manifest);
+  verdict(bundle.skill.sha === manifest.sha && stored.held, stored.line);
+  const served = await skillPages(worker, NAME, bundle.skill.rev);
+  const local = sameAsTree(`/cli/skill (${served.pages} pages, rev ${bundle.skill.rev})`, served.files, manifest);
+  verdict(local.held, local.line);
 }
 
 function tuple(skill: { source: unknown; ref: unknown; sha: string; name: string; description: string }) {
@@ -229,7 +232,7 @@ export type SmokeSettings = { app: GithubApp; model: ModelSettings; pr: PrRef };
 export async function checkSkills(
   app: GithubAppSettings,
   print: (line: string) => void,
-  smoke: SmokeSettings | null,
+  { smoke, local }: { smoke: SmokeSettings | null; local: PrRef | null },
 ): Promise<boolean> {
   let ok = true;
   const verdict: Verdict = (held, line) => {
@@ -315,6 +318,10 @@ export async function checkSkills(
       `G7 remove: ${removed.status}; GET /api/instructions lists ${listed.length} skills; the Hub holds ${bundle === null ? "no copy" : "a copy"}`,
     );
     await checkAfterRemoval(worker, scripted, context, print, verdict);
+    // Last: the local agent's presence makes the Worker's new sessions local.
+    if (local !== null) {
+      await checkLocal(worker, github, local, print, verdict);
+    }
     print(`the Worker made ${requests.count()} requests to GitHub's API`);
   } finally {
     requests.stop();

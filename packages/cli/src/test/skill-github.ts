@@ -3,7 +3,7 @@
 
 import { createHash } from "node:crypto";
 
-import { Skill, SkillPreview } from "@prq/protocol";
+import { Skill, SkillFilesResponse, SkillPreview } from "@prq/protocol";
 import { importPKCS8, SignJWT } from "jose";
 import * as v from "valibot";
 import { parse } from "yaml";
@@ -173,4 +173,65 @@ export async function registerSkill(worker: Worker, url: string): Promise<Skill>
     throw new Error(`the confirm of ${name} answered ${confirmed.status} ${JSON.stringify(confirmed.body)}`);
   }
   return v.parse(Skill, confirmed.body);
+}
+
+// A copy of a skill's files, as the Hub stores them, /cli/skill serves them or prq context writes them.
+// A copy's file; blob is the one the copy declares, when it declares one.
+export type SkillCopy = { path: string; mode: string; size: number; blob?: string; content: Uint8Array };
+
+function byPath(a: { path: string }, b: { path: string }): number {
+  return a.path < b.path ? -1 : 1;
+}
+
+// Whether a copy holds exactly the manifest's files: the same paths, modes and sizes, and each file's bytes hashing to
+// the blob the tree names, which a blob the copy declares must equal too; and the line that says so, with the counts.
+export function sameAsTree(
+  label: string,
+  copy: readonly SkillCopy[],
+  manifest: Manifest,
+): { held: boolean; line: string } {
+  const listed = copy.toSorted(byPath).map(({ path, mode, size }) => ({ path, mode, size }));
+  const expected = manifest.files.toSorted(byPath).map(({ path, mode, size }) => ({ path, mode, size }));
+  const mismatched = copy.filter((file) => {
+    const tree = manifest.files.find((entry) => entry.path === file.path);
+    return (
+      tree === undefined || sha1Blob(file.content) !== tree.blob || (file.blob !== undefined && file.blob !== tree.blob)
+    );
+  });
+  const bytes = copy.reduce((sum, file) => sum + file.content.byteLength, 0);
+  const same = JSON.stringify(listed) === JSON.stringify(expected);
+  return {
+    held: same && mismatched.length === 0,
+    line:
+      `${label} at ${manifest.sha.slice(0, 7)}: ${copy.length} files, ${bytes} bytes; GitHub's tree: ${manifest.files.length} files; ` +
+      `paths, modes and sizes ${same ? "equal" : "differ"}; blob SHA-1 of the bytes ` +
+      (mismatched.length === 0
+        ? "equal to the tree's"
+        : `differ for ${mismatched.map((file) => file.path).join(", ")}`),
+  };
+}
+
+// Every page of a skill's files at a revision, through /cli/skill as a local agent reads them (with the host's token
+// here, which Access lets through as it does the agent's).
+export async function skillPages(
+  worker: Worker,
+  name: string,
+  rev: number,
+): Promise<{ pages: number; files: SkillCopy[] }> {
+  const files: SkillCopy[] = [];
+  let pages = 0;
+  let cursor: string | null = null;
+  do {
+    const res = await api(worker, "POST", "/cli/skill", cursor === null ? { name, rev } : { name, rev, cursor });
+    if (res.status !== 200) {
+      throw new Error(`/cli/skill answered ${res.status} ${JSON.stringify(res.body)}`);
+    }
+    const page = v.parse(SkillFilesResponse, res.body);
+    pages += 1;
+    files.push(
+      ...page.files.map((file) => ({ ...file, content: new Uint8Array(Buffer.from(file.content, "base64")) })),
+    );
+    cursor = page.nextCursor;
+  } while (cursor !== null && pages < 16);
+  return { pages, files };
 }

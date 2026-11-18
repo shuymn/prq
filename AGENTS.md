@@ -43,10 +43,13 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
   (`--window` sets `MODEL_CONTEXT_TOKENS`), and deleted only by `pnpm run dev-vars remove`; `pnpm run dev-vars status`
   names the variables it sets. No command prints a value but the window `write` reports
   (`packages/cli/src/test/dev-vars.ts`).
-- `pnpm run check:skills [<owner>/<repo>#<number>]` in `packages/cli` previews, registers, updates and removes the
-  public skill `skills/yomiyasu` of `nanaism/yomiyasu` through the Worker against real GitHub, compares the stored copy
-  with what it reads from GitHub itself, and runs cloud turns with it and a second skill under a scripted model,
-  checking what their requests hold. Without an argument it needs only the GitHub App in `packages/server/.dev.vars`
+- `pnpm run check:skills [--local <owner>/<repo>#<number> | <owner>/<repo>#<number>]` in `packages/cli` previews,
+  registers, updates and removes the public skill `skills/yomiyasu` of `nanaism/yomiyasu` through the Worker against
+  real GitHub, compares the stored copy, as the Hub holds it and as `/cli/skill` serves it, with what it reads from
+  GitHub itself, and runs cloud turns with it and a second skill under a scripted model, checking what their requests
+  hold. With `--local` and a public pull request it then runs the compiled `prq` as a local agent on that pull request
+  (claim, context, a refreshed context, checkout from a clone it makes in the OS temp directory, which fetches the
+  commit from GitHub) and compares the files `prq context` wrote with GitHub's tree, still with the App alone. Without an argument it needs only the GitHub App in `packages/server/.dev.vars`
   (no model, no Docker); with a pull request and Docker it then runs yomiyasu's scripts in the real container in a
   turn under a scripted model, probes the container's script runs (ownership and modes, the reset cleanup, a runner
   given no frame, lost scratch, orphans, a dead runner), and runs a smoke of skill activation and scripts with the
