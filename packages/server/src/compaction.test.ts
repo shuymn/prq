@@ -703,15 +703,21 @@ describe("a small window", () => {
     const model = new ScriptedModel().add(
       answerScript(`${"a".repeat(60_000)}${decided}`, { input: 800, output: 12_010 }),
       answerScript("b".repeat(18_000), { input: 15_000, output: 3600 }),
+      // A summary for each request the compaction could make, so that only the step's failure stops it; the next turn
+      // takes the first one left as its answer.
       notes("the first question"),
-      answerScript("answer three"),
+      notes("the long answer"),
+      notes("the turn's start"),
     );
     model.contextTokens = WINDOW;
     useCloudModel(model);
-    for (const asked of [[Q1], [Q1, Q2], [Q1, Q2, Q3]]) {
+    for (const asked of [[Q1], [Q1, Q2]]) {
       await client.chat(asked);
       await untilState(stub, asked.at(-1)?.id ?? "", "done");
     }
+    await vi.waitFor(() =>
+      expect([...events(logs, "prq.compaction.failed"), ...events(logs, "prq.compaction.done")]).toHaveLength(1),
+    );
 
     // The batch before the answer was summarized; the answer itself was sent to no summary.
     const prompts = model.calls.filter(isSummaryCall).map(summaryPrompt);
@@ -724,6 +730,8 @@ describe("a small window", () => {
     expect(events(logs, "prq.compaction.failed")).toMatchObject([
       { calls: 1, reason: expect.stringContaining("does not fit") },
     ]);
+    await client.chat([Q1, Q2, Q3]);
+    await untilState(stub, "q3", "done");
     expect(
       turnPrompts(model)
         .at(-1)
