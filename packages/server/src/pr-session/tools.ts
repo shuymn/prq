@@ -3,7 +3,6 @@ import {
   asSchema,
   isLoopFinished,
   type LanguageModelCallEndEvent,
-  type ModelMessage,
   type PrepareStepResult,
   tool,
   type ToolSet,
@@ -13,7 +12,7 @@ import * as v from "valibot";
 import { toolArgv } from "../workspace-git.ts";
 import { STREAM_TIMEOUT } from "./model.ts";
 import { cutAt, fitPage, MIN_PAGE_CHARS, type Page, type PageRequest } from "./pages.ts";
-import { CHARS_PER_TOKEN, ContextRoom } from "./room.ts";
+import { ContextRoom } from "./room.ts";
 import {
   type CommandResult,
   type PreparedWorkspace,
@@ -233,6 +232,45 @@ function diffResult(path: string | undefined) {
   };
 }
 
+// What the provider is told of each tool: its description and its input's schema, the same in every turn.
+const DEFINITIONS = {
+  diff: {
+    description:
+      "The pull request's change. Without a path: the changed files, each with its added and removed line counts. " +
+      "With a path: that file's patch. Long output comes in pages, as read_file's.",
+    inputSchema: valibotSchema(DiffInput),
+  },
+  grep: {
+    description:
+      "Search the repository's text files for a regular expression, in the whole repository or under a path. " +
+      "Each match is path:line:text.",
+    inputSchema: valibotSchema(GrepInput),
+  },
+  list_files: {
+    description: "List the repository's files: all of them, or those under a path.",
+    inputSchema: valibotSchema(ListFilesInput),
+  },
+  read_file: {
+    description:
+      "Read a file of the repository, with line numbers. A long file comes in pages: a note at the end of a page " +
+      "says where the next one starts (startLine, and startChar inside a long line).",
+    inputSchema: valibotSchema(ReadFileInput),
+  },
+};
+
+// The tool definitions as the provider is sent them (each name, description and JSON schema, sorted by name), as JSON:
+// what a turn's requests carry of its tools before any call. Known before the workspace is prepared.
+export async function toolDefinitionsJson(): Promise<string> {
+  const definitions = await Promise.all(
+    Object.entries(DEFINITIONS).map(async ([name, definition]) => ({
+      name,
+      description: definition.description,
+      parameters: await asSchema(definition.inputSchema).jsonSchema,
+    })),
+  );
+  return JSON.stringify(definitions);
+}
+
 // The tools of a turn with a workspace, sorted by name (the order the provider sees them in, for its prompt cache). No
 // tool has needsApproval: the SDK's approval paths write the history around prq's commit.
 export function workspaceTools(context: ToolContext): ToolSet {
@@ -241,10 +279,7 @@ export function workspaceTools(context: ToolContext): ToolSet {
   const twoTips = context.prepared.mergeBase === null ? TWO_TIPS : undefined;
   return {
     diff: tool({
-      description:
-        "The pull request's change. Without a path: the changed files, each with its added and removed line counts. " +
-        "With a path: that file's patch. Long output comes in pages, as read_file's.",
-      inputSchema: valibotSchema(DiffInput),
+      ...DEFINITIONS.diff,
       execute: ({ path, startLine = 1, startChar = 0 }, { abortSignal }) =>
         runPaged(context, abortSignal, {
           argv: toolArgv.diff(base, sha, path),
@@ -254,10 +289,7 @@ export function workspaceTools(context: ToolContext): ToolSet {
         }),
     }),
     grep: tool({
-      description:
-        "Search the repository's text files for a regular expression, in the whole repository or under a path. " +
-        "Each match is path:line:text.",
-      inputSchema: valibotSchema(GrepInput),
+      ...DEFINITIONS.grep,
       execute: ({ pattern, path, ignoreCase }, { abortSignal }) =>
         runPaged(context, abortSignal, {
           argv: toolArgv.grep(sha, pattern, path, ignoreCase),
@@ -266,8 +298,7 @@ export function workspaceTools(context: ToolContext): ToolSet {
         }),
     }),
     list_files: tool({
-      description: "List the repository's files: all of them, or those under a path.",
-      inputSchema: valibotSchema(ListFilesInput),
+      ...DEFINITIONS.list_files,
       execute: ({ path }, { abortSignal }) =>
         runPaged(context, abortSignal, {
           argv: toolArgv.listFiles(sha, path),
@@ -276,10 +307,7 @@ export function workspaceTools(context: ToolContext): ToolSet {
         }),
     }),
     read_file: tool({
-      description:
-        "Read a file of the repository, with line numbers. A long file comes in pages: a note at the end of a page " +
-        "says where the next one starts (startLine, and startChar inside a long line).",
-      inputSchema: valibotSchema(ReadFileInput),
+      ...DEFINITIONS.read_file,
       execute: ({ path, startLine = 1, startChar = 0 }, { abortSignal }) =>
         runPaged(context, abortSignal, {
           argv: toolArgv.readFile(sha, path),
@@ -302,51 +330,33 @@ export type ToolLoop = {
   tools: ToolSet;
   prepareStep: (options: { stepNumber: number }) => PrepareStepResult<ToolSet> | undefined;
   onLanguageModelCallEnd: (event: Pick<LanguageModelCallEndEvent, "usage" | "content">) => void;
-  // The step from which the tools were withdrawn, if they were.
-  withdrawnAt: () => number | null;
+  // Whether the tools were withdrawn, from some step on.
+  withdrawn: () => boolean;
 };
 
 // A turn with a workspace: its tools, and the room that withdraws them (no tools offered) when the next request would
 // leave no room for a result, so the model answers from what it has read. Under toolChoice "none", which would keep the
 // tool definitions in the cached prefix, a provider wrote its tool call as the answer's text (DeepSeek), and an answer
-// the author can read is worth more than that prefix. The first request's size is the context count when the session
-// has a measurement (`measured`), else the request's estimate; the room is measured again at the end of each model
-// call, and tools run after it.
-export async function toolLoop(
-  context: Omit<ToolContext, "room">,
-  window: number,
-  request: { system: string; messages: ModelMessage[] },
-  measured: number | null = null,
-): Promise<ToolLoop> {
+// the author can read is worth more than that prefix. The first request's size is `start`, the caller's: the context
+// count when the session has a measurement, else the request's estimate. The room is measured again at the end of each
+// model call, and tools run after it.
+export function toolLoop(context: Omit<ToolContext, "room">, window: number, start: number): ToolLoop {
   const room = new ContextRoom(window);
   const tools = workspaceTools({ ...context, room });
-  room.start(measured ?? Math.ceil((await requestChars(request, tools)) / CHARS_PER_TOKEN));
-  let withdrawn: number | null = null;
+  room.start(start);
+  let withdrawn = false;
   return {
     tools,
-    prepareStep: ({ stepNumber }) => {
+    prepareStep: () => {
       if (room.leftChars() >= MIN_RESULT_CHARS) {
         return undefined;
       }
-      withdrawn ??= stepNumber;
+      withdrawn = true;
       return { activeTools: [] };
     },
     onLanguageModelCallEnd: ({ usage, content }) => {
       room.measure(usage, JSON.stringify(content).length);
     },
-    withdrawnAt: () => withdrawn,
+    withdrawn: () => withdrawn,
   };
-}
-
-// The characters of a turn's first request, as the provider will be sent it: the system prompt, the tool definitions
-// and the messages.
-async function requestChars(request: { system: string; messages: ModelMessage[] }, tools: ToolSet): Promise<number> {
-  const definitions = await Promise.all(
-    Object.entries(tools).map(async ([name, definition]) => ({
-      name,
-      description: definition.description,
-      parameters: await asSchema(definition.inputSchema).jsonSchema,
-    })),
-  );
-  return request.system.length + JSON.stringify(definitions).length + JSON.stringify(request.messages).length;
 }

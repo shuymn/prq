@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { startedAfterCompaction } from "./compaction.ts";
+import { UsageError } from "./app-check.ts";
+import {
+  analysisLanguage,
+  analysisOnlyVerdict,
+  checkVerdict,
+  inLanguage,
+  promptsHeld,
+  proseLetters,
+  startedAfterCompaction,
+} from "./compaction.ts";
 
 // How the compaction check (compaction.ts) decides that the questions asked during a compaction started after it
-// ended, from log lines as the Worker's log prints them.
+// ended, from log lines as the Worker's log prints them; which prompts the requests it recorded hold; and the language
+// of an answer's prose.
 
 const STARTED =
   "{ event: 'prq.compaction.started', pr: 'acme~widgets~7', jobId: 'job-16', notesRev: 1, cutMessageId: 'answer-9', cutStep: 0, summarizedSteps: 22, turnPrefixSteps: 1 }";
@@ -33,5 +43,123 @@ describe("questions started after the compaction", () => {
     ["a job started before its end", [STARTED, jobStarted("job-q1"), DONE, jobStarted("job-q2")]],
   ] as const)("does not hold when %s", ([, lines]) => {
     expect(startedAfterCompaction(lines, 0, STARTED, ["job-q1", "job-q2"]).after).toBe(false);
+  });
+});
+
+function block(prompt: string): string {
+  return `\n<host-instructions>\n${prompt}\n</host-instructions>\n`;
+}
+
+// A recorded request's body with this system message and one user message.
+function request(system: string, user = ""): string {
+  return JSON.stringify({
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  });
+}
+
+describe("the prompts each recorded request holds", () => {
+  const prompts = { analysis: "Write the summary in Japanese.", answer: 'Answer "briefly".' };
+  const analysis = `You work on one GitHub pull request.${block(prompts.analysis)}Your job: summarize the pull request at head 1.`;
+  const answer = `You work on one GitHub pull request.${block(prompts.answer)}Your job: answer the last question.`;
+  const summary = "You are a context summarization assistant. Your task is to read a conversation.";
+
+  it("holds when each turn holds its own prompt and no request holds the other", () => {
+    expect(promptsHeld([request(analysis), request(answer), request(summary, "the conversation")], prompts)).toEqual({
+      counts: { analysis: 1, answer: 1, summary: 1, other: 0 },
+      wrong: [],
+    });
+  });
+
+  it("names each request that holds the other prompt, misses its own, or is neither kind", () => {
+    const { counts, wrong } = promptsHeld(
+      [
+        request(analysis, prompts.answer),
+        request("You work on one GitHub pull request.\nYour job: answer the last question."),
+        request(summary, `notes: ${prompts.analysis}`),
+        // A request with no body, such as a model list.
+        "",
+      ],
+      prompts,
+    );
+    expect(counts).toEqual({ analysis: 1, answer: 1, summary: 1, other: 1 });
+    expect(wrong).toEqual([
+      "request 1 (analysis): holds the answer prompt",
+      "request 2 (answer): its system message does not hold the answer prompt",
+      "request 3 (summary): holds the analysis prompt",
+      "request 4: neither a turn nor a summary request",
+    ]);
+  });
+});
+
+describe("an answer's prose", () => {
+  it("counts letters outside code, headings, link targets and markup", () => {
+    const text = [
+      "# Heading words",
+      "変更は**設定**を[読む](https://example.com/path)。",
+      "```ts",
+      "const ignored = 1;",
+      "```",
+      "- `code` and text",
+    ].join("\n");
+    expect(proseLetters(text)).toEqual({ letters: 15, japanese: 8, latin: 7 });
+  });
+
+  it("is in a language from 200 letters at its share", () => {
+    expect(inLanguage("a".repeat(199), "english").ok).toBe(false);
+    expect(inLanguage("a".repeat(200), "english").ok).toBe(true);
+    expect(inLanguage(`${"あ".repeat(100)}${"a".repeat(100)}`, "japanese").ok).toBe(true);
+    expect(inLanguage(`${"あ".repeat(99)}${"a".repeat(101)}`, "japanese").ok).toBe(false);
+    expect(inLanguage(`${"a".repeat(180)}${"あ".repeat(20)}`, "english").ok).toBe(true);
+    expect(inLanguage(`${"a".repeat(179)}${"あ".repeat(21)}`, "english").ok).toBe(false);
+  });
+});
+
+describe("the analysis's language in the verdicts", () => {
+  // English prose of more than 200 letters, English progress text as an analysis at a small window stored it, and a
+  // Japanese summary.
+  const english =
+    "This pull request stores the host's two prompts in the Hub and gives each cloud turn the prompt of its job's " +
+    "kind. The system prompt puts the host's prompt after the core's lines and before the pull request's facts, and " +
+    "compaction counts the prefix, so a long prompt never pushes a request past the model's window.";
+  const progress =
+    "I'll start by looking at the changed files. Let me read the diff first, then the tests that cover the new " +
+    "prompts, so that I can see how the summary is put together before I write it.";
+  const japanese = `## 概要\n${"この変更はホストのプロンプトを保存する。".repeat(12)}`;
+  const steps = { compacted: true, unchanged: true, queued: true, refused: true, prompts: true };
+
+  it("the measure: the English prose is long enough, and in English", () => {
+    expect(inLanguage(english, "english").ok).toBe(true);
+    expect(proseLetters(english).letters).toBeGreaterThan(200);
+  });
+
+  it("the analysis-only run's: in the expected language only", () => {
+    expect(analysisOnlyVerdict("done", english, "japanese")).toBe(false);
+    expect(analysisOnlyVerdict("done", progress, "japanese")).toBe(false);
+    expect(analysisOnlyVerdict("done", japanese, "japanese")).toBe(true);
+    expect(analysisOnlyVerdict("done", english, "english")).toBe(true);
+    expect(analysisOnlyVerdict("done", japanese, "english")).toBe(false);
+    expect(analysisOnlyVerdict("done", english, null)).toBe(true);
+    expect(analysisOnlyVerdict("failed", japanese, "japanese")).toBe(false);
+  });
+
+  it("the whole check's: its steps, and the analysis in the expected language", () => {
+    expect(checkVerdict(steps, english, "japanese")).toBe(false);
+    expect(checkVerdict(steps, progress, "japanese")).toBe(false);
+    expect(checkVerdict(steps, japanese, "japanese")).toBe(true);
+    expect(checkVerdict(steps, english, "english")).toBe(true);
+    expect(checkVerdict(steps, progress, null)).toBe(true);
+    expect(checkVerdict({ ...steps, prompts: false }, japanese, "japanese")).toBe(false);
+  });
+
+  it("takes the expected language from --analysis-language, whatever the prompt says", () => {
+    expect(analysisLanguage("ja")).toBe("japanese");
+    expect(analysisLanguage("en")).toBe("english");
+    expect(analysisLanguage(undefined)).toBeNull();
+    expect(() => analysisLanguage("fr")).toThrow(new UsageError("--analysis-language takes ja or en, not fr"));
+    // A key every object inherits is not a language either.
+    expect(() => analysisLanguage("constructor")).toThrow(UsageError);
   });
 });

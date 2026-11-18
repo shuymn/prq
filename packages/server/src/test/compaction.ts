@@ -2,12 +2,13 @@
 // and the notes and the context count as the session stores them.
 
 import type { AIChatAgent } from "@cloudflare/ai-chat";
-import type { MessageMetadata } from "@prq/protocol";
+import type { Job, MessageMetadata } from "@prq/protocol";
 import type { UIMessage } from "ai";
 import { runInDurableObject } from "cloudflare:test";
 
 import { SUMMARIZATION_SYSTEM_PROMPT } from "../pr-session/compaction.ts";
 import type { PrSession } from "../pr-session/index.ts";
+import { instructionPrefix } from "../pr-session/prefix.ts";
 import { CHARS_PER_TOKEN } from "../pr-session/room.ts";
 import type { CallOptions } from "./model.ts";
 
@@ -31,6 +32,23 @@ export function summaryPrompt(call: CallOptions): string {
     throw new Error("a summary call holds one user message");
   }
   return message.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+}
+
+// The fingerprint a turn's measurement is stored under: of its kind's prompt, with or without its tools.
+export async function prefixFingerprint({
+  kind = "answer",
+  tools = false,
+  hostPrompt = "",
+}: { kind?: "analysis" | "answer"; tools?: boolean; hostPrompt?: string } = {}): Promise<string> {
+  const pr = { owner: "octo", repo: "fingerprint", number: 1 };
+  const job: Job = {
+    jobId: "00000000-0000-4000-8000-000000000000",
+    pr,
+    run: 1,
+    target: kind === "analysis" ? { kind, headSha: "0".repeat(40) } : { kind, messageId: "q" },
+    workspaceSha: tools ? "0".repeat(40) : null,
+  };
+  return (await instructionPrefix({ pr, details: null, job, tools, hostPrompt })).fingerprint;
 }
 
 export type NotesRow = {
@@ -57,6 +75,7 @@ export type ContextRow = {
   context_tokens: number | null;
   context_through: string | null;
   context_notes_rev: number | null;
+  context_fingerprint: string | null;
   compaction_failed_through: string | null;
 };
 
@@ -64,8 +83,8 @@ export async function contextRow(stub: DurableObjectStub<PrSession>): Promise<Co
   return runInDurableObject(stub, (_, state) =>
     state.storage.sql
       .exec<ContextRow>(
-        `SELECT context_tokens, context_through, context_notes_rev, compaction_failed_through FROM prq_session
-         WHERE id = 1`,
+        `SELECT context_tokens, context_through, context_notes_rev, context_fingerprint, compaction_failed_through
+         FROM prq_session WHERE id = 1`,
       )
       .one(),
   );

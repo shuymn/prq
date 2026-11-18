@@ -147,21 +147,24 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   before a retry, whichever order the retry and the late claim came in, or one labelled with a workspace it was not
   written at.
 - `context` gives a local agent what it works on its claimed job from: the pull request (canonical), its details
-  (null before its first webhook), the job as its claim fixed it, and the conversation. The job's `workspaceSha` is
-  fixed at the claim: an analysis's head; for an answer, the head of the latest completed analysis, else the current
-  head, else none. Only the job's current claim, held by the same agent ID, gets it; any other claim gets 409
-  `stale_claim`. The conversation comes in pages, and a whole response (the pull request, the details, the job, the
-  messages and the cursor) takes at most 8 MiB as UTF-8 JSON: a response crosses a Durable Object RPC call, whose limit
-  is 32 MiB of serialized data, and V8 serializes a string with characters beyond Latin-1 at two bytes per code unit,
-  so 8 MiB keeps a page well inside the limit. A page leaves room for the details at their longest (the lengths
-  `PrDetails` allows, above GitHub's own) and for a cursor naming the conversation's longest message ID. A response's
-  `nextCursor` names where the next page starts (a message and an offset in its text) and is null on the last page.
-  The conversation is append-only, so a cursor stays valid while messages are added; the next page then includes them.
-  A message larger than a page comes in parts, each carrying `part` (its offset and the message's whole length), and
-  its parts joined are the message. A cursor that names no place in the conversation gets 400 `bad_request`. A page
-  that cannot hold even the first character of its message within the budget is refused with 500 `internal` (logged
-  as `prq.context.overflow`) rather than sent over it; bounded IDs and details keep that to rows stored before the
-  bounds.
+  (null before its first webhook), the job as its claim fixed it, and the conversation; the first page (no cursor) also
+  carries the host's two prompts (`instructions`; see [Instructions and skills](#instructions-and-skills)), and later
+  pages carry none. The job's `workspaceSha` is fixed at the claim: an analysis's head; for an answer, the head of the
+  latest completed analysis, else the current head, else none. Only the job's current claim, held by the same agent ID,
+  gets it; any other claim gets 409 `stale_claim`. The prompts are read from the Hub within 10 s (a read that fails or
+  takes longer is 503 `unavailable`, which the CLI retries), and the claim is checked again after that read, whether it
+  answered or failed, so a retry that ended the claim meanwhile is 409, never 503. The conversation comes in pages, and
+  a whole response (the pull request, the details, the job, the prompts, the messages and the cursor) takes at most
+  8 MiB as UTF-8 JSON: a response crosses a Durable Object RPC call, whose limit is 32 MiB of serialized data, and V8
+  serializes a string with characters beyond Latin-1 at two bytes per code unit, so 8 MiB keeps a page well inside the
+  limit. A page leaves room for the details at their longest (the lengths `PrDetails` allows, above GitHub's own), for
+  the prompts as read on the first page, and for a cursor naming the conversation's longest message ID. A response's
+  `nextCursor` names where the next page starts (a message and an offset in its text) and is null on the last page. The
+  conversation is append-only, so a cursor stays valid while messages are added; the next page then includes them. A
+  message larger than a page comes in parts, each carrying `part` (its offset and the message's whole length), and its
+  parts joined are the message. A cursor that names no place in the conversation gets 400 `bad_request`. A page that
+  cannot hold even the first character of its message within the budget is refused with 500 `internal` (logged as
+  `prq.context.overflow`) rather than sent over it; bounded IDs and details keep that to rows stored before the bounds.
 - A job carries no text of unbounded length, in a claim or in a context: an answer's question is the message its
   target names, which the agent reads from the context's pages. A claim's response therefore stays small however long
   the question is.
@@ -429,7 +432,7 @@ UI, webhook and CLI input all enter through PrSession.
   | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
   | `prq wait [--timeout <seconds>]` (default 1500) | Polls `/cli/wait`, each poll asking for the time left up to 25 s, until it answers `ready`: `{"status":"ready","next":"claim"}`, 0. When the deadline passes after an answered poll, `{"status":"timeout","next":"wait"}`, 2; while the server was unavailable, 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
   | `prq claim`                                     | Calls `/cli/claim`. A job: saves the claim as the agent's record, then prints the server's answer with `dir` (the claim's job directory), `answer` (`<dir>/answer.md`), `saved` (whether that file exists) and `next` (`answer` when it does, else `context`), 0. No job: removes the record and prints `{"job":null,"next":"wait"}`, 0. A record of another directory that the claim replaced or removed gets a stderr line: that claim ended, and its answer must not be submitted                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-  | `prq context`                                   | Reads `/cli/context` under the agent's record, from no cursor until `nextCursor` is null, and joins each message sent in parts: a part continues where the text collected so far ends, with the same whole length, and pages that do not join that way end with exit 1. Writes `context.json` (the pull request, the details, the job and the whole messages) into the claim's directory and, for an answer job, `question.md`: the text of the user message `job.target.messageId` names. Prints `dir`, `pr`, `details`, `job`, `messages` (their count), `context`, `question` (its path, or null), `answer` and `next` (`checkout` when the job has a workspace, `workspaceSha`, else `answer`), 0. When the claim no longer holds (409 `stale_claim`, 404 `unknown_job`): `{"status":"stale_claim","next":"claim"}`, 4, the record kept for the next claim to replace                                                                                                                                                                                                                                                                                                                           |
+  | `prq context`                                   | Reads `/cli/context` under the agent's record, from no cursor until `nextCursor` is null, and joins each message sent in parts: a part continues where the text collected so far ends, with the same whole length, and pages that do not join that way end with exit 1. Publishes into the claim's directory, in this order: a new instruction set holding the job kind's prompt as `prompt.md` (none when the prompt is blank), for an answer job `question.md` (the text of the user message `job.target.messageId` names), and last `context.json` (the pull request, the details, the job, both prompts with the set's directory, and the whole messages), whose write publishes the set (see Instruction sets below). Prints `dir`, `pr`, `details`, `job`, `messages` (their count), `context`, `question` (its path, or null), `prompt` (its path, or null), `answer` and `next` (`checkout` when the job has a workspace, `workspaceSha`, else `answer`), 0. When the claim no longer holds (409 `stale_claim`, 404 `unknown_job`): `{"status":"stale_claim","next":"claim"}`, 4, the record kept for the next claim to replace                                                             |
   | `prq checkout [--clone <dir>]`                  | Adds a detached worktree of the job's workspace (`workspaceSha`) at `<dir>/worktree`, from the host's clone (see Checkout below), first reading the context as `prq context` does when `context.json` is missing. Prints `path`, `sha`, `base` (the base commit, or null with a stderr notice when it could not be fetched), `clone` and `next` (`answer`), 0. A job without a workspace (a question before any push): `{"path":null,"sha":null,"base":null,"next":"answer"}`, 0, and no git runs. No clone found, a commit that cannot be fetched, git failing or not finishing in time, the worktree moved off the job's commit, or a worktree path holding what prq did not make: exit 1, the files left as they are. The claim no longer holds while it reads the context: as `prq context`, 4                                                                                                                                                                                                                                                                                                                                                                                                  |
   | `prq submit`                                    | Sends `answer.md` of the record's directory, as written, under the record's claim and run; a missing or blank answer, or one over `MAX_ANSWER_CHARS` UTF-16 code units, is exit 1 before any request. Accepted, or `duplicate` for a resend after a lost response: removes the record and prints `{"status":…,"messageId":…,"next":"wait"}`, 0. 409 `stale_claim`: claims once (as `prq claim` does, its claim becoming the record) and resubmits under the new `claimId` with the original run only when the claim returns the same job in the same run at the same `workspaceSha` (a resume fixes the workspace again, and the stored answer is labelled with it; see [Owner and jobs](#owner-and-jobs)); otherwise drops the answer and prints `{"status":"dropped","reason":…,"claim":…,"next":…}`, 4, with `reason` `workspace_moved` when only the workspace moved, else the refusal's code, and `claim` and `next` as `prq claim` gives them (`claim` null for no job). 404 `unknown_job` or 409 `target_mismatch`: dropped without a claim, the record removed. 500 or a server unavailable past the retry window: exit 1, the record and the answer kept, so a rerun sends the same answer |
   | `prq reconcile`                                 | For the start of a session. With a record, reads the first page of its context (a read; a claim would take new work): the claim holds, and `next` is `answer` when an answer is saved in its directory, else `context`; 409 `stale_claim`, and the record and its directory stay with `next` `claim`, since a late claim of the same agent replaces the `claimId` as a retry does, and the next claim tells whether it resumed the same run (same directory, its saved answer found again); 404 `unknown_job`, and the record is removed with `next` `wait`. No record: `next` `wait`, no request; an unreadable one: a stderr line and `next` `claim`. Then cleans up (see Cleanup below). Prints `claim` (the record's claim with `dir`, `answer` and `saved` as `prq claim` prints them, or null), `removed` (the paths removed), `kept` (`{agentId, dir}` for each directory another agent's record names, `{dir, reason}` for each whose worktree path holds what prq did not make, and for `jobs/` itself when it is a symlink) and `next`, 0                                                                                                                                                 |
@@ -527,6 +530,7 @@ UI, webhook and CLI input all enter through PrSession.
   agents/<sha256(agentId) hex>.json         the agent's current claim: {agentId, claim, savedAt}
   jobs/<jobId>-r<run>-<workspaceSha|none>/  one claim's work: its job, run and workspace
     context.json  question.md               written by prq context (question.md for an answer job)
+    instructions/set-<random>/              one per prq context run: prompt.md, the job kind's prompt (none if blank)
     answer.md                               written by the AI, read by prq submit
     checkout.json                           written by prq checkout before it adds the worktree: {clone, sha}
     worktree/                               the git worktree; prq writes nothing inside it
@@ -544,6 +548,14 @@ UI, webhook and CLI input all enter through PrSession.
   the middle of a job. The record, `context.json` and `question.md` are written through a temporary file and a rename,
   so a reader sees a whole file. The state moves as a whole, by pointing `PRQ_HOME` elsewhere: the records and the job
   directories they name stay under one root, which Cleanup relies on.
+
+- **Instruction sets.** What can change between two `prq context` runs of one job (the host's prompt) is written as a
+  set: a new directory `instructions/set-<random>/`, which `mkdtemp` makes, so its name is one no other set has had,
+  and published by `context.json`, written last, which names the set's directory. A reader that follows
+  `context.json`, or a path a run printed, sees one complete set, never a mix of two runs'. A run never removes a set
+  another run published, so every path any run printed keeps opening, whichever run published last; the sets go with
+  the job directory. A failure (a page, a write) removes only the directory the run made, and leaves the published set
+  and `context.json` as they were. The cost is a few files per run.
 
 ### Versions
 
@@ -675,6 +687,16 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
 
 - **Two free-form prompts**, edited in settings: one for analysis (the summaries) and one for answers. An example is
   "Write in Japanese. Polish the final text with the yomiyasu skill." A prompt is plain text; the core does not parse it.
+  The Hub stores them (`prq_prompts`; one never saved is empty), each at most 8,000 characters (`PROMPT_CHARS`);
+  `GET /api/instructions` reads them and `PUT /api/prompts/:kind` saves one. A job gets its kind's prompt only: an
+  analysis the analysis prompt, an answer the answer prompt. A cloud turn reads it once, at its start, before the
+  at-start compaction and any model call, and keeps it for the whole turn: a save applies from the next turn (a new job,
+  a retry, a re-run), since a system prompt changed inside a turn would miss the prompt cache and give one answer two
+  instructions. A done analysis is not run again for a new prompt; the next push uses it. When the Hub does not answer
+  that read within 10 s, the job fails `instructions: …` before any model call, and the host can retry it: a summary
+  written without the host's prompt would be stored as done.
+- **The core names no language.** "Answer in the language of the question." is an answer prompt, not a rule of the
+  core: an analysis has no question to mirror, so such a rule would make summaries and answers follow different rules.
 - **Skills in the Agent Skills format.** A skill is a directory with a `SKILL.md` (frontmatter with `name` and
   `description`) and optional `references/` and `scripts/`. The host registers a skill by the GitHub link to its
   `SKILL.md` (`/blob/<ref>/<path>/SKILL.md`), which names the repository, ref and path. The ref is a commit SHA (a
@@ -697,8 +719,9 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
   as far as the skill's `allowed-tools` frontmatter permits. In the Agent Skills format `allowed-tools` lists
   pre-approved tools, and prq has no interactive approval step, so a skill that declares none cannot run scripts: it
   contributes instructions and references only. The pinned SHA means a skill's code does not change under the host.
-- **Local runner.** `prq context` returns the two prompts and materializes the registered skills into the job's
-  directory beside its worktree (for example `skills/<name>/`), so the local AI reads them as files. Never inside the
+- **Local runner.** `/cli/context` carries both prompts, and `prq context` writes the job kind's as `prompt.md` (both
+  stay in `context.json`) and materializes the registered skills into the job's directory beside its worktree (for
+  example `skills/<name>/`), so the local AI reads them as files. Never inside the
   worktree: a commit controls every path in its tree (see Checkout in [Local CLI](#local-cli-prq)), and the files do
   not depend on whether `checkout` ran first. It reads the conversation page by page, following `nextCursor`, joins a
   message sent in parts, finds an answer's question there by the message ID its job names (see
@@ -730,8 +753,34 @@ or an analysis's task.
   the alternative; they drop the results committed after the question was stored and keep earlier open questions.
 - **The job's own part.** An answer's question is read by the job's target, never as the last user message. An
   analysis gets the task "Summarize the pull request at head `<sha>`.", which is not stored. Before them comes the
-  system prompt: the pull request, its details (or that no webhook has arrived), and the job (the head an analysis
-  summarizes, or the commit an answer is about, or that no push has been seen yet).
+  system prompt, what changes least first (see [Caching](#caching)): the core's lines, the host's prompt of the job's
+  kind (in `<host-instructions>` tags; nothing when it is blank), the pull request and its details (or that no webhook
+  has arrived), and the job (the head an analysis summarizes, or the commit an answer is about, or that no push has
+  been seen yet).
+- **The instruction prefix.** The system message and the definitions of the tools the turn is offered are the turn's
+  prefix. The host's prompt in it is read once, at the turn's start; the pull request's facts are read again after an
+  at-start compaction, which a delivery may have changed meanwhile, and the first request and the workspace's base
+  follow them. Compaction shrinks the conversation, never the prefix, so the numbers compaction decides by count it
+  (characters ÷ 3):
+  - When the prefix and the job's own message, with one minimal tool result when the turn has tools, do not fit the
+    window less the reserve, the job fails `instructions: …` before any compaction or model call, naming both sizes:
+    compacting cannot help.
+  - The context count holds the prefix: the measurement holds it already, and the estimate adds it.
+  - A compaction at a turn's start sizes each candidate cut, from the newest step's start back to the kept part's
+    target, by the first request it would make, estimated as the check below estimates the one sent: the prefix; the
+    notes rendered as they are sent, each summary at the notes' output limit (the history alone for a cut at a turn's
+    start; the history and the turn's checkpoint under its heading for a cut inside a turn), with the notice around them
+    and the list of files the removed steps read; the kept part; and the job's message. It takes the oldest candidate
+    that fits the window less the reserve: a split candidate that does not fit is passed over for an older cut at a
+    turn's start that does, so a tail that reaches the target can no longer end in a step that leaves no room beside
+    the prefix. When none fits, the newest step is kept alone (a cut falls at a step's start), and the check below fails
+    the turn. The compaction after a commit keeps its walk to the target: the next turn's prefix is not known yet, and
+    that turn decides again.
+  - A turn whose start adopted a compaction estimates its first request as assembled (the system message, the notes as
+    rendered, the kept part, the job's message and the tool definitions) and fails with `context: …`, naming each
+    part's size, when it is over the window less the reserve, before any answer request. A turn without one is not
+    checked: after a failed or skipped compaction it runs on the full context as the design has it, and a request the
+    provider refuses for its length still reaches the re-run below.
 
 Compaction follows the approach of Pi (`pi-coding-agent`, MIT license). The prompts and procedure that are copied keep
 Pi's copyright notice (`pr-session/compaction.ts`). Its input is the projection: a question still waiting for its job is
@@ -746,8 +795,9 @@ never summarized, and once answered it enters the kept part with its answer, whe
   (a compaction a restart lost, or one a refusal asked for), unless a compaction failed at the same end of the
   projection: that one is not repeated until a new result is committed. A request the provider refuses for the context's
   length (the `context_length_exceeded` code, or a message about a request over the window, also after a retry) counts
-  the context as the whole window: the job is compacted and run again once per run, and a second refusal fails it with
-  the provider's reason.
+  the context as the whole window, whatever prefix the last measurement was taken under: the job is compacted and run
+  again once per run, its cut sized with the re-run's own prefix (a prompt saved between the refusal and the re-run
+  is the one counted), and a second refusal fails it with the provider's reason.
 - **Parameters.** At windows of 131,072 tokens or more, the reserve, the kept part and the notes' output limit are Pi's
   defaults (16,384, 20,000 and 8,192 tokens); below, they are shares of the window (one eighth, three tenths, one
   fifth), so none exceeds it. That does not make a summary request fit the window: the count that triggers compaction
@@ -757,8 +807,15 @@ never summarized, and once answered it enters the kept part with its answer, whe
   added since then are estimated. The estimate is characters ÷ 3, or a ratio measured in the session. Characters ÷ 4
   under-counted Japanese text and diffs by 1.3 to 1.7 times. The measurement is the last committed turn's last model
   call (its input and output), kept with the result it ended with and the notes revision its context was built on; it
-  counts only while the notes are at that revision, so after a compaction the count is the estimate of the new context
-  (the notes, the kept part and what came after) until a model call measures it.
+  counts only while the notes are at that revision and the turn's instruction prefix is the one it was taken under, so
+  after a compaction, a prompt save or a switch to a kind with another prompt, the count is the estimate of the new
+  context (the prefix, the notes, the kept part and what came after) until a model call measures it. A call whose tools
+  were withdrawn left their definitions out: its measurement is kept under the instruction part without them, and a
+  turn under the same instruction part counts it with its own definitions estimated on top. The prefix is
+  compared by a SHA-256 of the system message's instruction part (the core's lines and the host's prompt) and the tool
+  definitions; the pull request's facts and the job's line are left out, since they change with every head and job
+  while their size barely does, and a fingerprint holding them would never let an answer reuse the count of the
+  analysis before it.
 - **Tools.** A job with a workspace commit reads the code through four tools, each a git command at that commit, so a
   path resolves in the commit's tree only and a symlink is its link text, never followed: `list_files` (the paths, all
   or under a path), `read_file` (a file with line numbers), `grep` (an extended regular expression, each match as
@@ -786,9 +843,9 @@ never summarized, and once answered it enters the kept part with its answer, whe
   ends normally: nothing detects the markup, so the job is done and the answer, markup included, stays in the history,
   where later turns can imitate it. How soon a turn reaches this depends on the window (`MODEL_CONTEXT_TOKENS`): at a
   window of about a million tokens, tools are withdrawn only after about that much in one turn; at a small window, a
-  dozen tool calls reach it. A measurement taken on a call offered no tools lacks the tool definitions (about 850
-  tokens for the four), so the next turn's first request can run that much over the count; the reserve holds it. A
-  turn has no step limit: it goes on while the model calls tools (see [Billing limits](#billing-limits)).
+  dozen tool calls reach it. A measurement taken on a call whose tools were withdrawn lacks the tool definitions (about
+  850 tokens for the four), which the next turn's count adds (see Token count). A turn has no step limit: it goes on
+  while the model calls tools (see [Billing limits](#billing-limits)).
 - **Cut point.** Going back from the newest message, the system keeps the most recent part (Pi's default: 20,000
   tokens). The cut falls at a question, at an analysis's first step (an analysis stores no request), or at a step
   boundary inside a result; a tool call and its result are one part of a step, so they are never separated. If the cut
@@ -843,7 +900,9 @@ never summarized, and once answered it enters the kept part with its answer, whe
   job runs on the full context.
 - Everything before the cut point is in the notes, so no message leaves the context without being reflected in them.
 - The notes are language-neutral: the compaction prompt does not ask for a particular language, and the prompts for
-  analysis and answers decide how the final text reads.
+  analysis and answers decide how the final text reads. A summary request carries neither of the host's prompts: they
+  live only in a turn's system message, which is never stored, so a prompt such as "use no headings" reaches the
+  summarizer only through the answers written under it.
 - Notes come from compaction, which runs on the cloud model inside cloud turns, so a local session has none: a local
   agent reads the whole conversation through `prq context` and manages its own window.
 
@@ -948,8 +1007,11 @@ Server:
   key ID subject to its defaults (30-second cooldown, 10-minute maximum age). Both caches belong to auth objects created
   once per isolate and reused across requests; they are lost when the isolate is evicted, which only costs a refetch.
 - **Model prompt cache.** Providers may cache a repeated prompt prefix; it is best effort. The model context puts what
-  changes least first — system prompt, the host's prompt, the tool definitions and the skill list (sorted by name), the
-  analysis notes — and appends messages and tool results (including skill activations) after it, keeping earlier steps
+  changes least first. The system message holds the core's lines (the same for every job), then the skill list (sorted
+  by name, the same for both kinds), then the host's prompt of the job's kind (the same for every job of that kind),
+  then the pull request's facts (the same for every job at a head), and last the job's line, the only part that
+  changes per job. The tool definitions are a field of their own whose place the provider decides. The analysis notes
+  follow, and messages and tool results (including skill activations) are appended after them, keeping earlier steps
   as they were. A prefix still misses after a prompt or skill edit, a switch between the analysis and answer prompts,
   the removal of reasoning at the end of a turn, a compaction, or the provider's eviction. Savings are judged from the
   provider's reported cache hits, not assumed.
@@ -1105,6 +1167,7 @@ prq/
 │  │   │   │   ├─ context-budget.ts  the context parameters scaled to the model's window
 │  │   │   │   ├─ compaction.ts  compaction: the cut, the summary prompts (Pi's) and calls
 │  │   │   │   ├─ notes.ts       the analysis notes and the context count as stored
+│  │   │   │   ├─ prefix.ts      a turn's instruction prefix: its size and fingerprint
 │  │   │   │   ├─ projection.ts  what a job's model reads of the conversation
 │  │   │   │   ├─ tools.ts       the cloud agent's tools and the turn's loop
 │  │   │   │   ├─ room.ts        how much a turn may still read: the window less the newest measured request
@@ -1112,7 +1175,7 @@ prq/
 │  │   │   │   ├─ workspace.ts   what the tools call: the workspace's client and its bounds
 │  │   │   │   └─ prompt.ts      the system prompt and an analysis's task
 │  │   │   ├─ github.ts          the GitHub App: installation tokens and pull request reads, each bounded
-│  │   │   ├─ instructions/      prompts, skill registry, activate_skill / read_skill_resource
+│  │   │   ├─ instructions/      the host's prompts as the Hub stores them; later the skill registry and its tools
 │  │   │   ├─ workspace.ts       Workspace: the container, the gate on turns, prepares and paged commands
 │  │   │   ├─ workspace-git.ts   the checkout's git procedure as data, and whether a checkout is reused
 │  │   │   ├─ egress.ts          GitEgress: the container's only way out
@@ -1131,10 +1194,11 @@ prq/
 │          ├─ retry.ts           client timeouts from the routes' bounds, retries and their window
 │          ├─ state.ts           the claim record and the job directories
 │          ├─ context.ts         the context's pages joined, an answer job's question
+│          ├─ publish.ts         what prq context writes: the instruction set, question.md, then context.json
 │          ├─ answer.ts          the answer prq submit sends: answer.md, checked before any request
 │          ├─ commands/          one module per command
 │          ├─ e2e/               the compiled binary against the real Worker
-│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`), manual checks of a cloud question, of head reconciliation and of the workspace container (`pnpm run check:cloud`, `check:reconcile`, `check:workspace`)
+│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`), manual checks of a cloud question, of head reconciliation, of the workspace container and of compaction (`pnpm run check:cloud`, `check:reconcile`, `check:workspace`, `check:compaction`)
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
 ├─ .claude/skills/verify-prq/  running the local stack with scripted jobs for a local agent, and reading its request log
 ├─ docs/                   design.md, decisions.md, ui.md, spikes.md

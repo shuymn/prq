@@ -59,6 +59,10 @@ export const HUB_SCHEMA: SchemaSteps = [
   // of the index on the agent alone.
   "CREATE INDEX prq_claims_agent_claimed ON prq_claims (agent_id, claimed_at)",
   "DROP INDEX prq_claims_agent",
+  // The host's two prompts (docs/design.md, Instructions and skills): each kind's text and when it was saved (epoch ms).
+  // A kind without a row has never been saved and reads as the empty prompt.
+  `CREATE TABLE prq_prompts (
+    kind TEXT PRIMARY KEY CHECK (kind IN ('analysis', 'answer')), text TEXT NOT NULL, saved_at INTEGER NOT NULL)`,
 ];
 
 export const PR_SESSION_SCHEMA: SchemaSteps = [
@@ -196,6 +200,11 @@ export const PR_SESSION_SCHEMA: SchemaSteps = [
   "ALTER TABLE prq_session ADD COLUMN compaction_failed_through TEXT",
   // Whether a run was re-run after a context-length refusal: once per run.
   "ALTER TABLE prq_job_usage ADD COLUMN overflow_rerun INTEGER NOT NULL DEFAULT 0 CHECK (overflow_rerun IN (0, 1))",
+  // The context count's prefix: the fingerprint of the instruction prefix the measurement was taken under (NULL before
+  // one was kept, and for a refusal), and whether the measurement is a context-length refusal, which counts under any
+  // prefix (docs/design.md, Model context).
+  "ALTER TABLE prq_session ADD COLUMN context_fingerprint TEXT",
+  "ALTER TABLE prq_session ADD COLUMN context_overflow INTEGER NOT NULL DEFAULT 0 CHECK (context_overflow IN (0, 1))",
 ];
 
 export const WORKSPACE_SCHEMA: SchemaSteps = [

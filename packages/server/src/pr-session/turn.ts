@@ -4,6 +4,7 @@ import * as v from "valibot";
 
 import type { JobRow, JobUsage } from "./jobs.ts";
 import { reasonText } from "./model.ts";
+import type { Prefix } from "./prefix.ts";
 import type { WorkspaceClient } from "./workspace.ts";
 
 // A cloud turn: what it is bound to, and how it ended as its callbacks recorded it in memory. prq commits it when the
@@ -22,6 +23,8 @@ export type Binding = {
   workspace?: { client: WorkspaceClient; seq: number };
   // The notes revision the turn's context was built on, once it was built.
   notesRev?: number;
+  // The turn's instruction prefix, once it was read.
+  prefix?: Prefix;
 };
 
 export type TurnOutcome = {
@@ -38,8 +41,10 @@ export type TurnOutcome = {
   // The first error the turn saw, and whether it was the provider's refusal of the context's length.
   error?: string;
   contextLength: boolean;
-  // The tokens of the turn's latest model call (input and output), when the provider reported them.
+  // The tokens of the turn's latest model call (input and output), when the provider reported them, and the fingerprint
+  // of the prefix its request carried (without the tool definitions once the tools were withdrawn).
   contextTokens?: number | undefined;
+  contextFingerprint?: string | null;
 };
 
 export function newOutcome(): TurnOutcome {

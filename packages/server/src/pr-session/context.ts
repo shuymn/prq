@@ -51,9 +51,13 @@ export function jsonBytes(value: unknown): number {
 }
 
 // What a page leaves for its messages: the budget less the rest of the response, with the details at their largest and
-// a cursor naming the conversation's longest message ID at the largest offset. The pull request and the job are the
-// response's own: while the claim holds, the job does not change.
-export function messageRoom(around: Pick<ContextResponse, "pr" | "job">, ids: readonly string[]): number {
+// a cursor naming the conversation's longest message ID at the largest offset. The pull request, the job and the first
+// page's instructions are the response's own: while the claim holds, the job does not change, and the instructions are
+// read once, before the page.
+export function messageRoom(
+  around: Pick<ContextResponse, "pr" | "job" | "instructions">,
+  ids: readonly string[],
+): number {
   let longest = { id: "", bytes: 0 };
   for (const id of ids) {
     const bytes = jsonBytes(id);

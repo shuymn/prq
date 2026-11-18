@@ -1,15 +1,16 @@
 import { APICallError } from "ai";
 import { abortAllDurableObjects, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { prSessionStub } from "./names.ts";
+import { hubStub, prSessionStub } from "./names.ts";
 import {
   assembleNotes,
   notesText,
   requestTokens,
   TURN_PREFIX_UPDATE_PROMPT,
   UPDATE_SUMMARIZATION_PROMPT,
+  NO_PREFIX,
 } from "./pr-session/compaction.ts";
 import { PrSession } from "./pr-session/index.ts";
 import { CHARS_PER_TOKEN } from "./pr-session/room.ts";
@@ -24,6 +25,7 @@ import {
   isSummaryCall,
   type NotesRow,
   notesRow,
+  prefixFingerprint,
   seedHistory,
   sized,
   summaryPrompt,
@@ -39,11 +41,15 @@ import {
   useCloudModel,
   useWorkspace,
 } from "./test/model.ts";
-import { gate, jobOf, prSessionSeams, retryIn, sessionSql } from "./test/session.ts";
+import { clearPrompts, gate, hub, jobOf, prSessionSeams, retryIn, sessionSql } from "./test/session.ts";
 import { push, sha } from "./test/webhook.ts";
 import { FakeWorkspace } from "./test/workspace.ts";
 
 const sockets: AgentSocket[] = [];
+
+beforeEach(async () => {
+  await clearPrompts();
+});
 
 afterEach(() => {
   for (const socket of sockets.splice(0)) {
@@ -602,8 +608,10 @@ describe("the next turn's context", () => {
     // The last turn measured its context over the limit, and no compaction ran after it (a reset lost it).
     await sessionSql(
       stub,
-      "UPDATE prq_session SET context_tokens = 18000, context_through = ?, context_notes_rev = 0 WHERE id = 1",
+      `UPDATE prq_session SET context_tokens = 18000, context_through = ?, context_notes_rev = 0,
+         context_fingerprint = ? WHERE id = 1`,
       a2.id,
+      await prefixFingerprint(),
     );
     const model = new ScriptedModel().add(
       notes(facts("the notes")),
@@ -670,6 +678,17 @@ describe("a lost compaction and a context-length refusal", () => {
     const logs = captureLogs();
     const session = await cloudSession("compaction", sockets);
     const { stub, client } = session;
+    // The re-run's instruction read (the third turn's) is held while the host saves an answer prompt: the re-run reads a
+    // prefix that no measurement was taken under.
+    const rerunRead = await gate(stub);
+    let reads = 0;
+    vi.spyOn(prSessionSeams(PrSession.prototype), "readInstructions").mockImplementation(async () => {
+      reads += 1;
+      if (reads === 3) {
+        await rerunRead.wait();
+      }
+      return (await hubStub(env)).instructions();
+    });
     const message = "This model's maximum context length is 20000 tokens. However, you requested 21000 tokens.";
     const refusal = () =>
       new APICallError({
@@ -694,11 +713,18 @@ describe("a lost compaction and a context-length refusal", () => {
     const before = await messageRows(session);
 
     await client.chat([Q1, Q2]);
+    await rerunRead.reached();
+    // The context is estimated at about 7,100 tokens, below the limit, and Q1's measurement (13,000) is below it too:
+    // only the refusal asks for the compaction, whatever the prefix the re-run reads.
+    await (await hub()).savePrompt("answer", "Answer briefly.");
+    await rerunRead.open();
     await untilState(stub, "q2", "failed");
 
     const q2 = await jobOf(stub, "q2");
     expect(q2.failure).toBe(`provider refused the request (HTTP 400): ${message}`);
+    // A summary request precedes the re-run's answer request.
     expect(model.calls.map(isSummaryCall)).toEqual([false, false, true, false]);
+    expect(reads).toBe(3);
     // The re-run read the notes: the conversation before Q1's answer, which is kept.
     expect(
       turnPrompts(model)
@@ -742,7 +768,10 @@ describe("the count after a compaction", () => {
       const { text: stored } = await notesRow(stub);
       const kept = 2 * sized("answer two", 3000).length + "question q3".length;
       const expected = Math.ceil((notesText(stored ?? "").length + kept + "question q4".length) / CHARS_PER_TOKEN);
-      const counted = await runInDurableObject(stub, (instance) => prSessionSeams(instance).measureContext(Q4));
+      // The count without a prefix: the notes, the kept part and the question.
+      const counted = await runInDurableObject(stub, (instance) =>
+        prSessionSeams(instance).measureContext(Q4, NO_PREFIX),
+      );
       expect(counted.tokens).toBe(expected);
       expect(counted.tokens).toBeLessThan(WINDOW - 2500);
 

@@ -4,11 +4,13 @@
 import type { AIChatAgent } from "@cloudflare/ai-chat";
 import {
   type ClaimResponse,
+  type Instructions,
   type Job,
   LedgerPage,
   type LedgerRow,
   type Owner,
   type PrRef,
+  type PromptKind,
   sessionName,
 } from "@prq/protocol";
 import type { UIMessage } from "ai";
@@ -22,6 +24,7 @@ import type { Hub } from "../hub.ts";
 import type { LedgerEntry } from "../ledger.ts";
 import { hubStub, prSessionStub } from "../names.ts";
 import type { CloudAgent } from "../pr-session/cloud.ts";
+import type { CountedPrefix } from "../pr-session/compaction.ts";
 import type { PrSession, Submission } from "../pr-session/index.ts";
 import type { JobRow, Peek } from "../pr-session/jobs.ts";
 import type { CloudModel } from "../pr-session/turn.ts";
@@ -49,8 +52,20 @@ export async function newSession(repo: string, sockets: AgentSocket[]) {
 
 export type Session = Awaited<ReturnType<typeof newSession>>;
 
+// Removes the host's prompts: the Hub, and what is saved in it, outlives a test within its file.
+export async function clearPrompts(): Promise<void> {
+  await runInDurableObject(await hub(), (_, state) => {
+    state.storage.sql.exec("DELETE FROM prq_prompts");
+  });
+}
+
 export function hub(): Promise<DurableObjectStub<Hub>> {
   return hubStub(env);
+}
+
+// Saves a host's prompt through the Hub, as the prompts route does, and checks it was stored.
+export async function savePrompt(kind: PromptKind, prompt: string): Promise<void> {
+  expect(await (await hub()).savePrompt(kind, prompt)).toMatchObject({ text: prompt });
 }
 
 // The pool as a test needs it: no agent present, or the given agents present (a contact just now). The claims the
@@ -300,9 +315,10 @@ export type PrSessionSeams = {
   compactContext(
     model: CloudModel,
     window: number,
-    options: { jobId: string; signal?: AbortSignal },
+    options: { jobId: string; signal?: AbortSignal; turn?: { prefixChars: number; own: UIMessage } },
   ): Promise<"adopted" | "discarded" | "failed" | "skipped">;
-  measureContext(own: UIMessage | null): Promise<{ tokens: number; end: string | null }>;
+  measureContext(own: UIMessage, prefix: CountedPrefix): Promise<{ tokens: number; end: string | null }>;
+  readInstructions(): Promise<Instructions>;
   // AIChatAgent's own.
   waitUntilStable(options?: { timeout?: number }): Promise<boolean>;
   abortAllRequests(reason?: unknown): void;
@@ -321,6 +337,7 @@ const PR_SESSION_SEAMS = [
   "github",
   "compactContext",
   "measureContext",
+  "readInstructions",
   "waitUntilStable",
   "abortAllRequests",
 ] as const;

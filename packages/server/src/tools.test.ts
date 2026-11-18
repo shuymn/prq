@@ -385,7 +385,7 @@ async function hangingTurn(abortSignal?: AbortSignal) {
     [toolCall("read_file", { path: "src/rates.ts" }), finish("tool-calls")],
     answerScript("answered from what was read"),
   );
-  const loop = await toolLoop({ workspace, target: TARGET, prepared }, 131_072, { system: "s", messages: [] });
+  const loop = toolLoop({ workspace, target: TARGET, prepared }, 131_072, 0);
   const ended: unknown[] = [];
   const result = streamText({
     model: model.model,

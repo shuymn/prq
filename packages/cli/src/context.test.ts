@@ -53,6 +53,18 @@ describe("readContext", () => {
     expect(questionOf(context)).toBe("abcdef");
   });
 
+  it("keeps the first page's instructions, and empty prompts when a server sends none", async () => {
+    const saved = { text: "Answer briefly.", savedAt: 1 };
+    const instructions = { prompts: { analysis: saved, answer: saved } };
+    const later = { prompts: { analysis: { text: "", savedAt: null }, answer: { text: "", savedAt: null } } };
+    const { context } = await read([
+      { ...page([user("q", "first")], "c1"), instructions },
+      { ...page([], null), instructions: later },
+    ]);
+    expect(context.instructions).toEqual(instructions);
+    expect((await read([page([user("q", "first")], null)])).context.instructions).toEqual(later);
+  });
+
   it("keeps the last page's details", async () => {
     const details: PrDetails = {
       fullName: "acme/widgets",

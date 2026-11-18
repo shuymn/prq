@@ -2,14 +2,17 @@ import { AIChatAgent, type ChatRecoveryOptions, type OnChatMessageOptions } from
 import { MessageType } from "@cloudflare/ai-chat/types";
 import {
   type ClaimResponse,
+  type ContextInstructions,
   type ContextResponse,
   type ErrorResponse,
   type HistoryChangedMessage,
+  Instructions,
   type Job,
   type JobTarget,
   MessageMetadata,
   type Owner,
   parseSessionName,
+  type PrDetails,
   type PrRef,
   type PrSessionView,
   type RetryResponse,
@@ -35,17 +38,22 @@ import {
   WORKSPACE_NOT_AVAILABLE,
 } from "./cloud.ts";
 import {
+  type CountedPrefix,
+  NO_PREFIX,
   type Cut,
   contextCount,
+  estimateTokens,
   findCut,
   keptPart,
   measuredCount,
+  messagesChars,
   nextBatch,
   notesBody,
-  notesText,
+  notesMessage,
   partsChars,
   type Projected,
   readFiles,
+  turnRequestTokens,
   assembleNotes,
   type Step,
   type SummaryKind,
@@ -120,11 +128,12 @@ import {
   recordContext,
   recordOverflow,
 } from "./notes.ts";
+import { type Prefix, prefixWith, type TurnInstructions, turnInstructions } from "./prefix.ts";
 import { projection } from "./projection.ts";
-import { analysisTask, systemPrompt } from "./prompt.ts";
+import { analysisTask } from "./prompt.ts";
 import { adoptAnswer, clearMark, failTry, isLagging, notePush, readReconcile } from "./reconcile.ts";
 import { measuredTokens } from "./room.ts";
-import { toolLoop, TURN_LOOP } from "./tools.ts";
+import { MIN_RESULT_CHARS, toolLoop, TURN_LOOP } from "./tools.ts";
 import {
   type Binding,
   type CloudModel,
@@ -155,7 +164,7 @@ const WAKE_S = 5;
 const RETRY_FIRST_S = 5;
 const RETRY_MAX_S = 60;
 // How long a call to the Hub may take.
-const HUB_CALL_MS = 10_000;
+export const HUB_CALL_MS = 10_000;
 // How long a submit waits for the conversation to settle before entering the history queue.
 const STABLE_WAIT_MS = 30_000;
 // How long the release of a turn's workspace may take.
@@ -181,7 +190,7 @@ function wholeSecondFrom(ms: number): Date {
 }
 
 // A committed turn's context measurement, and the model a compaction runs on when the context is over the limit.
-type ContextMeasure = { tokens: number | null; through: string; notesRev: number };
+type ContextMeasure = { tokens: number | null; through: string; notesRev: number; fingerprint: string | null };
 type AfterTurn = { measure: ContextMeasure; compact: CloudModel | null };
 
 // What a compaction's summary calls used, for its log.
@@ -226,6 +235,17 @@ type ReadOutcome =
   | { kind: "adopted"; answer: PullRequestState; jobs: (HeadJobs & { cloud: CloudOutcome }) | null };
 
 const BAD_CURSOR: ErrorResponse = { error: "bad_request", detail: "the cursor names no place in this conversation" };
+
+// What a job's own message is, and what its prefix holds, as a failure names them.
+function ownLabel(row: JobRow): string {
+  return row.kind === "analysis" ? "task" : "question";
+}
+
+function prefixLabel(row: JobRow): string {
+  return row.workspace_sha === null
+    ? "the system prompt with the host's prompt"
+    : "the system prompt with the host's prompt and the tool definitions";
+}
 
 // A question from the UI: a user message the server did not add (server messages carry metadata).
 function isQuestion(message: UIMessage): boolean {
@@ -1000,10 +1020,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // What a local agent works on its claimed job from (/cli/context): the pull request, its details, the job as its claim
-  // fixed it, and a page of the conversation from the cursor (the start when there is none), the whole response within
-  // CONTEXT_PAGE_BYTES. Only the job's current claim, held by the agent, gets it. The claim is checked before the
-  // conversation is read, to size the page around the job, and again after it, in the step that answers, so the answer
-  // never carries a claim that had already ended.
+  // fixed it, on the first page the host's instructions (read from the Hub; 503 when it does not answer), and a page of
+  // the conversation from the cursor (the start when there is none), the whole response within CONTEXT_PAGE_BYTES. Only
+  // the job's current claim, held by the agent, gets it. The claim is checked before the instructions and the
+  // conversation are read, to size the page around the job, and again after them, in the step that answers, so the
+  // answer never carries a claim that had already ended.
   async context(
     agentId: string,
     jobId: string,
@@ -1018,7 +1039,22 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if ("error" in before) {
       return before;
     }
-    const page = await this.#contextPage(start.id, start.offset, { pr: this.#pr(), job: this.#job(before) });
+    let instructions: ContextInstructions | undefined;
+    if (cursor === undefined) {
+      try {
+        instructions = { prompts: (await this.readInstructions()).prompts };
+      } catch (error) {
+        log("prq.context.instructions_failed", { pr: this.name, jobId, error: errorName(error) }, "warn");
+        // A claim that ended during the read is stale, whatever the read gave: asking again cannot help.
+        const held = this.#heldJob(agentId, jobId, claimId);
+        if ("error" in held) {
+          return held;
+        }
+        return { error: "unavailable", detail: "the host's instructions could not be read; try again" };
+      }
+    }
+    const first = instructions === undefined ? {} : { instructions };
+    const page = await this.#contextPage(start.id, start.offset, { pr: this.#pr(), job: this.#job(before), ...first });
     if ("error" in page) {
       return page;
     }
@@ -1030,6 +1066,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       pr: this.#pr(),
       details: readDetails(this.#sql),
       job: this.#job(row),
+      ...first,
       messages: page.messages,
       nextCursor: page.next === null ? null : cursorText(page.next),
     };
@@ -1057,7 +1094,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   async #contextPage(
     id: string | null,
     offset: number,
-    around: Pick<ContextResponse, "pr" | "job">,
+    around: Pick<ContextResponse, "pr" | "job" | "instructions">,
   ): Promise<{ messages: ContextMessage[]; next: Cursor | null } | ErrorResponse> {
     const session = this.sessions.session();
     const ids = (await session.getHistoryRowStats()).map((stat) => stat.id);
@@ -1318,12 +1355,42 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     // The turn's own abort, besides the SDK's: a workspace that cannot go on ends the turn with its reason.
     const lost = new AbortController();
     const signal = abortSignal === undefined ? lost.signal : AbortSignal.any([abortSignal, lost.signal]);
-    await this.#compactAtStart(row, model, signal);
+    const own = await this.#ownMessage(row);
+    if (own === null) {
+      outcome.failure = "the question is not stored";
+      return undefined;
+    }
+    const hostPrompt = await this.#hostPrompt(job, outcome);
+    if (hostPrompt === null) {
+      return undefined;
+    }
+    const instructions = await turnInstructions(job, job.workspaceSha !== null, hostPrompt);
+    const counted = this.#prefixFor(row, job, readDetails(this.#sql), own, instructions, outcome);
+    if (counted === null) {
+      return undefined;
+    }
+    const compacted = await this.#compactAtStart(row, model, signal, counted, own);
     if (signal.aborted) {
       outcome.aborted = true;
       return undefined;
     }
+    // The pull request's facts and base as a delivery taken in during the compaction left them: the first request's
+    // prefix and the workspace's base are read from them, with the prompt read at the turn's start.
     const details = readDetails(this.#sql);
+    const prefix = this.#prefixFor(row, job, details, own, instructions, outcome);
+    if (prefix === null) {
+      return undefined;
+    }
+    binding.prefix = prefix;
+    const context = await this.#turnContext(own, prefix);
+    binding.notesRev = context.notesRev;
+    if (compacted) {
+      const over = this.#overWindow(row, prefix, context.messages);
+      if (over !== null) {
+        outcome.failure = over;
+        return undefined;
+      }
+    }
     let code: { workspace: WorkspaceClient; target: WorkspaceTarget; prepared: PreparedWorkspace } | null = null;
     if (client !== null && job.workspaceSha !== null) {
       if (details === null) {
@@ -1351,19 +1418,12 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       });
       code = { workspace, target, prepared };
     }
-    const context = await this.#turnContext(row);
-    if (context === null) {
-      outcome.failure = "the question is not stored";
-      return undefined;
-    }
-    const { messages } = context;
-    binding.notesRev = context.notesRev;
-    const system = systemPrompt({ pr: this.#pr(), details, job, tools: code !== null });
-    const modelMessages = await convertToModelMessages(messages);
-    const loop =
-      code === null
-        ? null
-        : await toolLoop(code, this.contextTokens(), { system, messages: modelMessages }, context.measured);
+    const { system } = prefix;
+    const modelMessages = await convertToModelMessages(context.messages);
+    // The first request's size: the context count, or without a measurement the estimate of the prefix (the system
+    // message and the tool definitions) and the messages as sent.
+    const start = context.measured ?? estimateTokens(prefix.chars + JSON.stringify(modelMessages).length);
+    const loop = code === null ? null : toolLoop(code, this.contextTokens(), start);
     const secret = this.#modelSecret();
     // The turn's first error, classified with the key redacted, is its reason; what the client is shown is that reason.
     const failWith = (error: unknown): string => {
@@ -1399,8 +1459,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       },
       onStepFinish: ({ usage }) => {
         addStep(this.#sql, row, stepTokens(usage));
-        // The context as the provider measured it: the step's request and its output.
+        // The context as the provider measured it: the step's request and its output, under the prefix that request
+        // carried. Once the tools are withdrawn, a request leaves their definitions out.
         outcome.contextTokens = measuredTokens(usage) ?? undefined;
+        outcome.contextFingerprint = loop?.withdrawn() === true ? prefix.bare : prefix.fingerprint;
       },
     });
     const metadata = this.#resultMetadata(row, { kind: "cloud", model: model.modelId });
@@ -1414,6 +1476,76 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       onError: failWith,
     });
     return failingWith(response, failWith);
+  }
+
+  // The host's prompt of the job's kind, as the Hub holds it at the turn's start: read once, before the at-start
+  // compaction, which counts it; a prompt saved later applies from the next turn. Null, with the job's failure in the
+  // outcome, when the Hub does not answer (running without the host's prompt would store a result that ignores it).
+  async #hostPrompt(job: Job, outcome: TurnOutcome): Promise<string | null> {
+    try {
+      return (await this.readInstructions()).prompts[job.target.kind].text;
+    } catch (error) {
+      log("prq.turn.instructions_failed", { pr: this.name, jobId: job.jobId, error: errorName(error) }, "warn");
+      const reason =
+        error instanceof WaitTimeout ? error.message : `the Hub's instructions were not read (${errorName(error)})`;
+      outcome.failure = `instructions: ${reason}`;
+      return null;
+    }
+  }
+
+  // The turn's instruction prefix: its system message with the turn's instructions and the pull request's `details`,
+  // and the definitions of the tools it is offered. Null, with the job's failure in the outcome, when the prefix and
+  // the job's own message leave the window no room for the answer, or, with tools, for one tool result.
+  #prefixFor(
+    row: JobRow,
+    job: Job,
+    details: PrDetails | null,
+    own: UIMessage,
+    instructions: TurnInstructions,
+    outcome: TurnOutcome,
+  ): Prefix | null {
+    const { tools } = instructions;
+    const prefix = prefixWith(instructions, { pr: this.#pr(), details, job });
+    const room = contextLimit(this.contextTokens());
+    const ownChars = partsChars(own.parts);
+    if (estimateTokens(prefix.chars + ownChars + (tools ? MIN_RESULT_CHARS : 0)) > room) {
+      outcome.failure =
+        `instructions: ${prefixLabel(row)} takes about ${estimateTokens(prefix.chars)} tokens and the ` +
+        `${ownLabel(row)} about ${estimateTokens(ownChars)}, of the ${room} tokens this model's window leaves for a ` +
+        `request: too little room for ${tools ? "one tool result" : "the answer"}; shorten the prompt or the question`;
+      return null;
+    }
+    return prefix;
+  }
+
+  // Why a turn whose start compacted cannot send its first request: the request it would send, estimated as the
+  // context count does, is over the window less the reserve (docs/design.md, Model context). Null when it fits.
+  #overWindow(row: JobRow, prefix: Prefix, messages: readonly UIMessage[]): string | null {
+    const room = contextLimit(this.contextTokens());
+    const total = turnRequestTokens(prefix.chars, messages);
+    if (total <= room) {
+      return null;
+    }
+    const notes = messages[0]?.id === "notes" ? messages.slice(0, 1) : [];
+    const own = messages.slice(-1);
+    const kept = messages.slice(notes.length, -1);
+    const sizes = [
+      `${prefixLabel(row)} about ${estimateTokens(prefix.chars)}`,
+      `the notes about ${estimateTokens(messagesChars(notes))}`,
+      `the kept conversation about ${estimateTokens(messagesChars(kept))}`,
+      `the ${ownLabel(row)} about ${estimateTokens(messagesChars(own))}`,
+    ];
+    return (
+      `context: after compacting, the request takes about ${total} of the ${room} tokens this model's window leaves ` +
+      `for it (${sizes.join(", ")}); shorten the prompt or the question, or use a model with a larger window`
+    );
+  }
+
+  // The host's instructions as the Hub holds them now (spied on in tests): both prompts, and the skills. The bound
+  // covers the Hub's start.
+  protected async readInstructions(): Promise<Instructions> {
+    const read = hubStub(this.env).then((hub) => hub.instructions());
+    return v.parse(Instructions, await withTimeout(read, HUB_CALL_MS, "the Hub's instructions"));
   }
 
   // Makes the job's checkout ready before its first model call: the turn's abort or the workspace backstop ends the
@@ -1444,24 +1576,25 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // What the job's model reads after the system prompt: the notes, when a compaction made them, and the projection's
-  // part after their cut (all of it without notes); then its own question (by the job's target) or an analysis's task.
-  // With the notes revision it was built on, and the context count when a measurement on these notes gives one (null
-  // otherwise), which a turn's room starts from. Null when the question is not stored.
+  // part after their cut (all of it without notes); then its own message, its question (by the job's target) or an
+  // analysis's task. With the notes revision it was built on, and the context count when a measurement on these notes
+  // under the same prefix gives one (null otherwise), which a turn's room starts from.
   async #turnContext(
-    row: JobRow,
-  ): Promise<{ messages: UIMessage[]; notesRev: number; measured: number | null } | null> {
-    const own = await this.#ownMessage(row);
-    if (own === null) {
-      return null;
-    }
+    own: UIMessage,
+    prefix: Prefix,
+  ): Promise<{ messages: UIMessage[]; notesRev: number; measured: number | null }> {
     const projected = await this.#projection();
     const notes = readNotes(this.#sql);
-    const measured = measuredCount(readContextState(this.#sql), notes, projected, partsChars(own.parts));
+    const state = readContextState(this.#sql);
+    const measured = measuredCount(state, notes, projected, partsChars(own.parts), prefix);
     if (notes.text === null) {
       return { messages: [...projected, own], notesRev: notes.rev, measured };
     }
-    const summary: UIMessage = { id: "notes", role: "user", parts: [{ type: "text", text: notesText(notes.text) }] };
-    return { messages: [summary, ...keptPart(projected, notes.cut), own], notesRev: notes.rev, measured };
+    return {
+      messages: [notesMessage(notes.text), ...keptPart(projected, notes.cut), own],
+      notesRev: notes.rev,
+      measured,
+    };
   }
 
   // A job's own message: its question, read by the job's target, or an analysis's task, which is not stored. Null when
@@ -1489,7 +1622,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   // Inside the history queue, once the SDK's turn has ended. A turn whose job has moved on (another turn, a retry)
   // changes nothing. A turn that ended normally appends its result and marks the job done; any other ending keeps the
   // text it produced as incomplete and fails the job. A turn that never reached its model call is an interruption.
-  async #commitTurn({ jobId, turnId, model, outcome, notesRev }: Binding): Promise<void> {
+  async #commitTurn({ jobId, turnId, model, outcome, notesRev, prefix }: Binding): Promise<void> {
     const row = jobById(this.#sql, jobId);
     if (row?.state !== "running" || row.turn_id !== turnId) {
       log("prq.turn.stale", { pr: this.name, jobId, state: row?.state ?? null });
@@ -1509,8 +1642,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
         tokens: outcome.contextTokens ?? null,
         through: id,
         notesRev: notesRev ?? readNotes(this.#sql).rev,
+        fingerprint: outcome.contextFingerprint ?? null,
       };
-      const compact = (await this.#countAfter(measure)) > contextLimit(this.contextTokens());
+      const counted = prefix ?? NO_PREFIX;
+      const compact = (await this.#countAfter(measure, counted)) > contextLimit(this.contextTokens());
       this.#endRun(row, { done: id }, model.modelId, { measure, compact: compact ? model : null });
       return;
     }
@@ -1617,36 +1752,49 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   // --- Compaction ---
 
-  // The context count after a commit, with the turn's measurement (docs/design.md, Model context).
-  async #countAfter(measure: ContextMeasure): Promise<number> {
-    return contextCount(measure, readNotes(this.#sql), await this.#projection());
+  // The context count after a commit, with the turn's measurement under its prefix (docs/design.md, Model context).
+  async #countAfter(measure: ContextMeasure, prefix: CountedPrefix): Promise<number> {
+    return contextCount({ ...measure, overflow: false }, readNotes(this.#sql), await this.#projection(), 0, prefix);
   }
 
-  // The context count now, with the job's own message at a turn's start, and the projection's last message (spied on
-  // and read in tests).
-  protected async measureContext(own: UIMessage | null): Promise<{ tokens: number; end: string | null }> {
+  // The context count at a turn's start, with its prefix and its own message, and the projection's last message (spied
+  // on and read in tests).
+  protected async measureContext(
+    own: UIMessage,
+    prefix: CountedPrefix,
+  ): Promise<{ tokens: number; end: string | null }> {
     const projected = await this.#projection();
     const tokens = contextCount(
       readContextState(this.#sql),
       readNotes(this.#sql),
       projected,
-      own === null ? 0 : partsChars(own.parts),
+      partsChars(own.parts),
+      prefix,
     );
     return { tokens, end: projected.at(-1)?.id ?? null };
   }
 
-  // At a turn's start, a context already over the limit is compacted first (one a reset lost after a commit, or one a
-  // context-length refusal asked for), unless a compaction failed at the same projection end: that one is not repeated
-  // until a new result is committed. The turn runs on the full context when the compaction fails.
-  async #compactAtStart(row: JobRow, model: CloudModel, signal: AbortSignal): Promise<void> {
+  // At a turn's start, a context already over the limit is compacted first (one a reset lost after a commit, one a
+  // context-length refusal asked for, or one the prefix grew past), unless a compaction failed at the same projection
+  // end: that one is not repeated until a new result is committed. The cut is the one whose first request, beside the
+  // prefix and the job's own message, fits as the turn's check estimates it (findCut). The turn runs on the full
+  // context when the compaction fails or finds nothing to cut. Whether a compaction was adopted.
+  async #compactAtStart(
+    row: JobRow,
+    model: CloudModel,
+    signal: AbortSignal,
+    prefix: Prefix,
+    own: UIMessage,
+  ): Promise<boolean> {
     const window = this.contextTokens();
-    const { tokens, end } = await this.measureContext(await this.#ownMessage(row));
+    const { tokens, end } = await this.measureContext(own, prefix);
     if (tokens <= contextLimit(window) || readContextState(this.#sql).failedThrough === end) {
-      return;
+      return false;
     }
     this.#compacting = true;
     try {
-      await this.compactContext(model, window, { jobId: row.job_id, signal });
+      const turn = { prefixChars: prefix.chars, own };
+      return (await this.compactContext(model, window, { jobId: row.job_id, signal, turn })) === "adopted";
     } finally {
       this.#compacting = false;
     }
@@ -1669,20 +1817,28 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     });
   }
 
-  // One compaction (spied on in tests): the projection from the notes' cut to a new cut summarized into the notes,
+  // One compaction (spied on in tests): the projection from the notes' cut to a new cut summarized into the notes, a
+  // cut whose first request fits beside the prefix and the job's own message when a turn's start gives them (`turn`),
   // adopted only while the notes are still at the revision it was built from. Each summary call is tried once more when
   // it fails; a compaction that fails leaves the notes as they were and marks the projection's end. The history is
   // never changed.
   protected async compactContext(
     model: CloudModel,
     window: number,
-    { jobId, signal }: { jobId: string; signal?: AbortSignal },
+    { jobId, signal, turn }: { jobId: string; signal?: AbortSignal; turn?: { prefixChars: number; own: UIMessage } },
   ): Promise<"adopted" | "discarded" | "failed" | "skipped"> {
     const { keptTail, notesOutput } = contextBudget(window);
     const notes = readNotes(this.#sql);
     const projected = await this.#projection();
     const end = projected.at(-1)?.id ?? null;
-    const cut = findCut(projected, notes.cut, keptTail);
+    const cut = findCut(
+      projected,
+      notes.cut,
+      keptTail,
+      turn === undefined
+        ? undefined
+        : { limit: contextLimit(window), ...turn, summary: notesOutput, readFiles: notes.readFiles },
+    );
     const fields = { pr: this.name, jobId, notesRev: notes.rev };
     if (cut === null) {
       log("prq.compaction.skipped", fields);

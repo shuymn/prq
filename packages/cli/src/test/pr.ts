@@ -4,7 +4,16 @@
 
 import { createHmac, randomUUID } from "node:crypto";
 
-import { AgentPage, type AgentRow, type PrRef, PrSessionView, RetryResponse, sessionName } from "@prq/protocol";
+import {
+  AgentPage,
+  type AgentRow,
+  Prompt,
+  type PromptKind,
+  type PrRef,
+  PrSessionView,
+  RetryResponse,
+  sessionName,
+} from "@prq/protocol";
 import * as v from "valibot";
 
 import { HOST_ID, WEBHOOK_SECRET, type Worker } from "./worker.ts";
@@ -172,6 +181,19 @@ export async function retry(worker: Worker, pr: PrRef, jobId: string): Promise<v
   if (answer.status !== "retried") {
     throw new Error(`the retry answered ${answer.status}`);
   }
+}
+
+// A prompt as the host saves it in the UI.
+export async function savePrompt(worker: Worker, kind: PromptKind, text: string): Promise<void> {
+  const res = await fetch(new URL(`/api/prompts/${kind}`, worker.url()), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": await worker.token() },
+    body: JSON.stringify({ text }),
+  });
+  if (res.status !== 200) {
+    throw new Error(`the prompt save answered ${res.status}`);
+  }
+  v.parse(Prompt, await res.json());
 }
 
 // The present agents, as the UI reads them.

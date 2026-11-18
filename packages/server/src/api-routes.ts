@@ -3,14 +3,18 @@ import {
   type AgentPage,
   AgentQuery,
   type ErrorResponse,
+  type Instructions,
   type LedgerPage,
   LedgerQuery,
   PrRef,
+  type Prompt,
+  PromptKind,
   type RepoPage,
   RepoQuery,
   RetryRequest,
   type RetryResponse,
   ROUTE_CALL_MS,
+  SavePromptRequest,
 } from "@prq/protocol";
 import { Hono } from "hono";
 import * as v from "valibot";
@@ -26,6 +30,8 @@ const JobPath = v.object({
   number: v.pipe(v.string(), v.regex(/^[1-9][0-9]*$/), v.transform(Number), PrRef.entries.number),
   jobId: v.string(),
 });
+
+const PromptPath = v.object({ kind: PromptKind });
 
 // /api/*: what the UI calls besides the Agents routes. Each call to a Durable Object, its start included, is bounded;
 // when the bound passes the route answers 503 and the call keeps running.
@@ -69,5 +75,25 @@ export function apiRoutes(bound: CallBound) {
         const result = await bound(call, ROUTE_CALL_MS, "the Hub's repository page");
         return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
       })
+      // The host's instructions for the settings (docs/design.md, Instructions and skills): both prompts, and the
+      // registered skills. Only reads.
+      .get("/instructions", async (c) => {
+        const call = (async (): Promise<Instructions> => (await hubStub(c.env)).instructions())();
+        return c.json(await bound(call, ROUTE_CALL_MS, "the Hub's instructions"));
+      })
+      // Saves a prompt, stored before the answer; the last save wins. A save that lands after the route stopped waiting
+      // is stored all the same, and the host's resend stores the same text again.
+      .put(
+        "/prompts/:kind",
+        vValidator("param", PromptPath, invalidRequest),
+        vValidator("json", SavePromptRequest, invalidRequest),
+        async (c) => {
+          const { kind } = c.req.valid("param");
+          const { text } = c.req.valid("json");
+          const call = (async (): Promise<Prompt | ErrorResponse> => (await hubStub(c.env)).savePrompt(kind, text))();
+          const result = await bound(call, ROUTE_CALL_MS, "the Hub's prompt save");
+          return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
+        },
+      )
   );
 }
