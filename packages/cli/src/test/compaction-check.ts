@@ -7,7 +7,9 @@
 // told to hold only its own). `--analysis-language ja|en` names the language the analysis prompt asks for: the
 // analysis's prose is then held to it in the verdict. `--analysis-only` runs the push's analysis alone and reports its
 // stored text (its length, its Japanese share, any tool call written as text, its start), at whatever window .dev.vars
-// sets: done, with text, no tool call and in the expected language is as expected.
+// sets: done, with text, no tool call and in the expected language is as expected. `--skill` registers yomiyasu
+// before the analysis and checks that the compaction summarizes an executed activation as its marker alone (give an
+// answer prompt that names it).
 
 import { runAppCheck } from "./app-check.ts";
 import { analysisLanguage, checkCompaction, ENGLISH, JAPANESE } from "./compaction.ts";
@@ -27,6 +29,7 @@ await runAppCheck(
       {
         analysisOnly: values["analysis-only"] === true,
         analysisLanguage: analysisLanguage(values["analysis-language"]),
+        skill: values.skill === true,
       },
     ),
   {
@@ -35,5 +38,6 @@ await runAppCheck(
     "answer-prompt": { type: "string" },
     "analysis-only": { type: "boolean" },
     "analysis-language": { type: "string" },
+    skill: { type: "boolean" },
   },
 );

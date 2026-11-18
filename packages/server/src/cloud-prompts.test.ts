@@ -30,18 +30,7 @@ import {
   useWorkspace,
 } from "./test/model.ts";
 import { advance, until } from "./test/provider.ts";
-import {
-  clearPrompts,
-  clearSkills,
-  gate,
-  hub,
-  jobOf,
-  prSessionSeams,
-  retryIn,
-  savePrompt,
-  sessionSql,
-} from "./test/session.ts";
-import { seedVersion } from "./test/skills.ts";
+import { clearPrompts, gate, hub, jobOf, prSessionSeams, retryIn, savePrompt, sessionSql } from "./test/session.ts";
 import { BASE, push, sha } from "./test/webhook.ts";
 import { FakeWorkspace } from "./test/workspace.ts";
 
@@ -407,19 +396,5 @@ describe("the instruction read", () => {
     await session.client.chat([question("q1")]);
     await untilState(session.stub, "q1", "done");
     expect(read).toHaveBeenCalledOnce();
-  });
-
-  it("takes a registered skill and leaves the turn as it was: no turn uses skills yet", async () => {
-    captureLogs();
-    await clearSkills();
-    const skill = { ...seedVersion("polish"), description: "SKILL-DESCRIPTION-MARKER" };
-    expect(await (await hub()).registerSkill(skill)).toHaveProperty("rev");
-    const session = await cloudSession("prompts", sockets);
-    const model = new ScriptedModel().add(answerScript("the answer"));
-    useCloudModel(model);
-    await session.client.chat([question("q1")]);
-    await untilState(session.stub, "q1", "done");
-    expect(JSON.stringify(model.calls)).not.toContain("SKILL-DESCRIPTION-MARKER");
-    await clearSkills();
   });
 });

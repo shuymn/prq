@@ -1,42 +1,38 @@
-// A manual check of skill registration through the Worker (skills-check.ts): the real Worker in wrangler's local
-// runtime with the GitHub App configured, registering a public skill from real GitHub through /api/skills, and the
-// stored copy read back through the Hub's bundle read. The check reads GitHub itself with the App (its own JWT and an
-// installation token) for its oracle: the refs' commits, the skill's tree and SKILL.md's frontmatter. Steps:
+// A manual check of skills through the Worker (skills-check.ts): the real Worker in wrangler's local runtime with the
+// GitHub App configured, registering public skills from real GitHub through /api/skills, the stored copy read back
+// through the Hub's bundle read, and cloud turns with them. The check reads GitHub itself with the App (its own JWT and
+// an installation token; skill-github.ts) for its oracle: the refs' commits, the skills' trees, SKILL.md's frontmatter
+// and body, and a file. Steps:
 // 1. G9: a link whose branch holds `/` previews with that branch as the ref and the rest as the path.
 // 2. G1: the link to main's SKILL.md previews and registers with the tuple GitHub gives (repository, path, ref, SHA,
 //    name, description), the settings list it, the stored files equal the tree at that SHA (paths, sizes, modes, blob
 //    SHA-1 of the stored bytes), and the confirm read with the App's first active installation.
-// 3. G7: updates by a new link, by a ref and by a permalink each pin exactly the previewed SHA with a new revision, an
-//    apply with an old revision gets 409, and a remove leaves no skill.
+// 3. G2: cloud turns with yomiyasu and a second skill registered, the Worker's model scripted (skill-context.ts).
+// 4. G7: updates by a new link, by a ref and by a permalink each pin exactly the previewed SHA with a new revision, an
+//    apply with an old revision gets 409, a remove leaves no skill, and the next turn lists none and offers no tool.
+// 5. G3, with a pull request argument: the smoke with the model of packages/server/.dev.vars (skill-smoke.ts).
 // It prints what each step saw (never a token or the key) and passes when every step held.
 
-import { createHash } from "node:crypto";
-
-import { Instructions, Skill, SkillPreview, SkillUpdatePreview } from "@prq/protocol";
-import { importPKCS8, SignJWT } from "jose";
+import { Instructions, type PrRef, Skill, SkillPreview, SkillUpdatePreview } from "@prq/protocol";
 import * as v from "valibot";
-import { parse } from "yaml";
 
-import { type GithubAppSettings, startWorker, type Worker } from "./worker.ts";
+import type { GithubApp } from "./reconcile.ts";
+import { SCRIPTED_MODEL, serveScripted } from "./scripted.ts";
+import { checkAfterRemoval, checkContext, type Verdict } from "./skill-context.ts";
+import { api, appGithub, type Github, type Manifest, sha1Blob, skillLink, YOMIYASU } from "./skill-github.ts";
+import { checkSmoke } from "./skill-smoke.ts";
+import { type GithubAppSettings, type ModelSettings, startWorker, type Worker } from "./worker.ts";
 
 const API = "https://api.github.com";
-const OWNER = "nanaism";
-const REPO = "yomiyasu";
-const DIR = "skills/yomiyasu";
 const NAME = "yomiyasu";
+const DIR = YOMIYASU.path;
+const OWNER = YOMIYASU.owner;
+const REPO = YOMIYASU.repo;
 // A branch whose name holds `/`, and two tags.
 const BRANCH = "pr/oga/v3.2.0";
 const TAG = "v3.1.0";
 const PERMALINK_TAG = "v3.2.0";
 
-const Installations = v.array(v.object({ id: v.number(), suspended_at: v.nullish(v.string()) }));
-const Token = v.object({ token: v.string() });
-const Tree = v.object({
-  truncated: v.boolean(),
-  tree: v.array(
-    v.object({ path: v.string(), mode: v.string(), type: v.string(), sha: v.string(), size: v.optional(v.number()) }),
-  ),
-});
 const Bundle = v.object({
   skill: Skill,
   files: v.array(
@@ -49,118 +45,9 @@ const Bundle = v.object({
     }),
   ),
 });
-const Frontmatter = v.object({ name: v.string(), description: v.string() });
-
-type ManifestFile = { path: string; mode: string; size: number; blob: string };
-type Manifest = { sha: string; name: string; description: string; files: ManifestFile[] };
-
-function sha1Blob(bytes: Uint8Array): string {
-  return createHash("sha1").update(`blob ${bytes.byteLength}\0`).update(bytes).digest("hex");
-}
-
-function encodedPath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
-}
-
-// GitHub read as the App: the first active installation of its list, and reads with that installation's token, through
-// the fetch from before the Worker's harness wrapped it.
-async function appGithub(app: GithubAppSettings, direct: typeof fetch) {
-  const key = await importPKCS8(app.GITHUB_APP_PRIVATE_KEY, "RS256");
-  const now = Math.floor(Date.now() / 1000);
-  const jwt = await new SignJWT({})
-    .setProtectedHeader({ alg: "RS256" })
-    .setIssuer(app.GITHUB_APP_ID)
-    .setIssuedAt(now - 60)
-    .setExpirationTime(now + 540)
-    .sign(key);
-  const call = async (path: string, init: RequestInit, authorization: string) => {
-    const headers = new Headers(init.headers);
-    headers.set("authorization", authorization);
-    headers.set("user-agent", "prq-skills-check");
-    headers.set("x-github-api-version", "2022-11-28");
-    const res = await direct(`${API}${path}`, { ...init, headers });
-    if (!res.ok) {
-      throw new Error(`GitHub answered ${res.status} to ${init.method ?? "GET"} ${path}`);
-    }
-    return res;
-  };
-  const listed = v.parse(
-    Installations,
-    await (await call("/app/installations?per_page=100", {}, `Bearer ${jwt}`)).json(),
-  );
-  const installation = listed.find((entry) => entry.suspended_at === null || entry.suspended_at === undefined);
-  if (installation === undefined) {
-    throw new Error("the App has no active installation");
-  }
-  const minted = await call(`/app/installations/${installation.id}/access_tokens`, { method: "POST" }, `Bearer ${jwt}`);
-  const { token } = v.parse(Token, await minted.json());
-  const read = (path: string, accept: string) => call(path, { headers: { accept } }, `token ${token}`);
-  return {
-    installation: installation.id,
-    installations: listed.length,
-    // The commit a branch (heads/<name>) or tag (tags/<name>) names now, a tag peeled.
-    commitOf: async (ref: string) =>
-      (
-        await (
-          await read(`/repos/${OWNER}/${REPO}/commits/refs/${encodedPath(ref)}`, "application/vnd.github.sha")
-        ).text()
-      ).trim(),
-    // The skill's regular files at the commit, and SKILL.md's name and description, read and parsed here.
-    manifestAt: async (sha: string): Promise<Manifest> => {
-      const tree = v.parse(
-        Tree,
-        await (
-          await read(
-            `/repos/${OWNER}/${REPO}/git/trees/${sha}:${encodedPath(DIR)}?recursive=1`,
-            "application/vnd.github+json",
-          )
-        ).json(),
-      );
-      if (tree.truncated) {
-        throw new Error(`GitHub cut the tree at ${sha} short`);
-      }
-      const files = tree.tree
-        .filter((entry) => entry.type === "blob")
-        .map(({ path, mode, sha: blob, size }) => ({ path, mode, size: size ?? -1, blob }))
-        .toSorted((a, b) => (a.path < b.path ? -1 : 1));
-      const skillMd = files.find((file) => file.path === "SKILL.md");
-      if (skillMd === undefined) {
-        throw new Error(`no SKILL.md in ${DIR} at ${sha}`);
-      }
-      const bytes = new Uint8Array(
-        await (
-          await read(`/repos/${OWNER}/${REPO}/git/blobs/${skillMd.blob}`, "application/vnd.github.raw")
-        ).arrayBuffer(),
-      );
-      if (sha1Blob(bytes) !== skillMd.blob) {
-        throw new Error("SKILL.md's bytes do not match its blob");
-      }
-      const lines = new TextDecoder().decode(bytes).split(/\r?\n/);
-      const end = lines.indexOf("---", 1);
-      const { name, description } = v.parse(Frontmatter, parse(lines.slice(1, end).join("\n")));
-      return { sha, name, description, files };
-    },
-  };
-}
-
-type Github = Awaited<ReturnType<typeof appGithub>>;
-
-// A call to the Worker's /api with the host's Access token: its status and JSON body (null for none).
-async function api(worker: Worker, method: string, path: string, body?: unknown) {
-  const res = await fetch(new URL(path, worker.url()), {
-    method,
-    headers: {
-      "Cf-Access-Jwt-Assertion": await worker.token(),
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
-  const text = await res.text();
-  return { status: res.status, body: text === "" ? null : (JSON.parse(text) as unknown) };
-}
 
 function link(ref: string): string {
-  return `https://github.com/${OWNER}/${REPO}/blob/${ref}/${DIR}/SKILL.md`;
+  return skillLink(YOMIYASU, ref);
 }
 
 // The Worker's requests to GitHub's API, counted where the harness hands them to this process's fetch.
@@ -180,8 +67,6 @@ function countGithub(): { count: () => number; stop: () => void } {
     },
   };
 }
-
-type Verdict = (ok: boolean, line: string) => void;
 
 // The stored copy against the manifest: the same paths, modes and sizes, and each stored file's bytes hashing to its
 // tree blob.
@@ -209,7 +94,7 @@ function tuple(skill: { source: unknown; ref: unknown; sha: string; name: string
 
 // G9: the branch holding `/` is the ref, the rest the path.
 async function previewSlashedBranch(worker: Worker, github: Github, verdict: Verdict): Promise<void> {
-  const sha = await github.commitOf(`heads/${BRANCH}`);
+  const sha = await github.commitOf(YOMIYASU, `heads/${BRANCH}`);
   const res = await api(worker, "POST", "/api/skills/preview", { url: link(BRANCH) });
   if (res.status !== 200) {
     verdict(false, `G9: the preview answered ${res.status} ${JSON.stringify(res.body)}`);
@@ -227,9 +112,9 @@ async function previewSlashedBranch(worker: Worker, github: Github, verdict: Ver
 async function register(worker: Worker, github: Github, verdict: Verdict): Promise<Skill | null> {
   let preview: SkillPreview | null = null;
   for (let attempt = 1; attempt <= 3 && preview === null; attempt += 1) {
-    const before = await github.commitOf("heads/main");
+    const before = await github.commitOf(YOMIYASU, "heads/main");
     const res = await api(worker, "POST", "/api/skills/preview", { url: link("main") });
-    const after = await github.commitOf("heads/main");
+    const after = await github.commitOf(YOMIYASU, "heads/main");
     if (res.status !== 200) {
       verdict(false, `G1: the preview answered ${res.status} ${JSON.stringify(res.body)}`);
       return null;
@@ -244,11 +129,14 @@ async function register(worker: Worker, github: Github, verdict: Verdict): Promi
   if (preview === null) {
     return null;
   }
-  const manifest = await github.manifestAt(preview.sha);
+  const manifest = await github.manifestAt(YOMIYASU, preview.sha);
+  const { sha, name, description } = manifest;
   const expected = {
     source: { owner: OWNER, repo: REPO, path: DIR },
     ref: { name: "main", kind: "branch" },
-    ...manifest,
+    sha,
+    name,
+    description,
   };
   verdict(
     tuple(preview) === tuple(expected),
@@ -329,11 +217,18 @@ async function update(
     skill.sha === preview.sha && skill.rev > preview.current.rev,
     `G7 ${label} apply: 200, ${skill.sha.slice(0, 7)} rev ${preview.current.rev} → ${skill.rev}`,
   );
-  await checkStored(worker, await github.manifestAt(skill.sha), verdict);
+  await checkStored(worker, await github.manifestAt(YOMIYASU, skill.sha), verdict);
   return skill;
 }
 
-export async function checkSkills(app: GithubAppSettings, print: (line: string) => void): Promise<boolean> {
+// The model check of a run with a pull request argument (G3): the App's installation and the model it runs with.
+export type SmokeSettings = { app: GithubApp; model: ModelSettings; pr: PrRef };
+
+export async function checkSkills(
+  app: GithubAppSettings,
+  print: (line: string) => void,
+  smoke: SmokeSettings | null,
+): Promise<boolean> {
   let ok = true;
   const verdict: Verdict = (held, line) => {
     ok &&= held;
@@ -342,12 +237,23 @@ export async function checkSkills(app: GithubAppSettings, print: (line: string) 
   const direct = globalThis.fetch;
   const github = await appGithub(app, direct);
   print(`skills check: App ${app.GITHUB_APP_ID}, ${OWNER}/${REPO} ${DIR}`);
-  const worker = await startWorker({ githubApp: app });
+  const scripted = serveScripted();
+  let worker: Worker;
+  try {
+    worker = await startWorker({ githubApp: app, model: SCRIPTED_MODEL });
+  } catch (error) {
+    scripted.stop();
+    throw error;
+  }
   const requests = countGithub();
   try {
     await previewSlashedBranch(worker, github, verdict);
     const registered = await register(worker, github, verdict);
     if (registered === null) {
+      return false;
+    }
+    const context = await checkContext(worker, github, scripted, registered, print, verdict);
+    if (context === null) {
       return false;
     }
     const byLink = await update(
@@ -358,7 +264,7 @@ export async function checkSkills(app: GithubAppSettings, print: (line: string) 
       { url: link(BRANCH) },
       {
         ref: { name: BRANCH, kind: "branch" },
-        sha: await github.commitOf(`heads/${BRANCH}`),
+        sha: await github.commitOf(YOMIYASU, `heads/${BRANCH}`),
       },
     );
     const stale = await api(worker, "PUT", `/api/skills/${NAME}`, {
@@ -380,10 +286,10 @@ export async function checkSkills(app: GithubAppSettings, print: (line: string) 
       { ref: TAG },
       {
         ref: { name: TAG, kind: "tag" },
-        sha: await github.commitOf(`tags/${TAG}`),
+        sha: await github.commitOf(YOMIYASU, `tags/${TAG}`),
       },
     );
-    const pinned = await github.commitOf(`tags/${PERMALINK_TAG}`);
+    const pinned = await github.commitOf(YOMIYASU, `tags/${PERMALINK_TAG}`);
     const byPermalink = await update(
       worker,
       github,
@@ -406,10 +312,15 @@ export async function checkSkills(app: GithubAppSettings, print: (line: string) 
       removed.status === 204 && listed.length === 0 && bundle === null,
       `G7 remove: ${removed.status}; GET /api/instructions lists ${listed.length} skills; the Hub holds ${bundle === null ? "no copy" : "a copy"}`,
     );
+    await checkAfterRemoval(worker, scripted, context, print, verdict);
     print(`the Worker made ${requests.count()} requests to GitHub's API`);
-    return ok;
   } finally {
     requests.stop();
     await worker.close();
+    scripted.stop();
   }
+  if (smoke !== null) {
+    await checkSmoke(smoke, smoke.pr, print, verdict);
+  }
+  return ok;
 }

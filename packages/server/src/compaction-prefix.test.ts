@@ -8,7 +8,7 @@ import { contextBudget, contextLimit } from "./pr-session/context-budget.ts";
 import type { PrSession } from "./pr-session/index.ts";
 import { instructionPrefix } from "./pr-session/prefix.ts";
 import { CHARS_PER_TOKEN } from "./pr-session/room.ts";
-import { toolDefinitionsJson } from "./pr-session/tools.ts";
+import { toolDefinitionsJson } from "./pr-session/turn-tools.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
 import { cloudSession, untilEnded, untilState } from "./test/cloud.ts";
@@ -484,7 +484,9 @@ describe("a measurement taken after the tools were withdrawn", () => {
     captureLogs();
     // Measured 40 tokens plus the definitions under the limit: with the definitions, the next question leaves less
     // room than a tool result needs.
-    const definitions = Math.ceil((await toolDefinitionsJson()).length / CHARS_PER_TOKEN);
+    const definitions = Math.ceil(
+      (await toolDefinitionsJson({ workspace: true, skills: false })).length / CHARS_PER_TOKEN,
+    );
     const { stub, client, model } = await withdrawnAnalysis(limit - definitions - 40, SUMMARY);
 
     await client.chat([question("q1")]);

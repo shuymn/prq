@@ -82,6 +82,26 @@ function allowedToolsEntries(field: string | string[]): string[] {
   return entries;
 }
 
+// A frontmatter delimiter line, read without its trailing whitespace, so with or without a line end, LF or CRLF.
+function isDelimiter(line: string | undefined): boolean {
+  return line?.trimEnd() === "---";
+}
+
+// Where a SKILL.md's frontmatter closes: the first delimiter line after a first line that is one, or -1 when there is
+// no frontmatter between them.
+function frontmatterEnd(lines: readonly string[]): number {
+  return isDelimiter(lines[0]) ? lines.findIndex((line, index) => index > 0 && isDelimiter(line)) : -1;
+}
+
+// A SKILL.md's body: its text after the frontmatter's closing `---` line and that line's end, as stored (a leading BOM
+// dropped); null when the bytes are not UTF-8 or hold no frontmatter, which registration refuses.
+export function skillBody(bytes: Uint8Array): string | null {
+  // Each line with its line end, so the lines after the closing one join into the rest exactly.
+  const lines = utf8Text(bytes)?.split(/(?<=\n)/) ?? [];
+  const end = frontmatterEnd(lines);
+  return end === -1 ? null : lines.slice(end + 1).join("");
+}
+
 // The frontmatter of a SKILL.md, or why it is refused: the text between a first line `---` and the next `---` line,
 // read as YAML with aliases refused; name in the specification's form, description 1–1,024 characters, license and
 // allowed-tools within their caps.
@@ -91,8 +111,8 @@ export function readSkillMd(bytes: Uint8Array): SkillFrontmatter | { issue: stri
     return { issue: "SKILL.md is not UTF-8" };
   }
   const lines = text.split(/\r?\n/);
-  const end = lines.findIndex((line, index) => index > 0 && line.trimEnd() === "---");
-  if (lines[0]?.trimEnd() !== "---" || end === -1) {
+  const end = frontmatterEnd(lines);
+  if (end === -1) {
     return { issue: "SKILL.md has no frontmatter between --- lines" };
   }
   let fields: unknown;

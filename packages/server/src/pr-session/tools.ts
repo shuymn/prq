@@ -1,18 +1,10 @@
 import { valibotSchema } from "@ai-sdk/valibot";
-import {
-  asSchema,
-  isLoopFinished,
-  type LanguageModelCallEndEvent,
-  type PrepareStepResult,
-  tool,
-  type ToolSet,
-} from "ai";
+import { tool, type ToolSet } from "ai";
 import * as v from "valibot";
 
 import { toolArgv } from "../workspace-git.ts";
-import { STREAM_TIMEOUT } from "./model.ts";
 import { cutAt, fitPage, MIN_PAGE_CHARS, type Page, type PageRequest } from "./pages.ts";
-import { ContextRoom } from "./room.ts";
+import type { ContextRoom } from "./room.ts";
 import {
   type CommandResult,
   type PreparedWorkspace,
@@ -22,15 +14,16 @@ import {
   type WorkspaceTarget,
 } from "./workspace.ts";
 
-// The cloud agent's tools (docs/design.md, Model context): they read the job's commit through git, so a path resolves
-// in the commit's tree only and a symlink is its link text, never followed. A tool never throws: what failed comes back
-// as `error: …` text, which the model can act on. Each result is at most 12,000 characters, and no more than the
-// context has room for; a note says where the next page starts.
+// The cloud agent's git tools (docs/design.md, Model context), and the bounds every tool's result keeps: the git tools
+// read the job's commit, so a path resolves in the commit's tree only and a symlink is its link text, never followed.
+// A tool never throws: what failed comes back as `error: …` text, which the model can act on. Each result is at most
+// 12,000 characters, and no more than the context has room for; a note says where the next page starts. The skill
+// tools are skill-tools.ts's, and turn-tools.ts makes a turn's set of both.
 
 // The most characters one tool result takes, its notes included.
 export const TOOL_RESULT_CHARS = 12_000;
 // Room a result keeps for its note (where the next page starts, or why it was cut).
-const NOTE_CHARS = 200;
+export const NOTE_CHARS = 200;
 // Less room than this and a result could not show a page: the tools are withdrawn and the model answers.
 export const MIN_RESULT_CHARS = MIN_PAGE_CHARS + NOTE_CHARS;
 
@@ -47,13 +40,13 @@ const Path = v.pipe(
   v.maxLength(1024),
   v.description("A path in the repository, relative to its root"),
 );
-const StartLine = v.pipe(
+export const StartLine = v.pipe(
   v.number(),
   v.integer(),
   v.minValue(1),
   v.description("The line to start at (from 1), as a note in an earlier result gave it"),
 );
-const StartChar = v.pipe(
+export const StartChar = v.pipe(
   v.number(),
   v.integer(),
   v.minValue(0),
@@ -75,7 +68,7 @@ const DiffInput = v.object({
   startChar: v.optional(StartChar),
 });
 
-type ToolContext = {
+export type ToolContext = {
   workspace: WorkspaceClient;
   target: WorkspaceTarget;
   prepared: PreparedWorkspace;
@@ -107,13 +100,13 @@ function callError(error: unknown): string {
   return `error: ${error instanceof Error ? error.message : String(error)}`;
 }
 
-function withNote(body: string, note: string): string {
+export function withNote(body: string, note: string): string {
   return note === "" ? body : `${body}\n${note}`;
 }
 
 // Where the next page starts, as the model calls again for it; or, when the context has no room for more, that it was
 // cut there.
-function continuation(page: Page, byRoom: boolean): string {
+export function continuation(page: Page, byRoom: boolean): string {
   const { next } = page;
   if (next === null) {
     return "";
@@ -163,7 +156,7 @@ async function runPaged(context: ToolContext, signal: AbortSignal | undefined, p
 // The last cut of every result, a page, git's error or a failed call alike: at most 12,000 characters and at most the
 // room left, or, with less room left than a result needs, the no-room notice. Each result thus takes at most the room
 // left or one notice.
-function fitResult(text: string, left: number): string {
+export function fitResult(text: string, left: number): string {
   const limit = Math.min(TOOL_RESULT_CHARS, left);
   if (text.length <= limit) {
     return text;
@@ -174,6 +167,18 @@ function fitResult(text: string, left: number): string {
   return `${cutAt(text, limit - RESULT_CUT.length)}${RESULT_CUT}`;
 }
 
+// A nonempty page of a file, each line after its number and a tab, with its continuation note.
+export function numberedPage(page: Page, byRoom: boolean): string {
+  const lines = page.lines.map((text, index) => `${page.start.line + index}\t${text}`);
+  return withNote(lines.join("\n"), continuation(page, byRoom));
+}
+
+// A page of paths, with how many more were left out.
+export function pathList(page: Page, byRoom: boolean): string {
+  const note = page.next === null ? "" : `[${page.rest} more paths not shown; narrow the path${cutByRoom(byRoom)}]`;
+  return withNote(page.lines.join("\n"), note);
+}
+
 function listFilesResult(path: string | undefined) {
   return (result: CommandResult, page: Page, byRoom: boolean): string => {
     if (result.exitCode !== 0) {
@@ -182,8 +187,7 @@ function listFilesResult(path: string | undefined) {
     if (page.lines.length === 0) {
       return path === undefined ? "no files" : `no files at ${path}`;
     }
-    const note = page.next === null ? "" : `[${page.rest} more paths not shown; narrow the path${cutByRoom(byRoom)}]`;
-    return withNote(page.lines.join("\n"), note);
+    return pathList(page, byRoom);
   };
 }
 
@@ -199,8 +203,7 @@ function readFileResult(result: CommandResult, page: Page, byRoom: boolean): str
       ? "(empty file)"
       : `error: startLine ${page.start.line} is past the end of the file (${page.lineCount} lines)`;
   }
-  const lines = page.lines.map((text, index) => `${page.start.line + index}\t${text}`);
-  return withNote(lines.join("\n"), continuation(page, byRoom));
+  return numberedPage(page, byRoom);
 }
 
 function grepResult(result: CommandResult, page: Page, byRoom: boolean): string {
@@ -232,8 +235,8 @@ function diffResult(path: string | undefined) {
   };
 }
 
-// What the provider is told of each tool: its description and its input's schema, the same in every turn.
-const DEFINITIONS = {
+// What the provider is told of each git tool: its description and its input's schema, the same in every turn.
+export const GIT_TOOL_DEFINITIONS = {
   diff: {
     description:
       "The pull request's change. Without a path: the changed files, each with its added and removed line counts. " +
@@ -258,19 +261,6 @@ const DEFINITIONS = {
   },
 };
 
-// The tool definitions as the provider is sent them (each name, description and JSON schema, sorted by name), as JSON:
-// what a turn's requests carry of its tools before any call. Known before the workspace is prepared.
-export async function toolDefinitionsJson(): Promise<string> {
-  const definitions = await Promise.all(
-    Object.entries(DEFINITIONS).map(async ([name, definition]) => ({
-      name,
-      description: definition.description,
-      parameters: await asSchema(definition.inputSchema).jsonSchema,
-    })),
-  );
-  return JSON.stringify(definitions);
-}
-
 // The tools of a turn with a workspace, sorted by name (the order the provider sees them in, for its prompt cache). No
 // tool has needsApproval: the SDK's approval paths write the history around prq's commit.
 export function workspaceTools(context: ToolContext): ToolSet {
@@ -279,7 +269,7 @@ export function workspaceTools(context: ToolContext): ToolSet {
   const twoTips = context.prepared.mergeBase === null ? TWO_TIPS : undefined;
   return {
     diff: tool({
-      ...DEFINITIONS.diff,
+      ...GIT_TOOL_DEFINITIONS.diff,
       execute: ({ path, startLine = 1, startChar = 0 }, { abortSignal }) =>
         runPaged(context, abortSignal, {
           argv: toolArgv.diff(base, sha, path),
@@ -289,7 +279,7 @@ export function workspaceTools(context: ToolContext): ToolSet {
         }),
     }),
     grep: tool({
-      ...DEFINITIONS.grep,
+      ...GIT_TOOL_DEFINITIONS.grep,
       execute: ({ pattern, path, ignoreCase }, { abortSignal }) =>
         runPaged(context, abortSignal, {
           argv: toolArgv.grep(sha, pattern, path, ignoreCase),
@@ -298,7 +288,7 @@ export function workspaceTools(context: ToolContext): ToolSet {
         }),
     }),
     list_files: tool({
-      ...DEFINITIONS.list_files,
+      ...GIT_TOOL_DEFINITIONS.list_files,
       execute: ({ path }, { abortSignal }) =>
         runPaged(context, abortSignal, {
           argv: toolArgv.listFiles(sha, path),
@@ -307,7 +297,7 @@ export function workspaceTools(context: ToolContext): ToolSet {
         }),
     }),
     read_file: tool({
-      ...DEFINITIONS.read_file,
+      ...GIT_TOOL_DEFINITIONS.read_file,
       execute: ({ path, startLine = 1, startChar = 0 }, { abortSignal }) =>
         runPaged(context, abortSignal, {
           argv: toolArgv.readFile(sha, path),
@@ -315,48 +305,5 @@ export function workspaceTools(context: ToolContext): ToolSet {
           render: readFileResult,
         }),
     }),
-  };
-}
-
-// What a turn's streamText is given besides its model and context. Every turn loops until a step makes no tool call
-// (no step limit for now: docs/design.md, Billing limits); the AI SDK's own default would end it after
-// one step. Tool calls are bounded by the workspace backstop, through the abort signal each execute receives.
-export const TURN_LOOP = {
-  stopWhen: isLoopFinished(),
-  timeout: { ...STREAM_TIMEOUT, toolMs: WORKSPACE_CALL_MS },
-};
-
-export type ToolLoop = {
-  tools: ToolSet;
-  prepareStep: (options: { stepNumber: number }) => PrepareStepResult<ToolSet> | undefined;
-  onLanguageModelCallEnd: (event: Pick<LanguageModelCallEndEvent, "usage" | "content">) => void;
-  // Whether the tools were withdrawn, from some step on.
-  withdrawn: () => boolean;
-};
-
-// A turn with a workspace: its tools, and the room that withdraws them (no tools offered) when the next request would
-// leave no room for a result, so the model answers from what it has read. Under toolChoice "none", which would keep the
-// tool definitions in the cached prefix, a provider wrote its tool call as the answer's text (DeepSeek), and an answer
-// the author can read is worth more than that prefix. The first request's size is `start`, the caller's: the context
-// count when the session has a measurement, else the request's estimate. The room is measured again at the end of each
-// model call, and tools run after it.
-export function toolLoop(context: Omit<ToolContext, "room">, window: number, start: number): ToolLoop {
-  const room = new ContextRoom(window);
-  const tools = workspaceTools({ ...context, room });
-  room.start(start);
-  let withdrawn = false;
-  return {
-    tools,
-    prepareStep: () => {
-      if (room.leftChars() >= MIN_RESULT_CHARS) {
-        return undefined;
-      }
-      withdrawn = true;
-      return { activeTools: [] };
-    },
-    onLanguageModelCallEnd: ({ usage, content }) => {
-      room.measure(usage, JSON.stringify(content).length);
-    },
-    withdrawn: () => withdrawn,
   };
 }

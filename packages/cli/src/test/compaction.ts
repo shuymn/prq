@@ -20,6 +20,12 @@
 //   the language of the question." asks for it): one question in each language at the end, and each answer's prose,
 //   its letters outside code, headings, links and markup: at least 200, Japanese scripts at least half of the
 //   Japanese answer's, Latin at least nine tenths of the English answer's.
+// With `--skill` (yomiyasu registered from main before the analysis, and an answer prompt naming it), also:
+// - skill: an executed activation of yomiyasu (its result's status line `read`) lies in the segment the checked
+//   compaction summarized, found by message and step (one in the turn prefix of a split cut is summarized, one in the
+//   kept steps is not); for each, a summary request of that compaction holds exactly its marker, and none holds a
+//   sentinel: a line within the body's first 1,500 characters, which a raw first page would put into the request
+//   before the summary's 2,000-character cut of a result, after its status line and header.
 
 import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -31,6 +37,7 @@ import { contextLimit } from "../../../server/src/pr-session/context-budget.ts";
 import { UsageError } from "./app-check.ts";
 import { ask, deliver, getMessages, savePrompt, sessionView } from "./pr.ts";
 import type { GithubApp } from "./reconcile.ts";
+import { appGithub, bodyOf, registerSkill, skillLink, YOMIYASU } from "./skill-github.ts";
 import { type ModelSettings, startWorker, type Worker } from "./worker.ts";
 import { readPull, untilEnded, workspaceContainers } from "./workspace.ts";
 
@@ -83,10 +90,18 @@ export const JAPANESE: Questions = {
 // The host's prompts the check saves before the analysis; empty for one it leaves unsaved.
 export type Prompts = { analysis: string; answer: string };
 
-// How a run goes: the push's analysis alone or the whole check, and the language expected of the analysis.
-export type Run = { analysisOnly: boolean; analysisLanguage: Language | null };
+// How a run goes: the push's analysis alone or the whole check, the language expected of the analysis, and whether
+// yomiyasu is registered.
+export type Run = { analysisOnly: boolean; analysisLanguage: Language | null; skill: boolean };
 
-type Steps = { compacted: boolean; unchanged: boolean; queued: boolean; refused: boolean; prompts: boolean };
+type Steps = {
+  compacted: boolean;
+  unchanged: boolean;
+  queued: boolean;
+  refused: boolean;
+  prompts: boolean;
+  skill: boolean;
+};
 
 // What a request the Worker sent to the model is, by its system message: a turn of the analysis or of an answer (by
 // the job's line), a summary request (the summarizer's system prompt, SUMMARIZATION_SYSTEM_PROMPT in
@@ -237,6 +252,7 @@ export function checkVerdict(steps: Steps, summary: string, language: Language |
     steps.queued &&
     steps.refused &&
     steps.prompts &&
+    steps.skill &&
     analysisIn(summary, language)
   );
 }
@@ -245,7 +261,7 @@ export function checkVerdict(steps: Steps, summary: string, language: Language |
 const HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 
 // A tool call written as text: DeepSeek's markup (`<｜｜DSML｜｜ …>`, `<｜tool▁calls▁begin｜>`) or a generic tag.
-const TOOL_CALL_MARKUP = /<｜|DSML|<\/?(?:tool_calls?|function_calls?|invoke)\b/i;
+export const TOOL_CALL_MARKUP = /<｜|DSML|<\/?(?:tool_calls?|function_calls?|invoke)\b/i;
 
 // Each heading of a text with the first non-blank line under it, up to the next heading.
 function outline(text: string): string[] {
@@ -352,7 +368,7 @@ function events(worker: Worker, from: number, pattern: RegExp): string[] {
 }
 
 // A field of a log line, as the Worker's log prints it (`name: 'value'` or `name: 1`).
-function field(line: string, name: string): string {
+export function field(line: string, name: string): string {
   return new RegExp(`\\b${name}: '?([^',}\\s]*)`).exec(line)?.[1] ?? "";
 }
 
@@ -379,6 +395,92 @@ export function startedAfterCompaction(
     ),
   );
   return { doneAt, startedAt, after: doneAt >= 0 && startedAt.every((index) => index > doneAt) };
+}
+
+// Where a cut falls: a message and the step within it; null for the start of the conversation.
+type Cut = { messageId: string; step: number } | null;
+
+// An executed activation of a skill, by its message and step: the commit and revision its status line gives.
+type Activation = { messageId: string; message: number; step: number; sha: string; rev: string };
+
+const ACTIVATED = /^\[activate_skill skill ([a-z0-9-]+) at ([0-9a-f]{40}) rev ([1-9][0-9]*): read\]$/;
+const StoredParts = v.array(
+  v.looseObject({
+    id: v.string(),
+    parts: v.array(v.looseObject({ type: v.string(), state: v.optional(v.string()), output: v.optional(v.unknown()) })),
+  }),
+);
+
+// Whether a message and step come before another.
+function earlierAt(a: [number, number], b: [number, number]): boolean {
+  return a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]);
+}
+
+// The executed activations of the skill in a conversation (get-messages), each by its message and step (a step-start
+// part after a message's first part begins a step), split by whether they lie in the segment from cut `from` to cut
+// `to`, the one a compaction from `from` to `to` summarized.
+export function activationsByCut(
+  list: unknown[],
+  skill: string,
+  from: Cut,
+  to: Cut,
+): { summarized: Activation[]; other: Activation[] } {
+  const conversation = v.parse(StoredParts, list);
+  const at = (cut: Cut, fallback: number): [number, number] => {
+    if (cut === null) {
+      return [fallback, 0];
+    }
+    const index = conversation.findIndex((message) => message.id === cut.messageId);
+    return [index < 0 ? fallback : index, index < 0 ? 0 : cut.step];
+  };
+  const start = at(from, 0);
+  const end = at(to, conversation.length);
+  const found = conversation.flatMap((message, index) => {
+    let step = 0;
+    return message.parts.flatMap((part, position) => {
+      if (part.type === "step-start" && position > 0) {
+        step += 1;
+      }
+      const status =
+        part.type === "tool-activate_skill" && part.state === "output-available" && typeof part.output === "string"
+          ? ACTIVATED.exec(part.output.split("\n", 1)[0] ?? "")
+          : null;
+      return status === null || status[1] !== skill
+        ? []
+        : [{ messageId: message.id, message: index, step, sha: status[2] ?? "", rev: status[3] ?? "" }];
+    });
+  });
+  const inside = (entry: Activation) =>
+    !earlierAt([entry.message, entry.step], start) && earlierAt([entry.message, entry.step], end);
+  return { summarized: found.filter(inside), other: found.filter((entry) => !inside(entry)) };
+}
+
+// The marker an earlier turn's delivered skill call becomes (docs/design.md, Status lines and markers), written here
+// apart from the server's.
+export function skillCallMarker(
+  tool: string,
+  skill: string,
+  { sha, rev }: { sha: string; rev: string | number },
+): string {
+  return `[${tool} of skill ${skill} at ${sha.slice(0, 7)} rev ${rev} in an earlier turn: read; activate the skill again to use it]`;
+}
+
+// Up to five lines of the body's first 1,500 characters, spread over them: trimmed, at least 16 characters, and not in
+// the skill's description.
+function bodySentinels(body: string, description: string): string[] {
+  const lines = [
+    ...new Set(
+      body
+        .slice(0, 1500)
+        .split("\n")
+        .slice(0, -1)
+        .map((line) => line.trim())
+        .filter((line) => line.length >= 16 && !description.includes(line)),
+    ),
+  ];
+  return [...new Set([0, 0.25, 0.5, 0.75, 1].map((at) => lines[Math.round(at * (lines.length - 1))] ?? ""))].filter(
+    (line) => line !== "",
+  );
 }
 
 function firstLine(text: string): string {
@@ -465,7 +567,7 @@ export async function checkCompaction(
   print: (line: string) => void,
   questions: Questions,
   prompts: Prompts,
-  { analysisOnly, analysisLanguage: expected }: Run,
+  { analysisOnly, analysisLanguage: expected, skill: withSkill }: Run,
 ): Promise<boolean> {
   const window = Number(settings.model.MODEL_CONTEXT_TOKENS);
   const limit = contextLimit(window);
@@ -476,9 +578,17 @@ export async function checkCompaction(
       `window ${window} (compacted above ${limit}); ${files.length} changed files`,
   );
   const prompted = prompts.analysis !== "" || prompts.answer !== "";
-  const results: Steps = { compacted: false, unchanged: false, queued: false, refused: false, prompts: !prompted };
+  const results: Steps = {
+    compacted: false,
+    unchanged: false,
+    queued: false,
+    refused: false,
+    prompts: !prompted,
+    skill: !withSkill,
+  };
   let summary = "";
   let languages: boolean | null = null;
+  const github = withSkill ? await appGithub(settings.app.settings, globalThis.fetch) : null;
   const tracked = await workspaceContainers();
   const worker = await startWorker({ model: settings.model, githubApp: settings.app.settings, containers: true });
   try {
@@ -487,6 +597,20 @@ export async function checkCompaction(
         await savePrompt(worker, kind, prompts[kind]);
         print(`the ${kind} prompt saved: ${prompts[kind]}`);
       }
+    }
+    let skill: { sha: string; rev: number; sentinels: string[] } | null = null;
+    if (github !== null) {
+      const registered = await registerSkill(worker, skillLink(YOMIYASU, "main"));
+      const manifest = await github.manifestAt(YOMIYASU, registered.sha);
+      skill = {
+        sha: registered.sha,
+        rev: registered.rev,
+        sentinels: bodySentinels(bodyOf(manifest.skillMd), manifest.description),
+      };
+      print(
+        `yomiyasu registered at ${registered.sha.slice(0, 7)} rev ${registered.rev}; ${skill.sentinels.length} ` +
+          "sentinels from its body's first 1,500 characters",
+      );
     }
     print(
       analysisOnly
@@ -542,12 +666,22 @@ export async function checkCompaction(
       return false;
     }
     const decisionAnswer = `answer-${decided.jobId}`;
-    let trigger: { before: unknown[]; rev: number; from: number; id: string; started: string } | null = null;
+    let trigger: {
+      before: unknown[];
+      rev: number;
+      cut: Cut;
+      from: number;
+      requests: number;
+      id: string;
+      started: string;
+    } | null = null;
     for (let index = 0; index < MAX_QUESTIONS && trigger === null; index += 1) {
       const file = files[index % Math.max(files.length, 1)] ?? "README.md";
       const id = `code-${index + 1}`;
-      const rev = (await notes(worker, pr)).rev;
+      const earlier = await notes(worker, pr);
+      const { rev } = earlier;
       const from = worker.logs().length;
+      const requests = worker.modelRequests().length;
       const started = await askUntil(worker, pr, id, questions.code(file), limit, print);
       if (started === null) {
         await report(worker, pr, id, limit, print);
@@ -575,7 +709,11 @@ export async function checkCompaction(
         `  a compaction started ${at}; its cut (message ${cut + 1}) follows the decision (message ${decision + 1}) ` +
           `(get-messages ${hash(before)})`,
       );
-      trigger = { before, rev, from, id, started };
+      const previous =
+        earlier.cut_message_id === null || earlier.cut_step === null
+          ? null
+          : { messageId: earlier.cut_message_id, step: earlier.cut_step };
+      trigger = { before, rev, cut: previous, from, requests, id, started };
     }
     if (trigger === null) {
       print(`step 1: NOT as expected: no compaction after ${MAX_QUESTIONS} code questions`);
@@ -625,6 +763,38 @@ export async function checkCompaction(
       decisionIndex < cutIndex &&
       outline(stored.text ?? "").length > 0;
     print(results.compacted ? "step 1: as expected" : "step 1: NOT as expected");
+    if (skill !== null) {
+      print("skill: an executed activation summarized by that compaction, as its marker in the summary requests");
+      const to =
+        stored.cut_message_id === null || stored.cut_step === null
+          ? null
+          : { messageId: stored.cut_message_id, step: stored.cut_step };
+      const { summarized, other } = activationsByCut(after, "yomiyasu", trigger.cut, to);
+      const where = (entry: Activation) => `message ${entry.message + 1} step ${entry.step}`;
+      print(
+        `  activations of yomiyasu: ${summarized.length} in the summarized segment (${summarized.map(where).join(", ") || "none"}), ` +
+          `${other.length} outside it (${other.map(where).join(", ") || "none"})`,
+      );
+      const bodies = worker
+        .modelRequests()
+        .slice(trigger.requests)
+        .filter((body) => requestKind(systemOf(body)) === "summary");
+      const markers = summarized.map((entry) => skillCallMarker("activate_skill", "yomiyasu", entry));
+      const held = markers.map((marker) => bodies.some((body) => inBody(body, marker)));
+      const leaked = skill.sentinels.filter((line) => bodies.some((body) => inBody(body, line)));
+      print(`  summary requests of that compaction: ${bodies.length}`);
+      markers.forEach((marker, index) => {
+        print(`  ${marker}: ${held[index] === true ? "in a summary request" : "NOT in any summary request"}`);
+      });
+      print(`  sentinels of the body in them: ${leaked.length === 0 ? "none" : leaked.join(" | ")}`);
+      results.skill =
+        summarized.length > 0 &&
+        bodies.length > 0 &&
+        held.every(Boolean) &&
+        leaked.length === 0 &&
+        summarized.every((entry) => entry.sha === skill.sha && entry.rev === String(skill.rev));
+      print(results.skill ? "skill: as expected" : "skill: NOT as expected");
+    }
 
     print("step 2: the conversation the author sees is unchanged by the compaction");
     const prefix = after.slice(0, trigger.before.length);

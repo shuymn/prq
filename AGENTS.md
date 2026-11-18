@@ -36,14 +36,19 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
   analysis (give two different texts) and check that every model request holds only its own kind's prompt; with an
   answer prompt it also reports the language of an answer to a question in each language, apart from its verdict.
   `--analysis-only` runs the push's analysis alone and reports its stored text, at any window, and
-  `--analysis-language ja|en` holds the analysis to the language its prompt asks for, in the verdict. That file is
+  `--analysis-language ja|en` holds the analysis to the language its prompt asks for, in the verdict. `--skill`
+  registers yomiyasu and checks that the compaction summarizes an executed activation as its marker alone (give an
+  answer prompt that names the skill). That file is
   written only by `pnpm run dev-vars write [--window <tokens>]` in `packages/cli`, from the owner's secrets directory
   (`--window` sets `MODEL_CONTEXT_TOKENS`), and deleted only by `pnpm run dev-vars remove`; `pnpm run dev-vars status`
   names the variables it sets. No command prints a value but the window `write` reports
   (`packages/cli/src/test/dev-vars.ts`).
-- `pnpm run check:skills` in `packages/cli` needs only the GitHub App in `packages/server/.dev.vars` (no model, no
-  Docker): it previews, registers, updates and removes the public skill `skills/yomiyasu` of `nanaism/yomiyasu` through
-  the Worker against real GitHub, and compares the stored copy with what it reads from GitHub itself.
+- `pnpm run check:skills [<owner>/<repo>#<number>]` in `packages/cli` previews, registers, updates and removes the
+  public skill `skills/yomiyasu` of `nanaism/yomiyasu` through the Worker against real GitHub, compares the stored copy
+  with what it reads from GitHub itself, and runs cloud turns with it and a second skill under a scripted model,
+  checking what their requests hold. Without an argument it needs only the GitHub App in `packages/server/.dev.vars`
+  (no model, no Docker); with a pull request it then runs a smoke of skill activation with the model and Docker, at the
+  window `.dev.vars` sets (written without `--window`).
 - lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows, a
   `fileToken` check on `design/prq.pen`, and commitlint on the message.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would

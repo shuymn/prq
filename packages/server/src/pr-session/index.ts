@@ -25,8 +25,9 @@ import * as v from "valibot";
 import { refuseSubAgent, sendServerVersion } from "../agents.ts";
 import { readGithubAppConfig, readModelConfig } from "../config.ts";
 import { type GithubClient, githubFor, githubStatus, type PullRequestState } from "../github.ts";
+import type { SkillRead } from "../instructions/skills.ts";
 import { errorName, log } from "../log.ts";
-import { hubStub, workspaceStub } from "../names.ts";
+import { boundedHubCall, hubStub, workspaceStub } from "../names.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
 import { SerialQueue, WaitTimeout, withTimeout } from "../wait.ts";
 import {
@@ -129,11 +130,13 @@ import {
   recordOverflow,
 } from "./notes.ts";
 import { type Prefix, prefixWith, type TurnInstructions, turnInstructions } from "./prefix.ts";
-import { projection } from "./projection.ts";
+import { projection, withSkillMarkers } from "./projection.ts";
 import { analysisTask } from "./prompt.ts";
 import { adoptAnswer, clearMark, failTry, isLagging, notePush, readReconcile } from "./reconcile.ts";
 import { measuredTokens } from "./room.ts";
-import { MIN_RESULT_CHARS, toolLoop, TURN_LOOP } from "./tools.ts";
+import { hasSkillToolPart, type SkillContext, type TurnSkill } from "./skill-tools.ts";
+import { MIN_RESULT_CHARS } from "./tools.ts";
+import { toolLoop, TURN_LOOP } from "./turn-tools.ts";
 import {
   type Binding,
   type CloudModel,
@@ -241,11 +244,17 @@ function ownLabel(row: JobRow): string {
   return row.kind === "analysis" ? "task" : "question";
 }
 
-function prefixLabel(row: JobRow): string {
-  return row.workspace_sha === null
-    ? "the system prompt with the host's prompt"
-    : "the system prompt with the host's prompt and the tool definitions";
+function prefixLabel(instructions: TurnInstructions): string {
+  const what = instructions.skills.length === 0 ? "the host's prompt" : "the host's prompt and the skill list";
+  return `the system prompt with ${what}${instructions.tools ? " and the tool definitions" : ""}`;
 }
+
+// What a skill's Hub read may answer (instructions/skills.ts), checked when it arrives.
+const SkillReadAnswer = v.variant("kind", [
+  v.object({ kind: v.literal("file"), content: v.instance(Uint8Array) }),
+  v.object({ kind: v.literal("paths"), paths: v.array(v.string()) }),
+  v.object({ kind: v.literal("changed") }),
+]);
 
 // A question from the UI: a user message the server did not add (server messages carry metadata).
 function isQuestion(message: UIMessage): boolean {
@@ -253,7 +262,7 @@ function isQuestion(message: UIMessage): boolean {
 }
 
 // A stored message as the session store returns it: its parts and metadata are not typed further.
-type StoredMessage = { parts: readonly unknown[]; metadata?: unknown };
+type StoredMessage = { role: string; parts: readonly unknown[]; metadata?: unknown };
 
 const TextPart = v.object({ type: v.literal("text"), text: v.string() });
 
@@ -1360,11 +1369,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       outcome.failure = "the question is not stored";
       return undefined;
     }
-    const hostPrompt = await this.#hostPrompt(job, outcome);
-    if (hostPrompt === null) {
+    const read = await this.#turnRead(job, outcome);
+    if (read === null) {
       return undefined;
     }
-    const instructions = await turnInstructions(job, job.workspaceSha !== null, hostPrompt);
+    const instructions = await turnInstructions(job, { workspace: job.workspaceSha !== null, ...read });
     const counted = this.#prefixFor(row, job, readDetails(this.#sql), own, instructions, outcome);
     if (counted === null) {
       return undefined;
@@ -1385,7 +1394,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const context = await this.#turnContext(own, prefix);
     binding.notesRev = context.notesRev;
     if (compacted) {
-      const over = this.#overWindow(row, prefix, context.messages);
+      const over = this.#overWindow(row, instructions, prefix, context.messages);
       if (over !== null) {
         outcome.failure = over;
         return undefined;
@@ -1423,7 +1432,14 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     // The first request's size: the context count, or without a measurement the estimate of the prefix (the system
     // message and the tool definitions) and the messages as sent.
     const start = context.measured ?? estimateTokens(prefix.chars + JSON.stringify(modelMessages).length);
-    const loop = code === null ? null : toolLoop(code, this.contextTokens(), start);
+    const skills = instructions.skills.length === 0 ? null : this.#skillContext(job, instructions.skills);
+    const loop = instructions.tools
+      ? toolLoop(
+          { ...(code === null ? {} : { code }), ...(skills === null ? {} : { skills }) },
+          this.contextTokens(),
+          start,
+        )
+      : null;
     const secret = this.#modelSecret();
     // The turn's first error, classified with the key redacted, is its reason; what the client is shown is that reason.
     const failWith = (error: unknown): string => {
@@ -1478,12 +1494,17 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return failingWith(response, failWith);
   }
 
-  // The host's prompt of the job's kind, as the Hub holds it at the turn's start: read once, before the at-start
-  // compaction, which counts it; a prompt saved later applies from the next turn. Null, with the job's failure in the
-  // outcome, when the Hub does not answer (running without the host's prompt would store a result that ignores it).
-  async #hostPrompt(job: Job, outcome: TurnOutcome): Promise<string | null> {
+  // The host's prompt of the job's kind and the skill list, as the Hub holds them at the turn's start: read once,
+  // before the at-start compaction, which counts them; a prompt saved or a skill changed later applies from the next
+  // turn, and every skill call of the turn reads the revision listed here. Null, with the job's failure in the outcome,
+  // when the Hub does not answer (running without the host's instructions would store a result that ignores them).
+  async #turnRead(job: Job, outcome: TurnOutcome): Promise<{ hostPrompt: string; skills: TurnSkill[] } | null> {
     try {
-      return (await this.readInstructions()).prompts[job.target.kind].text;
+      const { prompts, skills } = await this.readInstructions();
+      return {
+        hostPrompt: prompts[job.target.kind].text,
+        skills: skills.map(({ name, description, rev, sha, source }) => ({ name, description, rev, sha, source })),
+      };
     } catch (error) {
       log("prq.turn.instructions_failed", { pr: this.name, jobId: job.jobId, error: errorName(error) }, "warn");
       const reason =
@@ -1510,7 +1531,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const ownChars = partsChars(own.parts);
     if (estimateTokens(prefix.chars + ownChars + (tools ? MIN_RESULT_CHARS : 0)) > room) {
       outcome.failure =
-        `instructions: ${prefixLabel(row)} takes about ${estimateTokens(prefix.chars)} tokens and the ` +
+        `instructions: ${prefixLabel(instructions)} takes about ${estimateTokens(prefix.chars)} tokens and the ` +
         `${ownLabel(row)} about ${estimateTokens(ownChars)}, of the ${room} tokens this model's window leaves for a ` +
         `request: too little room for ${tools ? "one tool result" : "the answer"}; shorten the prompt or the question`;
       return null;
@@ -1520,7 +1541,12 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
 
   // Why a turn whose start compacted cannot send its first request: the request it would send, estimated as the
   // context count does, is over the window less the reserve (docs/design.md, Model context). Null when it fits.
-  #overWindow(row: JobRow, prefix: Prefix, messages: readonly UIMessage[]): string | null {
+  #overWindow(
+    row: JobRow,
+    instructions: TurnInstructions,
+    prefix: Prefix,
+    messages: readonly UIMessage[],
+  ): string | null {
     const room = contextLimit(this.contextTokens());
     const total = turnRequestTokens(prefix.chars, messages);
     if (total <= room) {
@@ -1530,7 +1556,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const own = messages.slice(-1);
     const kept = messages.slice(notes.length, -1);
     const sizes = [
-      `${prefixLabel(row)} about ${estimateTokens(prefix.chars)}`,
+      `${prefixLabel(instructions)} about ${estimateTokens(prefix.chars)}`,
       `the notes about ${estimateTokens(messagesChars(notes))}`,
       `the kept conversation about ${estimateTokens(messagesChars(kept))}`,
       `the ${ownLabel(row)} about ${estimateTokens(messagesChars(own))}`,
@@ -1544,8 +1570,29 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   // The host's instructions as the Hub holds them now (spied on in tests): both prompts, and the skills. The bound
   // covers the Hub's start.
   protected async readInstructions(): Promise<Instructions> {
-    const read = hubStub(this.env).then((hub) => hub.instructions());
-    return v.parse(Instructions, await withTimeout(read, HUB_CALL_MS, "the Hub's instructions"));
+    const what = "the Hub's instructions";
+    const read = boundedHubCall(withTimeout, this.env, HUB_CALL_MS, what, async (hub): Promise<unknown> =>
+      hub.instructions(),
+    );
+    return v.parse(Instructions, await read);
+  }
+
+  // What a turn's skill tools read with: the skills the turn listed, and the Hub's read of a skill's path at the
+  // revision listed, within HUB_CALL_MS (the Hub's start included) and ended by the tool call's signal.
+  #skillContext(job: Job, skills: readonly TurnSkill[]): Omit<SkillContext, "room"> {
+    return {
+      skills: new Map(skills.map((skill) => [skill.name, skill])),
+      kind: job.target.kind,
+      read: async (name, rev, path, signal) => {
+        const call = () =>
+          boundedHubCall(withTimeout, this.env, HUB_CALL_MS, "the Hub's skill read", async (hub): Promise<unknown> =>
+            hub.skillRead(name, rev, path),
+          );
+        return v.parse(SkillReadAnswer, await raceAbort(call, signal)) satisfies SkillRead;
+      },
+      activated: new Set(),
+      fields: { pr: this.name, jobId: job.jobId },
+    };
   }
 
   // Makes the job's checkout ready before its first model call: the turn's abort or the workspace backstop ends the
@@ -1607,9 +1654,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return question === null || !isUIMessage(question) ? null : question;
   }
 
-  // The projection (docs/design.md, Model context), read from storage.
+  // The projection (docs/design.md, Model context), read from storage, as the model reads it: each skill tool result
+  // of an earlier turn as its marker, wherever the projection is sent, counted, cut or summarized.
   async #projection(): Promise<Projected[]> {
-    return (await projection(this.sessions.session().history())).filter(isUIMessage);
+    return (await projection(this.sessions.session().history())).filter(isUIMessage).map(withSkillMarkers);
   }
 
   #resultMetadata(row: JobRow, by: MessageMetadata["by"], usage?: JobUsage): MessageMetadata {
@@ -1638,8 +1686,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (failure === null) {
       const id = resultMessageId(row);
       await this.insertMessages([{ id, role: "assistant", metadata, parts }], "results");
+      // A turn whose result holds a skill tool call keeps no measurement: its requests held results that later turns
+      // read as markers, so the count from then on is the estimate of what they read.
       const measure = {
-        tokens: outcome.contextTokens ?? null,
+        tokens: hasSkillToolPart(parts) ? null : (outcome.contextTokens ?? null),
         through: id,
         notesRev: notesRev ?? readNotes(this.#sql).rev,
         fingerprint: outcome.contextFingerprint ?? null,
@@ -1665,12 +1715,16 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   // A running job whose turn is not live (the object restarted, or the turn ended before its model call): done when its
   // result is stored, failed with the stored reason when its run's incomplete text is (either way a commit stopped
   // between its append and its statement, and the run has ended), started again under a new turn while its run has
-  // starts left, else failed. Each is one statement guarded by the turn it found.
+  // starts left, else failed. Each is one statement guarded by the turn it found. A stored result that holds a skill
+  // tool call clears the measurement in that statement, as its commit would have.
   async #recoverTurn(row: JobRow): Promise<void> {
     const model = this.cloudModel()?.modelId ?? null;
     const id = resultMessageId(row);
-    if ((await this.#message(id)) !== undefined) {
-      this.#endRun(row, { done: id }, model);
+    const result = await this.#message(id);
+    if (result !== undefined) {
+      const measure = { tokens: null, through: id, notesRev: readNotes(this.#sql).rev, fingerprint: null };
+      const skilled = isUIMessage(result) && hasSkillToolPart(result.parts);
+      this.#endRun(row, { done: id }, model, skilled ? { measure, compact: null } : undefined);
       return;
     }
     const incomplete = await this.#message(incompleteMessageId(row));

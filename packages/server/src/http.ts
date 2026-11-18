@@ -5,7 +5,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import * as v from "valibot";
 
 import { log } from "./log.ts";
-import { hubStub } from "./names.ts";
+import { boundedHubCall, type hubStub } from "./names.ts";
 import { SERVER_VERSION } from "./version.ts";
 import { WaitTimeout } from "./wait.ts";
 
@@ -25,7 +25,7 @@ export function hubCall<T>(
   what: string,
   call: (hub: Awaited<ReturnType<typeof hubStub>>) => Promise<T>,
 ): Promise<T> {
-  return bound((async () => call(await hubStub(env)))(), ROUTE_CALL_MS, what);
+  return boundedHubCall(bound, env, ROUTE_CALL_MS, what, call);
 }
 
 const STATUS = {

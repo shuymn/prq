@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { UsageError } from "./app-check.ts";
 import {
+  activationsByCut,
   analysisLanguage,
   analysisOnlyVerdict,
   checkVerdict,
@@ -12,8 +13,8 @@ import {
 } from "./compaction.ts";
 
 // How the compaction check (compaction.ts) decides that the questions asked during a compaction started after it
-// ended, from log lines as the Worker's log prints them; which prompts the requests it recorded hold; and the language
-// of an answer's prose.
+// ended, from log lines as the Worker's log prints them; which prompts the requests it recorded hold; the language of
+// an answer's prose; and which activations a compaction summarized.
 
 const STARTED =
   "{ event: 'prq.compaction.started', pr: 'acme~widgets~7', jobId: 'job-16', notesRev: 1, cutMessageId: 'answer-9', cutStep: 0, summarizedSteps: 22, turnPrefixSteps: 1 }";
@@ -128,7 +129,7 @@ describe("the analysis's language in the verdicts", () => {
     "I'll start by looking at the changed files. Let me read the diff first, then the tests that cover the new " +
     "prompts, so that I can see how the summary is put together before I write it.";
   const japanese = `## 概要\n${"この変更はホストのプロンプトを保存する。".repeat(12)}`;
-  const steps = { compacted: true, unchanged: true, queued: true, refused: true, prompts: true };
+  const steps = { compacted: true, unchanged: true, queued: true, refused: true, prompts: true, skill: true };
 
   it("the measure: the English prose is long enough, and in English", () => {
     expect(inLanguage(english, "english").ok).toBe(true);
@@ -152,6 +153,7 @@ describe("the analysis's language in the verdicts", () => {
     expect(checkVerdict(steps, english, "english")).toBe(true);
     expect(checkVerdict(steps, progress, null)).toBe(true);
     expect(checkVerdict({ ...steps, prompts: false }, japanese, "japanese")).toBe(false);
+    expect(checkVerdict({ ...steps, skill: false }, japanese, "japanese")).toBe(false);
   });
 
   it("takes the expected language from --analysis-language, whatever the prompt says", () => {
@@ -161,5 +163,68 @@ describe("the analysis's language in the verdicts", () => {
     expect(() => analysisLanguage("fr")).toThrow(new UsageError("--analysis-language takes ja or en, not fr"));
     // A key every object inherits is not a language either.
     expect(() => analysisLanguage("constructor")).toThrow(UsageError);
+  });
+});
+
+function where(entries: { message: number; step: number }[]): number[][] {
+  return entries.map(({ message, step }) => [message, step]);
+}
+
+describe("the activations a compaction summarized", () => {
+  const SHA = "a".repeat(40);
+  const activation = (rev: number) => ({
+    type: "tool-activate_skill",
+    state: "output-available",
+    output: `[activate_skill skill yomiyasu at ${SHA} rev ${rev}: read]\nFrom nanaism/yomiyasu, skills/yomiyasu.`,
+  });
+  // Message 2's activation is its step 0, message 4's are its steps 1 and 2; message 3's result is no page.
+  const list = [
+    { id: "q-1", parts: [{ type: "text" }] },
+    { id: "answer-1", parts: [{ type: "step-start" }, activation(1), { type: "step-start" }, { type: "text" }] },
+    {
+      id: "answer-2",
+      parts: [
+        { type: "step-start" },
+        { ...activation(1), output: `[activate_skill skill yomiyasu at ${SHA} rev 1: no room]` },
+        { type: "tool-activate_skill", state: "output-error" },
+      ],
+    },
+    {
+      id: "answer-3",
+      parts: [
+        { type: "step-start" },
+        { type: "text" },
+        { type: "step-start" },
+        activation(2),
+        { type: "step-start" },
+        activation(2),
+      ],
+    },
+  ];
+  it("takes each executed activation by message and step, the segment from the earlier cut to the new one", () => {
+    const split = activationsByCut(
+      list,
+      "yomiyasu",
+      { messageId: "answer-1", step: 1 },
+      { messageId: "answer-3", step: 2 },
+    );
+
+    expect(where(split.summarized)).toEqual([[3, 1]]);
+    expect(where(split.other)).toEqual([
+      [1, 0],
+      [3, 2],
+    ]);
+    expect(split.summarized[0]).toMatchObject({ messageId: "answer-3", sha: SHA, rev: "2" });
+  });
+
+  it("starts at the conversation's start without an earlier cut, and ends before the new cut's step", () => {
+    const split = activationsByCut(list, "yomiyasu", null, { messageId: "answer-3", step: 1 });
+
+    expect(where(split.summarized)).toEqual([[1, 0]]);
+    expect(where(split.other)).toEqual([
+      [3, 1],
+      [3, 2],
+    ]);
+    expect(activationsByCut(list, "other-skill", null, null).summarized).toEqual([]);
   });
 });
