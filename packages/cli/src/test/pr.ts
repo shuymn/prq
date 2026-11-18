@@ -1,6 +1,7 @@
 // Work for the CLI, made against the Worker directly (not through the stand-in Access): a pull request's webhook,
 // which gives a local session an analysis job, a question asked in the UI, which gives it an answer job, the host's
-// retry of a job, and what the UI reads (the stored conversation, the present agents).
+// retry of a job, a skill stored as a confirm stores one, and what the UI reads (the stored conversation, the present
+// agents).
 
 import { createHmac, randomUUID } from "node:crypto";
 
@@ -13,9 +14,11 @@ import {
   PrSessionView,
   RetryResponse,
   sessionName,
+  Skill,
 } from "@prq/protocol";
 import * as v from "valibot";
 
+import { sha1Blob } from "./skill-github.ts";
 import { HOST_ID, WEBHOOK_SECRET, type Worker } from "./worker.ts";
 
 // A head SHA named by a label: the label's bytes in hex, padded to 40 digits.
@@ -202,4 +205,34 @@ export async function agents(worker: Worker): Promise<AgentRow[]> {
     headers: { "Cf-Access-Jwt-Assertion": await worker.token() },
   });
   return v.parse(AgentPage, await res.json()).rows;
+}
+
+// A skill's files: a path in the skill, its text and its git mode (100644 unless given).
+export type SkillFiles = Record<string, { text: string; mode?: "100644" | "100755" }>;
+
+// A skill stored through the Hub's own call, as a confirm stores one after reading GitHub (no GitHub here): registered,
+// or, with expectedRev, updated from that revision. Each file carries its git blob SHA-1.
+export async function storeSkill(
+  worker: Worker,
+  name: string,
+  files: SkillFiles,
+  { commit = "1".repeat(40), expectedRev }: { commit?: string; expectedRev?: number } = {},
+): Promise<Skill> {
+  const version = {
+    name,
+    description: `The ${name} skill.`,
+    license: null,
+    allowedTools: null,
+    source: { owner: "octo", repo: "skills", path: `skills/${name}` },
+    ref: { name: "main", kind: "branch" },
+    sha: commit,
+    files: Object.entries(files).map(([path, { text, mode = "100644" }]) => {
+      const content = new Uint8Array(Buffer.from(text));
+      return { path, mode, size: content.byteLength, blob: sha1Blob(content), content };
+    }),
+  };
+  const hub = await worker.durableObject("Hub", "hub");
+  const stored =
+    expectedRev === undefined ? hub["registerSkill"]?.(version) : hub["updateSkill"]?.(version, expectedRev);
+  return v.parse(Skill, await stored);
 }

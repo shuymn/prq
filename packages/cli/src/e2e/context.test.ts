@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, stat, symlink, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 import { ClaimResponse, PROMPT_CHARS } from "@prq/protocol";
 import * as v from "valibot";
@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { result, stderrLines } from "../test/cli.ts";
 import { latch } from "../test/latch.ts";
-import { ask, push, retry, savePrompt, sha } from "../test/pr.ts";
+import { ask, push, retry, savePrompt, sha, type SkillFiles, storeSkill } from "../test/pr.ts";
 import { useStack } from "../test/stack.ts";
 
 const stack = useStack();
@@ -54,6 +54,30 @@ async function savedContext(dir: string) {
   return v.parse(Saved, JSON.parse(await readFile(join(dir, "context.json"), "utf8")));
 }
 
+const Printed = v.object({
+  skills: v.array(v.object({ name: v.string(), description: v.string(), path: v.string() })),
+});
+
+// A skill with a script, a file in a directory and a binary file.
+const POLISH: SkillFiles = {
+  "SKILL.md": { text: "---\nname: polish\ndescription: Polishes text.\n---\n# Polish\n" },
+  "references/style.md": { text: "# Style\n" },
+  "scripts/check.py": { text: "print('ok')\n", mode: "100755" },
+  "assets/mark.bin": { text: "\u0000\u00ff\ufeff" },
+};
+
+// The files under a skill's directory: each path in the skill, its bytes and its permission bits.
+async function filesUnder(path: string): Promise<Record<string, { text: string; mode: number }>> {
+  const files: Record<string, { text: string; mode: number }> = {};
+  for (const entry of await readdir(path, { recursive: true, withFileTypes: true })) {
+    if (entry.isFile()) {
+      const file = join(entry.parentPath, entry.name);
+      files[relative(path, file)] = { text: await readFile(file, "utf8"), mode: (await stat(file)).mode & 0o777 };
+    }
+  }
+  return files;
+}
+
 describe("prq context", () => {
   it("an analysis: writes context.json into the claim's directory and names no question", async () => {
     await present("laptop");
@@ -73,6 +97,7 @@ describe("prq context", () => {
       context: contextPath,
       question: null,
       prompt: null,
+      skills: [],
       answer: join(claimed.dir, "answer.md"),
       next: "checkout",
     });
@@ -158,6 +183,104 @@ describe("prq context", () => {
     expect((await readFile(join(claimed.dir, "context.json"))).equals(context)).toBe(true);
     expect(await readdir(join(claimed.dir, "instructions"))).toEqual(sets);
   }, 120_000);
+
+  it("a registered skill: its files at the listed revision in the new set, byte for byte with their modes", async () => {
+    await present("laptop");
+    await push(stack.worker(), pr, sha("h1"));
+    const skill = await storeSkill(stack.worker(), "polish", POLISH);
+    const claimed = await claim("laptop");
+
+    const exit = await stack.run(["context", "--agent-id", "laptop"]);
+    expect(exit.code).toBe(0);
+    const printed = v.parse(Printed, result(exit));
+    const set = (await savedContext(claimed.dir)).instructions.dir;
+    expect(printed.skills).toEqual([
+      { name: "polish", description: "The polish skill.", path: join(set, "skills/polish") },
+    ]);
+    expect(await filesUnder(join(set, "skills/polish"))).toEqual({
+      "SKILL.md": { text: POLISH["SKILL.md"]?.text, mode: 0o644 },
+      "references/style.md": { text: "# Style\n", mode: 0o644 },
+      "scripts/check.py": { text: "print('ok')\n", mode: 0o755 },
+      "assets/mark.bin": { text: "\u0000\u00ff\ufeff", mode: 0o644 },
+    });
+    // context.json lists the skill as the context gave it; nothing goes where a worktree would be.
+    expect(JSON.parse(await readFile(join(claimed.dir, "context.json"), "utf8"))).toMatchObject({
+      instructions: { skills: [{ name: "polish", description: "The polish skill.", rev: skill.rev, sha: skill.sha }] },
+    });
+    expect(dirname(dirname(set))).toBe(claimed.dir);
+    expect(await exists(join(claimed.dir, "worktree"))).toBe(false);
+    expect(
+      stack
+        .access()
+        .log.filter((entry) => entry.route === "/cli/skill")
+        .map((entry) => entry.status),
+    ).toEqual([200]);
+  });
+
+  it("a skill updated after the context was read: exit 1 with the set before kept; a rerun reads the update", async () => {
+    await present("laptop");
+    await push(stack.worker(), pr, sha("h1"));
+    const first = await storeSkill(stack.worker(), "polish", POLISH);
+    const claimed = await claim("laptop");
+    expect((await stack.run(["context", "--agent-id", "laptop"])).code).toBe(0);
+    const context = await readFile(join(claimed.dir, "context.json"));
+    const sets = await readdir(join(claimed.dir, "instructions"));
+
+    // The context lists revision `first.rev`; the skill is updated before its files are read.
+    const answered = latch();
+    const release = latch();
+    stack.access().plan("/cli/context", { kind: "hold", answered, release });
+    const run = stack.start(["context", "--agent-id", "laptop"]);
+    await answered.promise;
+    const v2 = { ...POLISH, "SKILL.md": { text: "---\nname: polish\ndescription: v2\n---\n" } };
+    await storeSkill(stack.worker(), "polish", v2, { expectedRev: first.rev, commit: "2".repeat(40) });
+    release.open();
+    const failed = await run.exited;
+
+    expect(failed.code).toBe(1);
+    expect(failed.stdout).toBe("");
+    expect(stderrLines(failed)).toEqual([
+      "prq: the skill polish was updated or removed while prq context read it; run prq context again",
+    ]);
+    expect((await readFile(join(claimed.dir, "context.json"))).equals(context)).toBe(true);
+    expect(await readdir(join(claimed.dir, "instructions"))).toEqual(sets);
+
+    const rerun = await stack.run(["context", "--agent-id", "laptop"]);
+    expect(rerun.code).toBe(0);
+    const [skill] = v.parse(Printed, result(rerun)).skills;
+    expect(await readFile(join(skill?.path ?? "", "SKILL.md"), "utf8")).toBe(v2["SKILL.md"].text);
+  });
+
+  it("a signal while a skill is read: the set is removed, and prq ends by the signal", async () => {
+    await present("laptop");
+    await push(stack.worker(), pr, sha("h1"));
+    await storeSkill(stack.worker(), "polish", POLISH);
+    const claimed = await claim("laptop");
+    expect((await stack.run(["context", "--agent-id", "laptop"])).code).toBe(0);
+    const context = await readFile(join(claimed.dir, "context.json"));
+    const sets = await readdir(join(claimed.dir, "instructions"));
+
+    const answered = latch();
+    const release = latch();
+    stack.access().plan("/cli/skill", { kind: "hold", answered, release });
+    const run = stack.start(["context", "--agent-id", "laptop"]);
+    try {
+      await answered.promise;
+      // The new set exists while its skill is read.
+      expect((await readdir(join(claimed.dir, "instructions"))).length).toBe(sets.length + 1);
+      const ended = await run.kill("SIGTERM");
+
+      expect({ code: ended.code, signal: ended.signal, stdout: ended.stdout }).toEqual({
+        code: null,
+        signal: "SIGTERM",
+        stdout: "",
+      });
+      expect(await readdir(join(claimed.dir, "instructions"))).toEqual(sets);
+      expect((await readFile(join(claimed.dir, "context.json"))).equals(context)).toBe(true);
+    } finally {
+      release.open();
+    }
+  });
 
   it("a question larger than a page: its parts joined, question.md byte for byte", async () => {
     await present("laptop");
