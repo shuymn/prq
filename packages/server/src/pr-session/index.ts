@@ -46,6 +46,7 @@ import {
   type Projected,
   readFiles,
   assembleNotes,
+  fileLists,
   type Step,
   type SummaryKind,
   type SummaryRequest,
@@ -190,6 +191,8 @@ type SummaryBatches = {
   previous: string | null;
   window: number;
   maxOutputTokens: number;
+  // The file lists the compaction renders, removed from a summary that echoes one (compaction.ts, fileLists).
+  lists: readonly string[];
 };
 
 // What a compaction's summary calls used, for its log.
@@ -1703,12 +1706,19 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const calls: SummaryCalls = { calls: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
     const started = Date.now();
     const files = readFiles([...cut.toSummarize, ...cut.turnPrefix], notes.readFiles);
+    // The file lists a summary may echo: the previous notes' list, which an update request shows, and the new one.
+    const lists = fileLists(notes.readFiles, files);
     let summaries: { history: string; turnContext: string | null };
     try {
       // The history: updated with the steps the cut removed before its turn (the previous notes fold into it, with the
       // checkpoint of a turn the previous cut fell inside), or left as it was; "No prior history." (Pi's) before any.
       const inBatches = (kind: SummaryKind, steps: readonly Step[], previous: string | null) =>
-        this.#summarizeSteps(model, { kind, steps, previous, window, maxOutputTokens: notesOutput }, signal, calls);
+        this.#summarizeSteps(
+          model,
+          { kind, steps, previous, window, maxOutputTokens: notesOutput, lists },
+          signal,
+          calls,
+        );
       const history =
         cut.toSummarize.length > 0
           ? ((await inBatches("notes", cut.toSummarize, notes.text)) ?? NO_PRIOR_HISTORY)
@@ -1728,7 +1738,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       log("prq.compaction.failed", { ...fields, reason, ...calls, ms: Date.now() - started }, "warn");
       return "failed";
     }
-    const text = assembleNotes(summaries.history, summaries.turnContext, files);
+    const text = assembleNotes(summaries.history, summaries.turnContext, files, lists);
     const adopted = this.ctx.storage.transactionSync(() =>
       adoptNotes(
         this.#sql,
@@ -1754,7 +1764,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   // when the steps held nothing to summarize.
   async #summarizeSteps(
     model: CloudModel,
-    { kind, steps, previous, window, maxOutputTokens }: SummaryBatches,
+    { kind, steps, previous, window, maxOutputTokens, lists }: SummaryBatches,
     signal: AbortSignal | undefined,
     calls: SummaryCalls,
   ): Promise<string | null> {
@@ -1764,7 +1774,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       if (batch.request === null) {
         break;
       }
-      summary = await this.#summary(model, batch.request, maxOutputTokens, signal, calls);
+      summary = await this.#summary(model, batch.request, lists, maxOutputTokens, signal, calls);
       from = batch.end;
     }
     return summary;
@@ -1774,6 +1784,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   async #summary(
     model: CloudModel,
     request: SummaryRequest,
+    lists: readonly string[],
     maxOutputTokens: number,
     signal: AbortSignal | undefined,
     calls: SummaryCalls,
@@ -1781,7 +1792,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     for (let attempt = 1; ; attempt += 1) {
       calls.calls += 1;
       try {
-        return await summarize(model, request, maxOutputTokens, signal, (usage) => {
+        return await summarize(model, request, lists, maxOutputTokens, signal, (usage) => {
           const tokens = stepTokens(usage);
           calls.inputTokens += tokens.input;
           calls.outputTokens += tokens.output;

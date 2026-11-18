@@ -155,8 +155,8 @@ describe("failed summaries", () => {
     ["ends at its output limit", [...text("cut notes"), finish("length")]],
     ["is empty", [...text("  "), finish("stop")]],
     [
-      "holds only what prq generates",
-      [...text("<summary>\n<read-files>\nsrc/a.ts\n</read-files>\n</summary>"), finish("stop")],
+      "holds only wrappers prq generates, one inside another",
+      [...text("<summary>\n<previous-summary>\n</previous-summary>\n</summary>"), finish("stop")],
     ],
     ["errors", [...text("partial notes"), { fail: new Error("stream lost") }]],
   ] satisfies [string, Script][])(
@@ -197,7 +197,7 @@ describe("failed summaries", () => {
     },
   );
 
-  it("keeps a tag the summary names in its body, and removes only the wrapper around it and the file list after it", async () => {
+  it("keeps a tag the summary names in its body, and removes only the wrapper around it", async () => {
     captureLogs();
     const session = await cloudSession("compaction", sockets);
     const { stub, client } = session;
@@ -208,7 +208,7 @@ describe("failed summaries", () => {
     ].join("\n");
     const model = new ScriptedModel().add(
       ...threeTurns(),
-      notes(`<summary>\n${body}\n\n<read-files>\nsrc/a.ts\n</read-files>\n</summary>`),
+      notes(`<summary>\n${body}\n</summary>`),
       notes("the turn's start"),
     );
     model.contextTokens = WINDOW;
@@ -291,7 +291,7 @@ describe("a cut that stays inside a split turn", () => {
       stub,
       `UPDATE prq_notes SET text = ?, history = ?, turn_context = ?, rev = 1, cut_message_id = ?, cut_step = 2
        WHERE id = 1`,
-      assembleNotes("the history", "the checkpoint", []),
+      assembleNotes("the history", "the checkpoint", [], []),
       "the history",
       "the checkpoint",
       a1.id,
@@ -312,13 +312,124 @@ describe("a cut that stays inside a split turn", () => {
     expect(prompt).not.toContain("src/1.ts");
     expect(prompt.endsWith(TURN_PREFIX_UPDATE_PROMPT)).toBe(true);
     expect(await notesRow(stub)).toMatchObject({
-      text: assembleNotes("the history", "the checkpoint, read on", ["src/2.ts", "src/3.ts"]),
+      text: assembleNotes("the history", "the checkpoint, read on", ["src/2.ts", "src/3.ts"], []),
       history: "the history",
       turn_context: "the checkpoint, read on",
       rev: 2,
       cut_message_id: a1.id,
       cut_step: 3,
     });
+  });
+});
+
+// Notes made with the cut at Q1, after a read of src/a.ts, then Q1's answer, which read src/routes/<slug>.ts, and Q2's.
+// The compaction's file lists: the previous notes' (src/a.ts), which the update request shows, and the new one.
+const PREVIOUS_LIST = "<read-files>\nsrc/a.ts\n</read-files>";
+const NEW_LIST = "<read-files>\nsrc/a.ts\nsrc/routes/<slug>.ts\n</read-files>";
+
+async function notesAfterARead(stub: DurableObjectStub<PrSession>): Promise<void> {
+  await seedHistory(stub, [
+    Q1,
+    cloudAnswer("q1", [
+      { type: "step-start" },
+      {
+        type: "tool-read_file",
+        toolCallId: "call-0",
+        state: "output-available",
+        input: { path: "src/routes/<slug>.ts" },
+        output: "1\texport const route = 1;",
+      },
+      { type: "step-start" },
+      { type: "text", text: sized("answer one", 3000) },
+    ]),
+    Q2,
+    cloudAnswer("q2", [{ type: "text", text: sized("answer two", 6000) }]),
+  ]);
+  await sessionSql(
+    stub,
+    `UPDATE prq_notes SET text = ?, history = ?, rev = 1, cut_message_id = 'q1', cut_step = 0, read_files = ?
+     WHERE id = 1`,
+    `the earlier history\n\n${PREVIOUS_LIST}`,
+    "the earlier history",
+    JSON.stringify(["src/a.ts"]),
+  );
+}
+
+// The compaction's outcome: failed, with the notes as they were, or adopted, with the summary's history.
+const NOT_ADOPTED = {
+  result: "failed",
+  notes: { history: "the earlier history", text: `the earlier history\n\n${PREVIOUS_LIST}`, rev: 1 },
+};
+
+function adoptedWith(history: string) {
+  const assembled = `${history}\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start\n\n${NEW_LIST}`;
+  return { result: "adopted", notes: { history, text: assembled, rev: 2 } };
+}
+
+describe("what prq generated in a summary", () => {
+  const example =
+    "## Key facts\n- Keep this exact block:\n\n  <read-files>\n  ALLOW_ONLY_CHANGED_FILES=false\n  </read-files>";
+  const unrendered = "## Key facts\nThe route was read.\n\n<read-files>\nsrc/b.ts\n</read-files>";
+  it.for([
+    ["a wrapper around only the file list it was shown", `<summary>\n${PREVIOUS_LIST}\n</summary>`, NOT_ADOPTED],
+    [
+      "wrappers one inside another around only the file list it was shown",
+      `<summary>\n<previous-summary>\n${PREVIOUS_LIST}\n</previous-summary>\n</summary>`,
+      NOT_ADOPTED,
+    ],
+    [
+      "wrappers the other way round around only the file list it was shown",
+      `<previous-summary>\n<summary>\n${PREVIOUS_LIST}\n</summary>\n</previous-summary>`,
+      NOT_ADOPTED,
+    ],
+    [
+      "wrappers one inside another around its body and the file list it was shown",
+      `<previous-summary>\n<summary>\n## Decisions\n- Keep the route.\n\n${PREVIOUS_LIST}\n</summary>\n</previous-summary>`,
+      adoptedWith("## Decisions\n- Keep the route."),
+    ],
+    [
+      "the exact new file list at its end, a path with an angle bracket in it",
+      `## Key facts\nThe route was read.\n\n${NEW_LIST}`,
+      adoptedWith("## Key facts\nThe route was read."),
+    ],
+    ["an indented list it gives as an example at its end", example, adoptedWith(example)],
+    ["a list of paths prq did not render", unrendered, adoptedWith(unrendered)],
+  ] satisfies [string, string, { result: string; notes: Partial<NotesRow> }][])(
+    "is recognized by its exact rendering in a summary that holds %s",
+    async ([, reply, expected]) => {
+      captureLogs();
+      const session = await cloudSession("compaction", sockets);
+      const { stub } = session;
+      await notesAfterARead(stub);
+      // The reply tried twice when it is not adopted; otherwise the reply, then the split turn's start.
+      const model = new ScriptedModel().add(
+        notes(reply),
+        expected.result === "failed" ? notes(reply) : notes("the turn's start"),
+      );
+      useCloudModel(model);
+
+      const result = await runInDurableObject(stub, (instance) =>
+        prSessionSeams(instance).compactContext(model.model, WINDOW, { jobId: "job" }),
+      );
+
+      const [first] = model.calls.filter(isSummaryCall).map(summaryPrompt);
+      expect(first).toContain(`<previous-summary>\nthe earlier history\n\n${PREVIOUS_LIST}\n</previous-summary>`);
+      expect(result).toBe(expected.result);
+      expect(await notesRow(stub)).toMatchObject(expected.notes);
+    },
+  );
+
+  it("removes the previous notes' file list from the history it keeps when the steps held nothing to summarize", () => {
+    expect(
+      assembleNotes(
+        `the earlier history\n\n${PREVIOUS_LIST}`,
+        "the turn's start",
+        ["src/a.ts", "src/b.ts"],
+        [PREVIOUS_LIST],
+      ),
+    ).toBe(
+      "the earlier history\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start\n\n<read-files>\nsrc/a.ts\nsrc/b.ts\n</read-files>",
+    );
   });
 });
 

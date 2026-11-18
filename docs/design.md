@@ -818,7 +818,11 @@ never summarized, and once answered it enters the kept part with its answer, whe
   own question or task. The full history is not changed: no Sessions overlay is stored (see
   [decisions.md](decisions.md)).
 - **Failure.** A summary that stalled, errored, ended other than `stop` (its output limit included) or is empty once
-  the file list and tags prq generates are removed is not adopted. Each summary request, estimated as a turn's are
+  what prq generated is removed is not adopted. prq recognizes its own text by its exact rendering at the reply's
+  edges, peeled until none is left: a tag it wraps the notes or a request's parts in (`summary`, `previous-summary`,
+  `conversation`) around the whole reply, and at its end a file list exactly as prq renders it from the previous
+  notes' files or the new ones; the notes are assembled with the same recognition. Anything else is the summary's own,
+  a tag it names or a list it gives as an example included. Each summary request, estimated as a turn's are
   (characters ÷ 3) with the notes' output limit added, fits the window: a part too large for one request is summarized
   in batches, oldest first, each updating the summary of the ones before, and a step too large for a request alone
   fails the compaction rather than being cut, which would leave its end in neither the notes nor the kept part. So a
