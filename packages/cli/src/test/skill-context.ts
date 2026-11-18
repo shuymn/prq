@@ -14,6 +14,7 @@
 import { type PrRef, type Skill } from "@prq/protocol";
 import * as v from "valibot";
 
+import { skillCallMarker } from "./compaction.ts";
 import { ask } from "./pr.ts";
 import { type ChatRequest, chatRequest, type Script, type Scripted } from "./scripted.ts";
 import {
@@ -157,10 +158,6 @@ function records(skills: readonly { name: string; description: string }[]): stri
     .map(({ name, description }) => JSON.stringify({ name, description }));
 }
 
-function marker({ tool, name, sha, rev }: SkillCall): string {
-  return `[${tool} of skill ${name} at ${sha.slice(0, 7)} rev ${rev} in an earlier turn: read; activate the skill again to use it]`;
-}
-
 // The skill calls a request carries, each with its input and its result.
 function skillCalls(request: ChatRequest): { tool: string; input: Record<string, unknown>; result: string }[] {
   const results = new Map(
@@ -282,7 +279,11 @@ function checkFirst(
     `${label}: sentinels in the first request: ${wrong.length === 0 ? "none" : wrong.join("; ")}`,
   );
   const carried = skillCalls(request);
-  const expectedCalls = calls.map((call) => ({ tool: call.tool, input: { name: call.name }, result: marker(call) }));
+  const expectedCalls = calls.map((call) => ({
+    tool: call.tool,
+    input: { name: call.name },
+    result: skillCallMarker(call.tool, call.name, call),
+  }));
   verdict(
     JSON.stringify(carried) === JSON.stringify(expectedCalls),
     `${label}: ${carried.length} earlier skill calls carried, ${JSON.stringify(carried) === JSON.stringify(expectedCalls) ? "each exactly its marker" : `NOT the markers computed: ${JSON.stringify(carried).slice(0, 600)}`}`,

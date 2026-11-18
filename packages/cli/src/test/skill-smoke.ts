@@ -11,7 +11,7 @@
 import { type PrRef, sessionName } from "@prq/protocol";
 import * as v from "valibot";
 
-import { promptsHeld } from "./compaction.ts";
+import { field, promptsHeld, TOOL_CALL_MARKUP } from "./compaction.ts";
 import { deliver, getMessages, ask, savePrompt } from "./pr.ts";
 import type { GithubApp } from "./reconcile.ts";
 import type { Verdict } from "./skill-context.ts";
@@ -27,8 +27,6 @@ const QUESTIONS = [
 ];
 // A continuation note at a page's end, the result cap's or the room's: where the next page starts.
 const NEXT_PAGE = /^\[(?:truncated (?:at|inside)|cut at) line \d+[^\]]*?startLine (\d+)(?: and startChar (\d+))?/;
-// A tool call written as text: DeepSeek's markup or a generic tag (as compaction.ts).
-const TOOL_CALL_MARKUP = /<｜|DSML|<\/?(?:tool_calls?|function_calls?|invoke)\b/i;
 
 const Parts = v.array(
   v.looseObject({
@@ -129,10 +127,6 @@ function timeModel(root: string): { timings: Timing[]; stop: () => void } {
 
 function seconds(ms: number): string {
   return Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)} s` : "?";
-}
-
-function field(line: string, name: string): string {
-  return new RegExp(`\\b${name}: '?([^',}\\s]*)`).exec(line)?.[1] ?? "";
 }
 
 async function answerParts(worker: Worker, pr: PrRef, id: string): Promise<v.InferOutput<typeof Parts>> {

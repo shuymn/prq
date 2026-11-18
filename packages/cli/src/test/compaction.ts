@@ -261,7 +261,7 @@ export function checkVerdict(steps: Steps, summary: string, language: Language |
 const HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 
 // A tool call written as text: DeepSeek's markup (`<｜｜DSML｜｜ …>`, `<｜tool▁calls▁begin｜>`) or a generic tag.
-const TOOL_CALL_MARKUP = /<｜|DSML|<\/?(?:tool_calls?|function_calls?|invoke)\b/i;
+export const TOOL_CALL_MARKUP = /<｜|DSML|<\/?(?:tool_calls?|function_calls?|invoke)\b/i;
 
 // Each heading of a text with the first non-blank line under it, up to the next heading.
 function outline(text: string): string[] {
@@ -368,7 +368,7 @@ function events(worker: Worker, from: number, pattern: RegExp): string[] {
 }
 
 // A field of a log line, as the Worker's log prints it (`name: 'value'` or `name: 1`).
-function field(line: string, name: string): string {
+export function field(line: string, name: string): string {
   return new RegExp(`\\b${name}: '?([^',}\\s]*)`).exec(line)?.[1] ?? "";
 }
 
@@ -455,9 +455,14 @@ export function activationsByCut(
   return { summarized: found.filter(inside), other: found.filter((entry) => !inside(entry)) };
 }
 
-// The marker an earlier turn's activation becomes (docs/design.md, Status lines and markers).
-function activationMarker(skill: string, { sha, rev }: { sha: string; rev: string }): string {
-  return `[activate_skill of skill ${skill} at ${sha.slice(0, 7)} rev ${rev} in an earlier turn: read; activate the skill again to use it]`;
+// The marker an earlier turn's delivered skill call becomes (docs/design.md, Status lines and markers), written here
+// apart from the server's.
+export function skillCallMarker(
+  tool: string,
+  skill: string,
+  { sha, rev }: { sha: string; rev: string | number },
+): string {
+  return `[${tool} of skill ${skill} at ${sha.slice(0, 7)} rev ${rev} in an earlier turn: read; activate the skill again to use it]`;
 }
 
 // Up to five lines of the body's first 1,500 characters, spread over them: trimmed, at least 16 characters, and not in
@@ -774,7 +779,7 @@ export async function checkCompaction(
         .modelRequests()
         .slice(trigger.requests)
         .filter((body) => requestKind(systemOf(body)) === "summary");
-      const markers = summarized.map((entry) => activationMarker("yomiyasu", entry));
+      const markers = summarized.map((entry) => skillCallMarker("activate_skill", "yomiyasu", entry));
       const held = markers.map((marker) => bodies.some((body) => inBody(body, marker)));
       const leaked = skill.sentinels.filter((line) => bodies.some((body) => inBody(body, line)));
       print(`  summary requests of that compaction: ${bodies.length}`);
