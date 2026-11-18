@@ -408,13 +408,20 @@ export function readFiles(steps: readonly Step[], before: readonly string[]): st
   return [...files].toSorted();
 }
 
-const READ_FILES_BLOCK = /\n*<read-files>[\s\S]*?<\/read-files>\s*/g;
-// The tags prq wraps a summary's input and the notes in, which a summary may echo.
-const WRAPPER_TAGS = /<\/?(?:summary|previous-summary|conversation)>/g;
+// The file list prq puts at the notes' end, on lines of its own: only the last block, so a tag named earlier stays.
+const TRAILING_READ_FILES = /(?:^|\n)\s*<read-files>[^<]*<\/read-files>\s*$/;
+// A tag prq wraps a summary's input or the notes in, echoed around a whole summary.
+const ENCLOSING_WRAPPER = /^<(summary|previous-summary|conversation)>([\s\S]*)<\/\1>$/;
 
-// A summary without what prq generates around it (the file list, which is made again, and the wrapping tags).
+function withoutReadFiles(text: string): string {
+  return text.replace(TRAILING_READ_FILES, "").trimEnd();
+}
+
+// A summary without what prq generates where prq puts it (the file list at the end, which is made again, and a wrapper
+// around the whole reply); a tag the summary names in its body is kept.
 function cleanSummary(text: string): string {
-  return text.replace(READ_FILES_BLOCK, "\n").replace(WRAPPER_TAGS, "").trim();
+  const unwrapped = withoutReadFiles(text.trim()).replace(ENCLOSING_WRAPPER, "$2");
+  return withoutReadFiles(unwrapped.trim());
 }
 
 // --- The summary requests (Pi: generateSummary, compact) ---
@@ -494,10 +501,13 @@ export function nextBatch(
 // The notes from the summaries: the history's, a split turn's checkpoint after it, and the list of files read, made
 // again each time.
 export function assembleNotes(history: string, turnContext: string | null, files: readonly string[]): string {
+  const body = withoutReadFiles(history);
   const summary =
-    turnContext === null ? history : `${history}\n\n---\n\n**Turn Context (split turn):**\n\n${turnContext}`;
+    turnContext === null
+      ? body
+      : `${body}\n\n---\n\n**Turn Context (split turn):**\n\n${withoutReadFiles(turnContext)}`;
   const list = files.length === 0 ? "" : `\n\n<read-files>\n${files.join("\n")}\n</read-files>`;
-  return `${summary.replace(READ_FILES_BLOCK, "\n").trimEnd()}${list}`;
+  return `${summary}${list}`;
 }
 
 // --- One summary call ---

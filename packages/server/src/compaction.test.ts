@@ -197,6 +197,34 @@ describe("failed summaries", () => {
     },
   );
 
+  it("keeps a tag the summary names in its body, and removes only the wrapper around it and the file list after it", async () => {
+    captureLogs();
+    const session = await cloudSession("compaction", sockets);
+    const { stub, client } = session;
+    const body = [
+      "## Decisions",
+      "- Keep the `<summary>` element.",
+      "- List the files between `<read-files>` and `</read-files>`, as `<conversation>` does its messages.",
+    ].join("\n");
+    const model = new ScriptedModel().add(
+      ...threeTurns(),
+      notes(`<summary>\n${body}\n\n<read-files>\nsrc/a.ts\n</read-files>\n</summary>`),
+      notes("the turn's start"),
+    );
+    model.contextTokens = WINDOW;
+    useCloudModel(model);
+    for (const asked of [[Q1], [Q1, Q2], [Q1, Q2, Q3]]) {
+      await client.chat(asked);
+      await untilState(stub, asked.at(-1)?.id ?? "", "done");
+    }
+    await vi.waitFor(async () => expect((await notesRow(stub)).rev).toBe(1));
+
+    expect(await notesRow(stub)).toMatchObject({
+      history: body,
+      text: `${body}\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start`,
+    });
+  });
+
   it("adopts the summary its second attempt makes", async () => {
     captureLogs();
     const session = await cloudSession("compaction", sockets);
