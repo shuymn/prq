@@ -766,10 +766,23 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
   versions never meet in one turn.
 - **When a skill is used is the model's decision**, made from the descriptions and the two prompts. The core has no
   dedicated step for any skill.
-- **Scripts run in the cloud workspace.** A skill's script runs in the workspace container (its image includes `python3`) and only
-  as far as the skill's `allowed-tools` frontmatter permits. In the Agent Skills format `allowed-tools` lists
-  pre-approved tools, and prq has no interactive approval step, so a skill that declares none cannot run scripts: it
-  contributes instructions and references only. The pinned SHA means a skill's code does not change under the host.
+- **Scripts run in the cloud workspace, as far as `allowed-tools` allows.** In the Agent Skills format `allowed-tools`
+  lists pre-approved tools, and prq has no interactive approval step, so a skill runs only what it declares: an entry
+  `Bash(python3 <script> [<words>] [*])` (`python` as well, `:*` for ` *`), whose script is `${CLAUDE_SKILL_DIR}/<path>`
+  or `<path>` naming one of the skill's files. Every other entry (`Read`, `Bash(git:*)`, `py -3`, a `*` anywhere but
+  last) runs nothing in the cloud, and the stored copy and the preview mark each entry with whether it runs; a skill
+  without a runnable entry contributes instructions and references only. A command is read by prq's own grammar, never
+  by a shell: words separated by spaces or tabs, each a run of characters other than whitespace and
+  `| & ; < > ( ) { } $ \` \ " ' * ? [ ] # ~ !`, a single-quoted string, or a double-quoted string without `$`, a
+  backtick or a backslash, adjacent parts joined into one word; the only expansion is `${CLAUDE_SKILL_DIR}`at a
+  word's start, and anything else (a NUL anywhere included) refuses the command with nothing run. A command runs only
+  when it matches an entry: the same interpreter word, a script word naming the same file
+  (as`${CLAUDE_SKILL_DIR}/<path>`, as the skill's directory in the container followed by `/<path>`, or as `<path>`), the
+  entry's own words, then any words when the entry ends with `*`. Its argv is built from the entry, never from the
+  model's script word: `python3`, the pinned file's absolute path, then the command's words after the script.
+  `shell-quote`was rejected because it lexes a broader syntax whose token types alone do not show every substitution
+  refused, and an argv array as the tool's input because`SKILL.md` bodies write commands as text. How a script runs is
+  in [Workspace (cloud)](#workspace-cloud); the pinned SHA means a skill's code does not change under the host.
 - **Local runner.** `/cli/context` carries both prompts, and `prq context` writes the job kind's as `prompt.md` (both
   stay in `context.json`) and materializes the registered skills into the job's directory beside its worktree (for
   example `skills/<name>/`), so the local AI reads them as files. Never inside the
@@ -887,7 +900,8 @@ never summarized, and once answered it enters the kept part with its answer, whe
   skill list and sorted by name: its definitions are the ones the prefix counts, its fingerprints hash and its requests
   carry, so no tool reaches the provider uncounted. `activate_skill` returns the `SKILL.md` body (the frontmatter
   removed, nothing rewritten) in pages, as `read_file` pages a file, the first page after a header naming the skill's
-  repository and path, how its files are read, and that its scripts do not run here; the pages join into the body
+  repository and path, how its files are read, and the commands its scripts run with or that they do not run here (no
+  runnable entry, or no workspace); the pages join into the body
   exactly, its final line end included. The rest of the body or file from the call's start is shown whole when its
   result, status line and header included, fits the room left; only a page that does not end it keeps room for its
   continuation note, so a short skill fits a room too small for a page. A start that leaves nothing of a nonempty body
@@ -899,9 +913,26 @@ never summarized, and once answered it enters the kept part with its answer, whe
   delivers nothing and activates nothing. Each call reads the Hub at the turn's revision within 10 s and the tool
   call's abort; a failure is `error: …` text and the turn goes on. Logs name each call by its skill, revision, commit,
   path and characters (`prq.skill.activated`, `prq.skill.read`), never its text.
+- **The run tool.** A turn with a workspace whose list holds a skill with a runnable entry (see
+  [Instructions and skills](#instructions-and-skills)) is also offered `run_skill_script(name, command, stdin?)`, the
+  command at most 4,000 characters and the input 100,000, which the script reads on its standard input (the tool's
+  description says that a skill's heredoc or `<` goes there, the command holding only the words before it). It refuses a
+  skill not activated in the turn and a command the skill does not allow, before anything runs, naming the commands it
+  allows; otherwise it reads the skill's files from the Hub at the turn's revision (a skill changed meanwhile is refused
+  as the other calls are) and runs the command in the workspace (see [Workspace (cloud)](#workspace-cloud)). Its result
+  is the status line with the run's true ending, the notice that the working directory was lost when it was, then stdout
+  up to the room, ending with `[<n> more characters of output not shown]` only when cut, then `stderr (last 2,000
+  characters):` and its tail. The room is checked before the run (too little: `no room`, nothing run) and again at the
+  end, where the output is cut to what is left; the status line, the notice and that note are delivered and charged
+  whatever parallel results took meanwhile, past the room as a no-room result is. No pages: running a script again for a
+  page would repeat its effects. The tool's own timeout is a minute past the Workspace's 36-minute bound, so the
+  Workspace's answer comes first. `prq.skill.script` logs each run by its skill, revision, commit and script path, its
+  ending, time, the bytes of stdout and stderr, the scratch state and whether its processes were confirmed ended, never
+  its words or its input.
 - **Status lines and markers.** Once a skill call has resolved its skill at the turn's revision, its result starts with
-  a line the server writes: `[<tool> skill <name> at <sha> rev <rev>: <outcome>]`, the outcome `read`, `no room`
-  (nothing delivered for lack of room) or `error` (a refusal or a failure after resolution). It is composed last, after
+  a line the server writes: `[<tool> skill <name> at <sha> rev <rev>: <outcome>]`, the outcome `read`, a script's
+  `exit <code>` or `timeout`, `no room` (nothing delivered for lack of room) or `error` (a refusal, a failure after
+  resolution, or a run whose ending is unknown). It is composed last, after
   the final room check, so it says what the model received. A result without one is an error found before the skill
   resolved (a name the turn did not list, a revision that moved) or the SDK's error state. In every turn after the one
   that made it, a skill tool call is read as a marker: its input is the skill's name alone and its result
@@ -1012,7 +1043,9 @@ answers what was decided earlier after compaction. See [spikes.md](spikes.md) fo
   real git. A prepare ends after 30 minutes, and a fetch that moves under 1,000 bytes/s for 60 s ends sooner.
 - **Reuse only through a ready record.** A checkout is reused only when the Workspace's stored ready record names the
   commit and the record's random token is in `.git/prq-ready` in the checkout (a stopped container loses the file).
-  The record is written last, after the token file, once everything above completed; it is cleared before any change.
+  The record is written last, after the token file, once everything above completed; it is cleared before any change,
+  and a prepare that changes the checkout removes the token file before its first change, so a skill script's runner
+  holding the previous token is refused throughout (see Skill scripts below).
   A ready checkout of another commit keeps its objects and fetches what is missing. Anything else is wiped and rebuilt
   from empty. Reusing a checkout whose `HEAD` is at the commit was rejected: a prepare cut during a deepen leaves
   `.git/shallow.lock` and a partial `shallow` file with `HEAD` already there, and the next fetch fails on the lock.
@@ -1031,11 +1064,14 @@ answers what was decided earlier after compaction. See [spikes.md](spikes.md) fo
   and waits for it to settle; it never waits out the older one's bounds. When a turn ends, the session sends
   `release` (waited for at most 10 s, after the commit), which aborts only a prepare of that turn or an older one.
 - **After a reset.** The new instance's constructor starts one cleanup, and every container operation waits for it:
-  the old instance's prepare may still run. A container not running, or a `pkill -KILL -x` of every process the
-  Workspace starts (git and its helpers, `rm`, `cat`, and the `sh` that writes the ready token; never the image's own
-  process) answering within 10 s, ends it. Otherwise the container is stopped and confirmed stopped within 30 s; when
-  that is not confirmed either, every call fails `workspace: could not clean up after a restart: <reason>` until a
-  newer turn tries again.
+  the old instance's prepare may still run. A container not running, or the skill runner's `--reset-cleanup` mode
+  exiting 0 or 1 within 10 s, ends it: it kills root's processes that a prepare starts (git and its helpers, `rm`,
+  `cat`, and the `sh` that writes the ready token), each opened as a pidfd and checked again before it is signalled
+  through it, so a reused PID is never signalled; never a skill's process, a runner or the image's own process. It
+  exits 0 when it killed one, 1 when none, and 2 when it could not look: a kernel without `pidfd_open` (an amd64 image
+  under emulation on an arm64 machine has none) leaves no safe way to signal. Otherwise the container is stopped and
+  confirmed stopped within 30 s; when that is not confirmed either, every call fails `workspace: could not clean up
+  after a restart: <reason>` until a newer turn tries again.
 - **Setup per instance.** A running container does not show that it was set up: a prepare cut short after `start()`
   (an abort, a failed call, a reset) leaves it without its interception or idle stop. Each instance therefore sets up
   the running container before its first command, and again after a setup that did not complete or for another
@@ -1048,15 +1084,93 @@ answers what was decided earlier after compaction. See [spikes.md](spikes.md) fo
   repositories are reachable follows from the installation token's scope, so there is no per-repository allow list.
   The token never enters the container. A job whose session knows no installation (no webhook carried one) fails
   `workspace: …` before the container starts.
-- The image includes `python3` for skill scripts (see [Instructions and skills](#instructions-and-skills)). Scripts get
-  no network beyond the same restriction.
+- **Skill scripts: one exec of a fixed runner.** A run (`runScript(target, { name, files, argv, stdin })`; the session
+  reads the skill's files from the Hub at the turn's revision, so the Workspace knows nothing of skills) is one exec of
+  the runner, `packages/server/container/prq-skill-run.py` (the Python standard library only), installed root-owned at
+  `/usr/local/libexec/prq-skill-run` and run as root with `python3 -I -S`. Git never waits for a script, and nothing the
+  Workspace does for a script stops the container or signals a runner: what a late, abandoned or dead runner could
+  disturb is the next script's files, and the runner guards those itself. Driving separate helper execs from the
+  Worker, or stopping the container on every uncertain ending, was rejected: each adds an admission and an ordering the
+  Worker would track across aborts, supersession and resets, and a stop costs the author a rebuild of a good checkout.
+- **The frame and the runner's checks.** Before anything else, within 30 s of its start, the runner reads its stdin
+  to the end: a header line (a nonce, the turn's sequence and scratch generation, whether the scratch is new, the
+  checkout's ready token, the time left on the call's bound, and the sizes of the two sections after it), a tar archive
+  of the skill's files with their modes (built with `nanotar`), then the script's input; anything else ends it
+  (`failed:frame`) with nothing touched. It then takes its lock (`/workspace/.prq`, root's, made on a fresh disk; held
+  by another runner: `busy`, at once) and refuses, with nothing written but that lock: a running marker left on the disk
+  (`unclean`, below), its launch deadline passed (the time left counted from when it read the header), an older turn, an
+  older scratch generation or an equal one on a new scratch, and a ready token missing or other than the frame's (a
+  checkout the caller did not prepare, or one a prepare is changing). The token is checked at admission only.
+- **Scratch.** Each turn has a working directory, `/workspace/scratch/<seq>` (owner `skill`, mode 0700), the script's
+  working directory and `HOME`, which lasts between the turn's runs (`kept`), so a skill's `run` and its `verify` share
+  their state. A turn's first run removes every turn's scratch (`new`); a run whose generation is not the one the
+  runner last recorded recreates it (`lost`: the container restarted, or the Workspace raised the generation), and the
+  result then says so right after its status line, so the model runs the earlier steps again. A newer turn's run that
+  is not its first (its first ended unknown before the lock) removes every other turn's scratch as well and says
+  `lost`, so an older turn's scratch never lasts into a newer turn's runs.
+- **Install, run and reap.** The runner checks every member first (regular files and directories, relative paths
+  without `..` of at most 100 bytes, no mode bits beyond 0755; else `failed:member <path>` with nothing written),
+  extracts the archive into a fresh staging directory (`/workspace/skills/.stage-<id>`, a random id of its own, never
+  reused) through `tarfile`'s `data` filter, and renames a new symbolic link to it over `/workspace/skills/<name>`, so a
+  runner killed meanwhile leaves the installed skill as it was. The files go with every run (yomiyasu's are 2.1 MB):
+  nothing is stale after a container loss or an update. It writes the running marker, makes itself the child subreaper,
+  and runs the argv as the `skill` user (no supplementary groups, a session of its own) with a fixed environment
+  (`HOME`, `CLAUDE_SKILL_DIR`, `PATH`, UTF-8) for at most 120 s (`SCRIPT_MS`, ending as `timeout`). Then it signals only
+  its own unreaped children, which the kernel lists in `/proc/self/task/<tid>/children` and keeps reserved until they
+  are reaped (so a PID it signals belongs to no other process), reaps until `waitpid` reports none left, for at most 5
+  s, and only then removes the marker. Its stderr ends with a trailer line: the nonce, the scratch state, the ending
+  (`exit:<code>`, `timeout`, `busy` or `failed:<reason>`) and whether that cleanup was confirmed. A script cannot write
+  one that counts: the nonce came on the runner's stdin, and the runner writes it only to the trailer and to its running
+  marker under `/workspace/.prq` (mode 0700), which the `skill` user cannot read. The Workspace takes the trailer off,
+  so a script's stderr is returned as written.
+- **A left marker blocks scripts until a restart (an accepted limit).** A runner that died between writing and removing
+  the marker (killed, out of memory), or whose 5 s ended with a child left, leaves it, and descendants of the script
+  may live on, reparented to the container's init. Every later run is then refused (`unclean`, the result saying
+  scripts do not run until the workspace restarts) until the container restarts and its disk goes; git does not read
+  the marker, so answers and summaries go on. Such a leftover keeps what the `skill` user can do (below) and shares the
+  container's CPU, memory and disk with git, which can make a fetch fail. Confirming it gone would take a stop of a
+  container with a good checkout, or an isolation beyond one user.
+- **The Workspace's side.** A call is bounded from its arrival across the checkout, the script queue (one run at a time
+  per instance) and the exec by 36 minutes (`SCRIPT_CALL_MS`: a rebuild's 30 minutes, then an earlier run and this one
+  at 3 minutes each, `RUNNER_MS`), and a run whose bound passes before its exec never starts. Before each exec the turn's
+  scratch record (`prq_workspace`: the turn, its generation, whether the scratch exists, whether a frame may be out) is
+  marked pending and made durable (`storage.sync()`, waited for within the call's bound, and the bound checked again
+  after it, so a run whose bound passed meanwhile never starts). When the exec returns its process, the Workspace checks
+  again, with no await between, that the turn is the newest and not released and that the bound has not passed; only
+  then does it write the frame. A runner whose caller gave up meanwhile gets its stdin ended with no byte and ends
+  having touched nothing (`prq.workspace.frame_withheld`). A trailer with the run's nonce is its ending. When the wait
+  ends without one (the bound, a release, a newer turn, a failed RPC, an exec that ended without it), the Workspace only
+  stops waiting: the runner goes on under its own bounds, the turn's scratch generation is raised (so its next run says
+  `lost`, and a runner arriving late with the old one is refused), and the model is told that the ending is unknown and
+  its effects may or may not have happened. A new instance raises a pending record the same way, durably, before it can
+  send a frame; a record that is not pending is kept, so an eviction between a `run` and its `verify` keeps the scratch.
+  A frame may start up to 30 s past the call's bound, since the two share no clock; the Workspace has stopped waiting by
+  then, so such a run ends unknown.
+- **What a script reaches.** The checkout, the runner's state and the installed skills are root's, so a script reads
+  the code but changes neither it, its ready token, nor the skill it runs. It can read the files of other skills
+  installed earlier in the container, read and write its turn's scratch, and make the admitted git fetches from
+  `github.com` through `GitEgress` (the interception CA is in the image), which reach what the installation reaches:
+  scripts get no network beyond that restriction. `allowed-tools` governs what is started, not what a started process
+  can reach; the pinned SHA is what the host trusts. The image sets the umask (022) wherever root writes under
+  `/workspace`, because the runtime's umask for an exec is not guaranteed (local Docker gives 0000, which left the
+  checkout writable by everyone): git runs through a wrapper first on the image's `PATH` (`packages/server/container/git`,
+  with `PATH` set in the image and in every exec), the shell that writes the ready token and the runner set their own,
+  and `/workspace` is made with mode 0755.
+- **Gaps kept from the checkout's design, tracked for #9.** An abandoned prepare's HTTPS egress setter can settle after
+  a newer setup (a stale binding a fake reproduced; production's ordering is unverified), and the reset cleanup counts
+  a rejected container monitor as a confirmed stop. Scripts depend on neither: they reach the checkout as git does, and
+  the runner refuses a checkout whose ready token the caller did not prepare. How the runtime orders an exec against
+  other container calls is unverified in production too; a late admission does not depend on it, since it gets no
+  frame, or the runner refuses its stale one.
 - This restriction applies only to traffic from inside the container. LLM calls and external tools (web search, for
   example) are made by PrSession on the Worker side and are not restricted by it. If tests are run in the container
   later, the destinations they need (an npm registry, for example) are added then.
 - **Tests and the owner's check.** Tests run with containers off (`dev.enable_containers: false` in `wrangler.jsonc`,
-  which the CLI's wrangler test harness reads too), so CI needs no Docker; the Workspace's tests drive a fake container.
-  `pnpm run check:workspace` in `packages/cli` runs the real container in wrangler's local runtime (see
-  [AGENTS.md](../AGENTS.md)).
+  which the CLI's wrangler test harness reads too), so CI needs no Docker; the Workspace's tests drive a fake container
+  whose runner applies the runner's checks in their order. The runner itself runs for real in a Node test on Linux
+  (`skill-runner.node.test.ts`), only its switch to the `skill` user faked. `pnpm run check:workspace` in
+  `packages/cli` runs the real container in wrangler's local runtime, and `check:skills` with a pull request runs a
+  scripted turn with yomiyasu's scripts and probes the runner there (see [AGENTS.md](../AGENTS.md)).
 
 ### Caching
 
@@ -1147,7 +1261,9 @@ Server:
   (`prq.ledger.stale_rev`).
 - The Workspace logs each prepare with its commit, whether it reused, updated or rebuilt the checkout, and its time
   (`prq.workspace.prepared`), a prepare that failed (`prepare_failed`), a cleanup after a reset that failed
-  (`cleanup_failed`), and a release the session could not deliver (`release_failed`). The egress logs each request it
+  (`cleanup_failed`), a release the session could not deliver (`release_failed`), and a script's frame withheld from a
+  runner whose caller had given up (`frame_withheld`). Each skill script run is logged by the session
+  (`prq.skill.script`, see [Model context](#model-context)). The egress logs each request it
   refused with its host, method and path, never the query or a header (`prq.egress.denied`), and a token it could not
   get (`prq.egress.token_failed`).
 - When a cloud job's run ends (`done` or `failed`), `prq.job.usage` logs the PR key, `jobId`, kind, run, outcome, the
@@ -1208,7 +1324,8 @@ Apart from these, bounds that keep a job from waiting forever (liveness, not spe
   job's total time is not bounded.
 - A tool call ends when the workspace answers, at the latest after 31 minutes (a backstop over the workspace's own
   bounds, since a call may rebuild the checkout first), and at once when the turn is aborted; either way the model gets
-  the failure as text. The checkout a job's first model call needs is waited for the same way, and a job whose
+  the failure as text. A skill script's call is bounded by the Workspace at 36 minutes from its arrival (a rebuild,
+  then an earlier run and its own at 3 minutes each), the script itself at 120 s, and the tool waits a minute longer. The checkout a job's first model call needs is waited for the same way, and a job whose
   checkout cannot be made fails `workspace: <reason>`.
 - A cloud job's run is started at most 3 times across restarts, and the SDK's own recovery is declined (see
   [Owner and jobs](#owner-and-jobs)). Each summary call of a compaction (one per batch) is tried once more, and its
@@ -1266,7 +1383,7 @@ prq/
 │  │   │   │   ├─ prefix.ts      a turn's instruction prefix: its size and fingerprint
 │  │   │   │   ├─ projection.ts  what a job's model reads of the conversation, earlier skill results as markers
 │  │   │   │   ├─ tools.ts       the cloud agent's git tools and the bounds every tool result keeps
-│  │   │   │   ├─ skill-tools.ts the skill tools, their status lines and an earlier turn's markers
+│  │   │   │   ├─ skill-tools.ts the skill tools and the run tool, their status lines and an earlier turn's markers
 │  │   │   │   ├─ turn-tools.ts  a turn's one set of tools, their definitions and the turn's loop
 │  │   │   │   ├─ room.ts        how much a turn may still read: the window less the newest measured request
 │  │   │   │   ├─ pages.ts       a page of a command's output, from any line or character
@@ -1274,17 +1391,20 @@ prq/
 │  │   │   │   └─ prompt.ts      the system prompt and an analysis's task
 │  │   │   ├─ github.ts          the GitHub App: installation tokens, the App's JWT and bounded API exchanges
 │  │   │   ├─ instructions/      the host's prompts and skills as the Hub stores them; a skill's link, frontmatter
-│  │   │   │                     and its reads from GitHub
-│  │   │   ├─ workspace.ts       Workspace: the container, the gate on turns, prepares and paged commands
+│  │   │   │                     and its reads from GitHub; a script command's grammar and the entries it matches
+│  │   │   ├─ workspace.ts       Workspace: the container, the gate on turns, prepares, paged commands and script runs
+│  │   │   ├─ skill-runner.ts    the skill runner as data: its argv, the frame it reads and the trailer it writes
 │  │   │   ├─ workspace-git.ts   the checkout's git procedure as data, and whether a checkout is reused
 │  │   │   ├─ egress.ts          GitEgress: the container's only way out
 │  │   │   └─ client/            React UI (Vite)
 │  │   ├─ scripts/           manual checks of a model provider, the tool loop and the GitHub App
 │  │   │                     (`pnpm run check:provider`, `check:tools`, `check:github`), not part of the Worker
+│  │   ├─ container/         the skill runner the image installs (prq-skill-run.py)
 │  │   ├─ Dockerfile         the workspace container's image
 │  │   ├─ wrangler.jsonc
 │  │   ├─ vite.config.ts
-│  │   └─ vitest.config.ts   two projects: the Worker's tests in workerd, the git procedure's (*.node.test.ts) in Node
+│  │   └─ vitest.config.ts   two projects: the Worker's tests in workerd, the git procedure's and the skill runner's
+│  │                         (*.node.test.ts) in Node
 │  └─ cli/                 @prq/cli: prq, compiled by Bun into one binary (dist/prq; Node 24 runs the source too)
 │      └─ src/
 │          ├─ main.ts            the entry the binary is built from: arguments, the command, the exit code
@@ -1350,8 +1470,11 @@ Only a deployment can show these.
   through an installation on another account, and turns under a scripted model), not on a deployment. Whether a model
   activates a skill is observed, not required (`check:skills <pull request>`): with DeepSeek flash, an answer prompt
   naming the skill activated it in 4 of 6 answers, and one also stating the step in 5 of 6. How a host words its prompt
-  for a model is the host's to tune. Whether models activate a skill from its description alone is not measured. Not
-  built yet: running a script under `allowed-tools` in the workspace container, and materializing skills into a local
-  job directory.
+  for a model is the host's to tune. Whether models activate a skill from its description alone is not measured.
+  Scripts under `allowed-tools` have run in the workspace container only in wrangler's local runtime with Docker
+  (`check:skills <pull request>`), on an arm64 machine running the amd64 image under emulation, where the reset cleanup
+  has no `pidfd_open` and the container is stopped instead: the cleanup's scope, and the checkout's modes under the
+  deployed runtime's umask, are checked on a deployment. Not built yet: materializing skills into a local job
+  directory.
 - **Browser client.** `useAgentChat` with a local owner (an appended answer, reconnection) was exercised through a Node
   client speaking the same WebSocket protocol, not in a browser.
