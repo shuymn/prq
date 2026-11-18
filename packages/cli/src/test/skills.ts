@@ -181,11 +181,11 @@ function countGithub(): { count: () => number; stop: () => void } {
   };
 }
 
-type Verdict = (ok: boolean, line: string) => boolean;
+type Verdict = (ok: boolean, line: string) => void;
 
 // The stored copy against the manifest: the same paths, modes and sizes, and each stored file's bytes hashing to its
 // tree blob.
-async function checkStored(worker: Worker, manifest: Manifest, verdict: Verdict): Promise<boolean> {
+async function checkStored(worker: Worker, manifest: Manifest, verdict: Verdict): Promise<void> {
   const hub = await worker.durableObject("Hub", "hub");
   const bundle = v.parse(Bundle, await hub["skillBundle"]?.(NAME));
   const stored = bundle.files.map(({ path, mode, size }) => ({ path, mode, size }));
@@ -195,7 +195,7 @@ async function checkStored(worker: Worker, manifest: Manifest, verdict: Verdict)
     return tree === undefined || sha1Blob(file.content) !== tree.blob || file.blob !== tree.blob;
   });
   const bytes = bundle.files.reduce((sum, file) => sum + file.content.byteLength, 0);
-  return verdict(
+  verdict(
     bundle.skill.sha === manifest.sha && JSON.stringify(stored) === JSON.stringify(expected) && mismatched.length === 0,
     `stored at ${manifest.sha.slice(0, 7)}: ${bundle.files.length} files, ${bytes} bytes; GitHub's tree: ${manifest.files.length} files; ` +
       `paths, modes and sizes ${JSON.stringify(stored) === JSON.stringify(expected) ? "equal" : "differ"}; ` +
@@ -208,14 +208,15 @@ function tuple(skill: { source: unknown; ref: unknown; sha: string; name: string
 }
 
 // G9: the branch holding `/` is the ref, the rest the path.
-async function previewSlashedBranch(worker: Worker, github: Github, verdict: Verdict): Promise<boolean> {
+async function previewSlashedBranch(worker: Worker, github: Github, verdict: Verdict): Promise<void> {
   const sha = await github.commitOf(`heads/${BRANCH}`);
   const res = await api(worker, "POST", "/api/skills/preview", { url: link(BRANCH) });
   if (res.status !== 200) {
-    return verdict(false, `G9: the preview answered ${res.status} ${JSON.stringify(res.body)}`);
+    verdict(false, `G9: the preview answered ${res.status} ${JSON.stringify(res.body)}`);
+    return;
   }
   const preview = v.parse(SkillPreview, res.body);
-  return verdict(
+  verdict(
     preview.ref.name === BRANCH && preview.ref.kind === "branch" && preview.source.path === DIR && preview.sha === sha,
     `G9: ${link(BRANCH)} → ref ${JSON.stringify(preview.ref)}, path ${preview.source.path}, ${preview.sha.slice(0, 7)} ` +
       `(GitHub's ${BRANCH}: ${sha.slice(0, 7)})`,
@@ -337,7 +338,6 @@ export async function checkSkills(app: GithubAppSettings, print: (line: string) 
   const verdict: Verdict = (held, line) => {
     ok &&= held;
     print(`${held ? "ok  " : "FAIL"} ${line}`);
-    return held;
   };
   const direct = globalThis.fetch;
   const github = await appGithub(app, direct);
