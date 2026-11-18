@@ -31,7 +31,7 @@ import { contextLimit } from "../../../server/src/pr-session/context-budget.ts";
 import { UsageError } from "./app-check.ts";
 import { ask, deliver, getMessages, savePrompt, sessionView } from "./pr.ts";
 import type { GithubApp } from "./reconcile.ts";
-import { type ModelRequest, type ModelSettings, startWorker, type Worker } from "./worker.ts";
+import { type ModelSettings, startWorker, type Worker } from "./worker.ts";
 import { readPull, untilEnded, workspaceContainers } from "./workspace.ts";
 
 const POLL_MS = 500;
@@ -127,16 +127,16 @@ function inBody(body: string, prompt: string): boolean {
   return prompt !== "" && body.includes(JSON.stringify(prompt).slice(1, -1));
 }
 
-// Whether each request holds only its own kind's prompt: a turn's system message holds its kind's prompt in the host's
-// block (when that prompt is saved), and no request holds the other prompt anywhere in its body (as JSON escapes it).
-// The counts of each kind, and a line for each request that does not hold.
+// Whether each request (its body) holds only its own kind's prompt: a turn's system message holds its kind's prompt in
+// the host's block (when that prompt is saved), and no request holds the other prompt anywhere in its body (as JSON
+// escapes it). The counts of each kind, and a line for each request that does not hold.
 export function promptsHeld(
-  requests: readonly ModelRequest[],
+  bodies: readonly string[],
   prompts: Prompts,
 ): { counts: Record<RequestKind, number>; wrong: string[] } {
   const counts: Record<RequestKind, number> = { analysis: 0, answer: 0, summary: 0, other: 0 };
   const wrong: string[] = [];
-  requests.forEach(({ body }, index) => {
+  bodies.forEach((body, index) => {
     const system = systemOf(body);
     const kind = requestKind(system);
     counts[kind] += 1;

@@ -50,17 +50,14 @@ function block(prompt: string): string {
   return `\n<host-instructions>\n${prompt}\n</host-instructions>\n`;
 }
 
-// A recorded request with this system message and one user message.
-function request(system: string, user = "") {
-  return {
-    url: "https://provider.example/v1/chat/completions",
-    body: JSON.stringify({
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
-  };
+// A recorded request's body with this system message and one user message.
+function request(system: string, user = ""): string {
+  return JSON.stringify({
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  });
 }
 
 describe("the prompts each recorded request holds", () => {
@@ -82,7 +79,8 @@ describe("the prompts each recorded request holds", () => {
         request(analysis, prompts.answer),
         request("You work on one GitHub pull request.\nYour job: answer the last question."),
         request(summary, `notes: ${prompts.analysis}`),
-        { url: "https://provider.example/v1/models", body: "" },
+        // A request with no body, such as a model list.
+        "",
       ],
       prompts,
     );
