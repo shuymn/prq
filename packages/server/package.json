@@ -7,6 +7,7 @@
     "typecheck": "tsc && tsc -p tsconfig.node.json && tsc -p tsconfig.client.json",
     "test": "vitest run",
     "build": "vite build",
+    "icons": "node build/icons.ts",
     "check:provider": "node --env-file-if-exists=.dev.vars scripts/provider-check.ts",
     "check:github": "node --env-file-if-exists=.dev.vars scripts/github-check.ts",
     "check:tools": "node --env-file-if-exists=.dev.vars scripts/tools-check.ts"
@@ -43,6 +44,7 @@
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "fast-check": "catalog:",
+    "playwright": "catalog:",
     "style-dictionary": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
