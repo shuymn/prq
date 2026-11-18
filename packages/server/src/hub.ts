@@ -41,10 +41,12 @@ import {
   isSkillVersion,
   readSkill,
   readSkillFiles,
+  readSkillFilesAt,
   readSkillPath,
   readSkills,
   skillChanged,
   type SkillBundle,
+  type SkillFilesRead,
   type SkillRead,
   type SkillVersion,
   writeSkill,
@@ -512,6 +514,12 @@ export class Hub extends Agent<Env, HubView> {
   // at the revision the turn listed, so a turn never reads two versions of one skill.
   async skillRead(name: string, rev: number, path: string): Promise<SkillRead> {
     return readSkillPath(this.#sql, name, rev, path);
+  }
+
+  // Every file of a registered skill, as a cloud turn's script run sends them to the workspace: only while the
+  // registration is at the revision the turn listed, so a command read in one version never runs against another.
+  async skillFilesAt(name: string, rev: number): Promise<SkillFilesRead> {
+    return readSkillFilesAt(this.#sql, name, rev);
   }
 
   // Registers a skill read and checked by a confirm, in one transaction with its checks: the name is free, and fewer

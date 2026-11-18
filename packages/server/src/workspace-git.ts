@@ -9,9 +9,9 @@ export type CheckoutTarget = { remote: string; sha: string; baseSha: string };
 // What a prepare does with what it finds (planPrepare).
 type PreparePlan = "reuse" | "update" | "rebuild";
 
-// A checkout made ready: its commit, the merge base of the base and the commit when the history reaches it, and how
-// the prepare made it.
-export type Checkout = { sha: string; mergeBase: string | null; plan: PreparePlan };
+// A checkout made ready: its commit, the merge base of the base and the commit when the history reaches it, how the
+// prepare made it, and the ready token in its directory (a script run's runner checks it before it starts).
+export type Checkout = { sha: string; mergeBase: string | null; plan: PreparePlan; token: string };
 
 // The ready record: what the last complete prepare checked out, and the token it wrote last into the directory. A
 // checkout is reused only through it, since a prepare cut short (a stop, a reset) leaves a directory that may look
@@ -60,8 +60,17 @@ export const prepareArgv = {
   mergeBase: (dir: string, sha: string, baseSha: string) => git(dir, ["merge-base", "--end-of-options", sha, baseSha]),
   head: (dir: string) => git(dir, ["rev-parse", "--verify", "HEAD"]),
   readToken: (dir: string) => ["cat", "--", tokenPath(dir)],
+  dropToken: (dir: string) => ["rm", "-f", "--", tokenPath(dir)],
   // The token is hex and the path the procedure's own, both passed as arguments, never as shell text.
-  writeToken: (dir: string, token: string) => ["sh", "-c", 'printf %s "$1" > "$2"', "sh", token, tokenPath(dir)],
+  // With its own umask: the runtime's for an exec is not guaranteed (Dockerfile).
+  writeToken: (dir: string, token: string) => [
+    "sh",
+    "-c",
+    'umask 022; printf %s "$1" > "$2"',
+    "sh",
+    token,
+    tokenPath(dir),
+  ],
 };
 
 // The git command each tool runs at the workspace commit, as argv after `git` (the Workspace runs it in the checkout).
@@ -123,9 +132,10 @@ async function must(run: StepRunner, argv: readonly string[], what: string): Pro
 
 // Makes the directory a checkout of the target's commit, through the ready record: reused as it is, updated, or
 // rebuilt from empty, then deepened until the merge base answers (at most MAX_DEEPEN_ROUNDS) and checked to have HEAD
-// at the commit. The record is cleared before any change to the directory and written as the last step, after the
-// token file, so a prepare cut short at any point leaves no record and the next one rebuilds. `token` is the new
-// record's (random, per prepare).
+// at the commit. Before any change to the directory the record is cleared and the token file removed, and both are
+// written as the last steps, the file first, so a prepare cut short at any point leaves no record and the next one
+// rebuilds, and a script runner holding the earlier token is refused for the whole prepare and after it. `token` is
+// the new record's (random, per prepare).
 export async function prepareCheckout(
   run: StepRunner,
   store: RecordStore,
@@ -137,9 +147,10 @@ export async function prepareCheckout(
   const tokenFile = record === null ? null : await readToken(run, dir);
   const plan = planPrepare(record, tokenFile, target);
   if (plan === "reuse" && record !== null) {
-    return { sha: record.sha, mergeBase: record.mergeBase, plan };
+    return { sha: record.sha, mergeBase: record.mergeBase, plan, token: record.token };
   }
   store.clear();
+  await must(run, prepareArgv.dropToken(dir), "removing the ready token");
   if (plan === "rebuild") {
     await must(run, prepareArgv.wipe(dir), "clearing the checkout");
     await must(run, prepareArgv.init(dir), "git init");
@@ -158,7 +169,12 @@ export async function prepareCheckout(
     throw new PrepareError(`HEAD is ${head}, not the commit ${target.sha}`);
   }
   await must(run, prepareArgv.writeToken(dir, token), "marking the checkout ready");
-  const checkout = { sha: target.sha, mergeBase: mergeBase.exitCode === 0 ? mergeBase.stdout.trim() : null, plan };
+  const checkout = {
+    sha: target.sha,
+    mergeBase: mergeBase.exitCode === 0 ? mergeBase.stdout.trim() : null,
+    plan,
+    token,
+  };
   store.write({ ...target, mergeBase: checkout.mergeBase, token });
   return checkout;
 }

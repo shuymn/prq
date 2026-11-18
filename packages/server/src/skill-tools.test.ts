@@ -24,6 +24,7 @@ const SKILL: TurnSkill = {
   rev: 3,
   sha: SHA,
   source: { owner: "octo", repo: "skills", path: "skills/polish" },
+  allowedTools: null,
 };
 
 function status(tool: string, outcome: string): string {
@@ -80,6 +81,7 @@ function skillSet(
       calls.push(path);
       return read(name, rev, path, signal);
     },
+    scripts: null,
     room,
     activated,
     fields: { pr: "octo~skills~1", jobId: "job-1" },

@@ -25,7 +25,7 @@ import * as v from "valibot";
 import { refuseSubAgent, sendServerVersion } from "../agents.ts";
 import { readGithubAppConfig, readModelConfig } from "../config.ts";
 import { type GithubClient, githubFor, githubStatus, type PullRequestState } from "../github.ts";
-import type { SkillRead } from "../instructions/skills.ts";
+import type { SkillFilesRead, SkillRead } from "../instructions/skills.ts";
 import { errorName, log } from "../log.ts";
 import { boundedHubCall, hubStub, workspaceStub } from "../names.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
@@ -256,6 +256,17 @@ const SkillReadAnswer = v.variant("kind", [
   v.object({ kind: v.literal("changed") }),
 ]);
 
+// What the Hub's read of a skill's files for a script run may answer, checked when it arrives.
+const SkillFilesAnswer = v.variant("kind", [
+  v.object({
+    kind: v.literal("files"),
+    files: v.array(
+      v.object({ path: v.string(), mode: v.picklist(["100644", "100755"]), content: v.instance(Uint8Array) }),
+    ),
+  }),
+  v.object({ kind: v.literal("changed") }),
+]);
+
 // A question from the UI: a user message the server did not add (server messages carry metadata).
 function isQuestion(message: UIMessage): boolean {
   return message.role === "user" && message.metadata === undefined;
@@ -290,18 +301,20 @@ function isUIMessage<M extends { role: string }>(message: M): message is M & UIM
 // The workspace as a turn's tools call it: a failure after which the turn cannot go on (WorkspaceLost) ends the turn
 // with that reason, rather than reaching the model as text it cannot act on.
 function endingTurnWhenLost(client: WorkspaceClient, end: (reason: string) => void): WorkspaceClient {
+  const ending = async <T>(call: () => Promise<T>): Promise<T> => {
+    try {
+      return await call();
+    } catch (error) {
+      if (error instanceof WorkspaceLost) {
+        end(error.message);
+      }
+      throw error;
+    }
+  };
   return {
     prepare: (target, signal) => client.prepare(target, signal),
-    run: async (target, command, signal) => {
-      try {
-        return await client.run(target, command, signal);
-      } catch (error) {
-        if (error instanceof WorkspaceLost) {
-          end(error.message);
-        }
-        throw error;
-      }
-    },
+    run: (target, command, signal) => ending(() => client.run(target, command, signal)),
+    runScript: (target, run, signal) => ending(() => client.runScript(target, run, signal)),
     release: (seq) => client.release(seq),
   };
 }
@@ -1432,7 +1445,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     // The first request's size: the context count, or without a measurement the estimate of the prefix (the system
     // message and the tool definitions) and the messages as sent.
     const start = context.measured ?? estimateTokens(prefix.chars + JSON.stringify(modelMessages).length);
-    const skills = instructions.skills.length === 0 ? null : this.#skillContext(job, instructions.skills);
+    const skills =
+      instructions.skills.length === 0
+        ? null
+        : this.#skillContext(job, instructions.skills, instructions.scripts ? code : null);
     const loop = instructions.tools
       ? toolLoop(
           { ...(code === null ? {} : { code }), ...(skills === null ? {} : { skills }) },
@@ -1503,7 +1519,14 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       const { prompts, skills } = await this.readInstructions();
       return {
         hostPrompt: prompts[job.target.kind].text,
-        skills: skills.map(({ name, description, rev, sha, source }) => ({ name, description, rev, sha, source })),
+        skills: skills.map(({ name, description, rev, sha, source, allowedTools }) => ({
+          name,
+          description,
+          rev,
+          sha,
+          source,
+          allowedTools,
+        })),
       };
     } catch (error) {
       log("prq.turn.instructions_failed", { pr: this.name, jobId: job.jobId, error: errorName(error) }, "warn");
@@ -1577,9 +1600,14 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return v.parse(Instructions, await read);
   }
 
-  // What a turn's skill tools read with: the skills the turn listed, and the Hub's read of a skill's path at the
-  // revision listed, within HUB_CALL_MS (the Hub's start included) and ended by the tool call's signal.
-  #skillContext(job: Job, skills: readonly TurnSkill[]): Omit<SkillContext, "room"> {
+  // What a turn's skill tools read with: the skills the turn listed, and the Hub's reads of a skill's path, or of its
+  // files for a script run in the turn's workspace (`code`, when the turn runs scripts), at the revision listed, each
+  // within HUB_CALL_MS (the Hub's start included) and ended by the tool call's signal.
+  #skillContext(
+    job: Job,
+    skills: readonly TurnSkill[],
+    code: { workspace: WorkspaceClient; target: WorkspaceTarget } | null,
+  ): Omit<SkillContext, "room"> {
     return {
       skills: new Map(skills.map((skill) => [skill.name, skill])),
       kind: job.target.kind,
@@ -1590,6 +1618,20 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
           );
         return v.parse(SkillReadAnswer, await raceAbort(call, signal)) satisfies SkillRead;
       },
+      scripts:
+        code === null
+          ? null
+          : {
+              workspace: code.workspace,
+              target: code.target,
+              files: async (name, rev, signal) => {
+                const call = () =>
+                  boundedHubCall(withTimeout, this.env, HUB_CALL_MS, "the Hub's skill read", async (hub) =>
+                    hub.skillFilesAt(name, rev),
+                  );
+                return v.parse(SkillFilesAnswer, await raceAbort(call, signal)) satisfies SkillFilesRead;
+              },
+            },
       activated: new Set(),
       fields: { pr: this.name, jobId: job.jobId },
     };

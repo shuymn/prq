@@ -36,6 +36,9 @@ catalog:
   # failure.
   p-limit: 7.3.3
   yaml: 2.9.1
+  # Skill scripts: the archive of a skill's files sent to the container's runner, a ustar whose 100-byte name field is
+  # why a skill's paths are at most 100 bytes.
+  nanotar: 0.3.0
 
   # Tests and TypeScript; fast-check generates the interleavings of the head reconciliation's oracle test.
   fast-check: 4.10.2

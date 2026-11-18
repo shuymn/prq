@@ -9,7 +9,7 @@
 //    container's environment or the checkout's .git/config.
 // Docker runs only through the named operations below, on containers this check saw start.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
@@ -163,7 +163,7 @@ function checked(id: string): string {
 }
 
 // A command in a container this check started, its output whatever its exit status.
-async function exec(id: string, argv: string[]): Promise<string> {
+export async function exec(id: string, argv: string[]): Promise<string> {
   try {
     const { stdout, stderr } = await run("docker", ["exec", checked(id), ...argv], { timeout: 60_000 });
     return `${stdout}${stderr}`;
@@ -186,7 +186,39 @@ async function environmentNames(id: string): Promise<string[]> {
   return stdout.split("\n").filter((line) => line !== "");
 }
 
-async function stopContainer(id: string): Promise<void> {
+// A command in a container this check started, with its exit status; stdin open for `holdStdinMs` with no byte
+// written, when given, then closed. Bounded by a minute past that.
+export async function execStatus(
+  id: string,
+  argv: string[],
+  holdStdinMs?: number,
+): Promise<{ code: number | null; output: string; ms: number }> {
+  const started = Date.now();
+  const child = spawn("docker", ["exec", ...(holdStdinMs === undefined ? [] : ["-i"]), checked(id), ...argv], {
+    stdio: [holdStdinMs === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout?.on("data", (chunk: Buffer) => (output += chunk.toString()));
+  child.stderr?.on("data", (chunk: Buffer) => (output += chunk.toString()));
+  const ended = new Promise<number | null>((resolve) => child.on("close", resolve));
+  const closing = holdStdinMs === undefined ? null : setTimeout(() => child.stdin?.end(), holdStdinMs);
+  const bound = setTimeout(() => child.kill("SIGKILL"), (holdStdinMs ?? 0) + 60_000);
+  try {
+    return { code: await ended, output, ms: Date.now() - started };
+  } finally {
+    clearTimeout(bound);
+    if (closing !== null) {
+      clearTimeout(closing);
+    }
+  }
+}
+
+// A command started in a container this check started, left running there.
+export async function execDetached(id: string, argv: string[]): Promise<void> {
+  await run("docker", ["exec", "--detach", checked(id), ...argv], { timeout: 60_000 });
+}
+
+export async function stopContainer(id: string): Promise<void> {
   await run("docker", ["stop", checked(id)], { timeout: STOP_MS });
 }
 

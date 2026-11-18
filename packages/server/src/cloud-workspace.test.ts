@@ -205,7 +205,12 @@ async function released(workspace: DurableObjectStub<Workspace>): Promise<number
 
 // The session's client over a Workspace whose every call fails as given.
 function client(reply: WorkspaceFailure) {
-  return workspaceClient({ prepare: async () => reply, run: async () => reply, release: async () => undefined });
+  return workspaceClient({
+    prepare: async () => reply,
+    run: async () => reply,
+    runScript: async () => reply,
+    release: async () => undefined,
+  });
 }
 
 describe("the session's client", () => {

@@ -176,7 +176,17 @@ function skillCalls(request: ChatRequest): { tool: string; input: Record<string,
   );
 }
 
-function lastToolResult(request: ChatRequest): string | null {
+// The input of the activation that continues a page ending in a continuation note, or null when the page has none or
+// the check has already read its five pages.
+export function nextPage(name: string, page: string, pages: number): Record<string, unknown> | null {
+  const note = NOTE.exec(page.split("\n").at(-1) ?? "");
+  if (note === null || pages >= MAX_PAGES) {
+    return null;
+  }
+  return { name, startLine: Number(note[1]), ...(note[2] === undefined ? {} : { startChar: Number(note[2]) }) };
+}
+
+export function lastToolResult(request: ChatRequest): string | null {
   const last = request.messages.at(-1);
   return last?.role === "tool" && typeof last.content === "string" ? last.content : null;
 }
@@ -192,11 +202,10 @@ function answerOne(example: string): Script {
       return { tool: "activate_skill", input: { name: YOMIYASU_NAME } };
     }
     if (stage === "yomiyasu") {
-      const note = NOTE.exec(result.split("\n").at(-1) ?? "");
-      if (note !== null && pages < MAX_PAGES) {
+      const input = nextPage(YOMIYASU_NAME, result, pages);
+      if (input !== null) {
         pages += 1;
-        const startChar = note[2] === undefined ? {} : { startChar: Number(note[2]) };
-        return { tool: "activate_skill", input: { name: YOMIYASU_NAME, startLine: Number(note[1]), ...startChar } };
+        return { tool: "activate_skill", input };
       }
       stage = "internal-comms";
       return { tool: "activate_skill", input: { name: INTERNAL_COMMS_NAME } };

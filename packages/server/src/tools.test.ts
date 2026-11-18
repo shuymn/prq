@@ -74,6 +74,7 @@ function stubTools(run: WorkspaceClient["run"], room = new ContextRoom(1_048_576
   const workspace: WorkspaceClient = {
     prepare: async () => ({ sha: HEAD, mergeBase: BASE }),
     run,
+    runScript: () => Promise.reject(new Error("the git tools run no script")),
     release: async () => undefined,
   };
   return workspaceTools({ workspace, target: TARGET, prepared: { sha: HEAD, mergeBase: BASE }, room });

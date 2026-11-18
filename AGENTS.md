@@ -47,8 +47,10 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
   public skill `skills/yomiyasu` of `nanaism/yomiyasu` through the Worker against real GitHub, compares the stored copy
   with what it reads from GitHub itself, and runs cloud turns with it and a second skill under a scripted model,
   checking what their requests hold. Without an argument it needs only the GitHub App in `packages/server/.dev.vars`
-  (no model, no Docker); with a pull request it then runs a smoke of skill activation with the model and Docker, at the
-  window `.dev.vars` sets (written without `--window`).
+  (no model, no Docker); with a pull request and Docker it then runs yomiyasu's scripts in the real container in a
+  turn under a scripted model, probes the container's script runs (ownership and modes, the reset cleanup, a runner
+  given no frame, lost scratch, orphans, a dead runner), and runs a smoke of skill activation and scripts with the
+  model, at the window `.dev.vars` sets (written without `--window`).
 - lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows, a
   `fileToken` check on `design/prq.pen`, and commitlint on the message.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would

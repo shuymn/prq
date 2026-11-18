@@ -85,7 +85,7 @@ describe("the workspace's git procedure with real git", () => {
 
     const ready = await checkout.prepare(origin, { sha: commits.head, baseSha: commits.base }, store);
 
-    expect(ready).toEqual({ sha: commits.head, mergeBase: commits.fork, plan: "rebuild" });
+    expect(ready).toEqual({ sha: commits.head, mergeBase: commits.fork, plan: "rebuild", token: store.record?.token });
     expect(
       checkout.log.filter((entry) => entry.includes("--deepen=")).map((entry) => /--deepen=(\d+)/.exec(entry)?.[1]),
     ).toEqual(["2", "4"]);
@@ -113,10 +113,12 @@ describe("the workspace's git procedure with real git", () => {
       sha: commits.h2,
       mergeBase: commits.fork,
       plan: "rebuild",
+      token: store.record?.token,
     });
 
-    expect(checkout.log.slice(from).slice(0, 3)).toEqual([
+    expect(checkout.log.slice(from).slice(0, 4)).toEqual([
       "record cleared",
+      "rm -f -- <dir>/.git/prq-ready",
       "rm -rf -- <dir>",
       "git init --quiet -- <dir>",
     ]);
@@ -149,12 +151,43 @@ describe("the workspace's git procedure with real git", () => {
       sha: commits.h2,
       mergeBase: commits.fork,
       plan: "update",
+      token: store.record?.token,
     });
     const steps = checkout.log.slice(from);
-    expect(steps.slice(0, 2)).toEqual(["cat -- <dir>/.git/prq-ready", "record cleared"]);
-    expect(steps[2]).toContain(" fetch --quiet --depth=1 ");
-    expect(steps.filter((entry) => entry.startsWith("rm ") || entry.startsWith("git init "))).toEqual([]);
+    expect(steps.slice(0, 3)).toEqual([
+      "cat -- <dir>/.git/prq-ready",
+      "record cleared",
+      "rm -f -- <dir>/.git/prq-ready",
+    ]);
+    expect(steps[3]).toContain(" fetch --quiet --depth=1 ");
+    expect(steps.filter((entry) => entry.startsWith("rm -rf ") || entry.startsWith("git init "))).toEqual([]);
     expect((await checkout.show(commits.h2, "rates.ts")).stdout).toContain("rate = 2");
+  });
+
+  it("removes the ready token before the first change of an update and of a rebuild, and writes the new one last", async () => {
+    const { checkout, store } = await newCheckout();
+    await checkout.prepare(origin, { sha: commits.h1, baseSha: commits.b2 }, store);
+    const firstChange = (from: number, change: string) => {
+      const steps = checkout.tokenBefore.slice(from);
+      return steps[steps.findIndex((step) => step.command.includes(change))];
+    };
+
+    let from = checkout.tokenBefore.length;
+    const updated = await checkout.prepare(origin, { sha: commits.h2, baseSha: commits.b2 }, store);
+    expect(updated.plan).toBe("update");
+    expect(firstChange(from, " fetch ")).toEqual({ command: expect.stringContaining(" fetch "), present: false });
+
+    // A record whose token is not the directory's: the directory is rebuilt, its stale token file removed first.
+    if (store.record !== null) {
+      store.record = { ...store.record, token: "0".repeat(32) };
+    }
+    from = checkout.tokenBefore.length;
+    const rebuilt = await checkout.prepare(origin, { sha: commits.h1, baseSha: commits.b2 }, store);
+    expect(rebuilt.plan).toBe("rebuild");
+    expect(firstChange(from, "rm -rf")).toEqual({ command: "rm -rf -- <dir>", present: false });
+    expect(checkout.tokenBefore.slice(from).at(-1)?.command).toMatch(/^sh -c /);
+    expect(await checkout.has(join(".git", "prq-ready"))).toBe(true);
+    expect(rebuilt.token).toBe(store.record?.token);
   });
 
   it("fetches from the checked repository, never from a remote the target carries", async () => {

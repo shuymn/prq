@@ -27,7 +27,6 @@ import {
 } from "./test/compaction.ts";
 import {
   answerScript,
-  type CallOptions,
   finish,
   type Script,
   ScriptedModel,
@@ -38,6 +37,7 @@ import {
 } from "./test/model.ts";
 import { advance, until } from "./test/provider.ts";
 import { clearPrompts, clearSkills, gate, hub, jobOf, prSessionSeams, savePrompt, sessionSql } from "./test/session.ts";
+import { marker, sentDefinitions, statusOf, systemOf, toolNames, toolStep, toolTraffic } from "./test/skill-turns.ts";
 import { registered, skillWith } from "./test/skills.ts";
 import { BASE, push, sha } from "./test/webhook.ts";
 import { FakeWorkspace } from "./test/workspace.ts";
@@ -73,69 +73,6 @@ const STYLE = "# Style\nFILE-SENTINEL\n";
 
 function polish(options: Parameters<typeof skillWith>[1] = {}) {
   return skillWith("polish", { body: BODY, files: { "references/style.md": STYLE }, ...options });
-}
-
-function systemOf(call: CallOptions | undefined): string {
-  const [first] = call?.prompt ?? [];
-  if (first?.role !== "system") {
-    throw new Error("the call has no system message");
-  }
-  return first.content;
-}
-
-// The tool calls and the tool results a request carries, in order.
-function toolTraffic(call: CallOptions | undefined) {
-  const calls: { toolName: string; input: unknown }[] = [];
-  const results: { toolName: string; text: string }[] = [];
-  for (const message of call?.prompt ?? []) {
-    if (message.role === "assistant") {
-      for (const part of message.content) {
-        if (part.type === "tool-call") {
-          calls.push({ toolName: part.toolName, input: part.input });
-        }
-      }
-    } else if (message.role === "tool") {
-      for (const part of message.content) {
-        if (part.type === "tool-result") {
-          const { output } = part;
-          results.push({
-            toolName: part.toolName,
-            text: output.type === "text" ? output.value : JSON.stringify(output),
-          });
-        }
-      }
-    }
-  }
-  return { calls, results };
-}
-
-// The tool definitions a request carries, as toolDefinitionsJson writes them.
-function sentDefinitions(call: CallOptions | undefined): string {
-  const tools = call?.tools ?? [];
-  return tools.length === 0
-    ? ""
-    : JSON.stringify(
-        tools.map((entry) =>
-          entry.type === "function"
-            ? { name: entry.name, description: entry.description, parameters: entry.inputSchema }
-            : entry,
-        ),
-      );
-}
-
-function marker(tool: string, skill: Skill, outcome = "read"): string {
-  return (
-    `[${tool} of skill ${skill.name} at ${skill.sha.slice(0, 7)} rev ${skill.rev} in an earlier turn: ${outcome}; ` +
-    "activate the skill again to use it]"
-  );
-}
-
-function statusOf(tool: string, skill: Skill, outcome = "read"): string {
-  return `[${tool} skill ${skill.name} at ${skill.sha} rev ${skill.rev}: ${outcome}]`;
-}
-
-function toolStep(name: string, input: Record<string, unknown>, id: string, tokens = {}): Script {
-  return [toolCall(name, input, id), finish("tool-calls", tokens)];
 }
 
 // An answer that activates polish, reads its style reference, then answers.
@@ -568,10 +505,6 @@ async function firstRequest(kind: "push" | "question", skills: readonly Skill[])
   expect(prefix.system).toBe(systemOf(call));
   expect(prefix.toolChars).toBe(sentDefinitions(call).length);
   return call;
-}
-
-function toolNames(call: CallOptions | undefined): string[] {
-  return (call?.tools ?? []).map((entry) => entry.name);
 }
 
 describe("the offered tools", () => {

@@ -39,7 +39,7 @@ export type Worker = {
   keyFetches(): number;
   failKeys(times: number): void;
   // A Durable Object of the Worker by name, its RPC methods called from here.
-  durableObject(binding: "Hub" | "PrSession", name: string): Promise<Stub>;
+  durableObject(binding: "Hub" | "PrSession" | "Workspace", name: string): Promise<Stub>;
   // SQL in a Durable Object's storage, for test setup.
   sql(className: "Hub" | "PrSession", name: string, query: string, ...bindings: unknown[]): Promise<unknown[]>;
   // The Worker's log lines since it started or was last reset.
@@ -86,17 +86,18 @@ export type GithubAppSettings = Record<"GITHUB_APP_ID" | "GITHUB_APP_PRIVATE_KEY
 const NO_GITHUB_APP: GithubAppSettings = { GITHUB_APP_ID: "", GITHUB_APP_PRIVATE_KEY: "" };
 
 // The Worker as the harness runs it: from wrangler.jsonc with the secrets, or, with containers, from the same config
-// with `dev.enable_containers` turned on. The harness reads that setting only from the config, and takes no secrets
-// for an inline one, so they become its vars.
+// with `dev.enable_containers` turned on (the harness reads that setting only from the config). The secrets override
+// what packages/server/.dev.vars holds either way: the harness's types list them for a config file only, but it reads
+// them for an inline config too, while the inline config's vars are what .dev.vars overrides (a scripted model would
+// lose to the real one).
 function workerInput(secrets: Record<string, string>, containers: boolean) {
   if (!containers) {
     return { configPath: "./wrangler.jsonc", secrets };
   }
   const { rawConfig } = experimental_readRawConfig({ config: join(SERVER_DIR, "wrangler.jsonc") });
   const { env: _environments, ...config } = rawConfig;
-  return {
-    config: { ...config, dev: { ...config.dev, enable_containers: true }, vars: { ...config.vars, ...secrets } },
-  };
+  const input = { config: { ...config, dev: { ...config.dev, enable_containers: true } }, secrets };
+  return input;
 }
 
 // containers: the Workspace runs its container in Docker (the manual workspace check only; tests run without Docker).
@@ -191,8 +192,11 @@ export async function startWorker({
         throw new Error(`no binding ${binding}`);
       }
       const stub = namespace.getByName(name);
-      // As the Agents SDK's getAgentByName does: the instance knows its name and has started.
-      await stub["__unsafe_ensureInitialized"]?.();
+      // As the Agents SDK's getAgentByName does: the instance knows its name and has started. The Workspace is no
+      // agent, and has no such method.
+      if (binding !== "Workspace") {
+        await stub["__unsafe_ensureInitialized"]?.();
+      }
       return stub;
     },
     async sql(className, name, query, ...bindings) {

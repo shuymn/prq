@@ -1,0 +1,6 @@
+#!/bin/sh
+# git as the Workspace runs it (packages/server/Dockerfile puts this first on PATH): whatever umask the container
+# runtime gives an exec (0000 under local Docker), every file git writes under /workspace is writable by root alone,
+# so a skill script, which runs as another user, cannot change the checkout.
+umask 022
+exec /usr/bin/git "$@"

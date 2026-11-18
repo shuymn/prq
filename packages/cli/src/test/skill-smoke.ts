@@ -1,19 +1,21 @@
-// check:skills's smoke with a real model (G3, the activation half; with a pull request argument): the Worker with the
-// model of packages/server/.dev.vars at its real window and containers on, yomiyasu registered from main, and the
-// answer prompt naming it saved. The push's analysis runs, then three questions in Japanese. Each answer must be done,
-// and every answer request must hold the answer prompt. Whether the model activated the skill is an observation, not a
-// verdict: how a host words its prompt for a model is the host's to tune. Printed per answer: whether a page of
-// yomiyasu's body (an executed activate_skill whose status line says `read`) was delivered in a model step before the
-// answer's first text (a call the model wrote as text is no tool part, so it counts as not made), whether the pages
-// read the whole body, the other tool calls, the logged usage, the job's time and each step's (the model's request,
-// then the tools it called, timed between the requests here), and the answer's start.
+// check:skills's smoke with a real model (G3; with a pull request argument): the Worker with the model of
+// packages/server/.dev.vars at its real window and containers on, yomiyasu registered from main, and the answer prompt
+// naming it saved. The push's analysis runs, then three questions in Japanese. Each answer must be done, and every
+// answer request must hold the answer prompt. Whether the model activated the skill or ran its scripts is an
+// observation, not a verdict: how a host words its prompt for a model is the host's to tune. Printed per answer:
+// whether a page of yomiyasu's body (an executed activate_skill whose status line says `read`) was delivered in a model
+// step before the answer's first text (a call the model wrote as text is no tool part, so it counts as not made),
+// whether the pages read the whole body, the other tool calls, each executed script run (its script, ending and
+// seconds), the logged usage, the job's time and each step's (the model's request, then the tools it called, timed
+// between the requests here), and the answer's start.
 
 import { type PrRef, sessionName } from "@prq/protocol";
 import * as v from "valibot";
 
-import { field, promptsHeld, TOOL_CALL_MARKUP } from "./compaction.ts";
+import { field, promptsHeld, textField, TOOL_CALL_MARKUP } from "./compaction.ts";
 import { deliver, getMessages, ask, savePrompt } from "./pr.ts";
 import type { GithubApp } from "./reconcile.ts";
+import { chatRequest } from "./scripted.ts";
 import type { Verdict } from "./skill-context.ts";
 import { registerSkill, skillLink, YOMIYASU } from "./skill-github.ts";
 import { type ModelSettings, startWorker, type Worker } from "./worker.ts";
@@ -171,7 +173,11 @@ export async function checkSmoke(
     for (const [index, question] of QUESTIONS.entries()) {
       const id = `smoke-${index + 1}`;
       print(`question ${id}: ${question}`);
-      const from = { logs: worker.logs().length, timings: timed.timings.length };
+      const from = {
+        logs: worker.logs().length,
+        timings: timed.timings.length,
+        requests: worker.modelRequests().length,
+      };
       await ask(worker, pr, id, question);
       const job = await untilEnded(
         worker,
@@ -179,6 +185,11 @@ export async function checkSmoke(
         (entry) => entry.target.kind === "answer" && entry.target.messageId === id,
       );
       const parts = job === undefined ? [] : await answerParts(worker, pr, `answer-${job.jobId}`);
+      // The tools the answer's first request offered, and the containers seen while the Worker runs (they are gone
+      // once it closes).
+      const [first] = worker.modelRequests().slice(from.requests).map(chatRequest);
+      const offered = (first?.tools ?? []).map((entry) => entry.function.name);
+      const running = await tracked.workspaces();
       const { activations, firstText, beforeText, wholeBody, text } = activationOf(parts, "yomiyasu");
       const others = parts
         .filter((part) => part.type.startsWith("tool-") && part.type !== "tool-activate_skill")
@@ -205,7 +216,12 @@ export async function checkSmoke(
         `  logged activations: ${logged.map((line) => `${field(line, "outcome")} ${field(line, "chars")} characters`).join(", ") || "none"}`,
       );
       print(
-        `  other tool calls: ${others.join(", ") || "none"}; tool-call markup in the answer: ${TOOL_CALL_MARKUP.test(text) ? "yes" : "no"}`,
+        `  tools offered: ${offered.join(", ") || "none"}; workspace containers: ${running.length}; other tool calls: ` +
+          `${others.join(", ") || "none"}; tool-call markup in the answer: ${TOOL_CALL_MARKUP.test(text) ? "yes" : "no"}`,
+      );
+      const runs = logs.filter((line) => line.includes("prq.skill.script") && field(line, "jobId") === job?.jobId);
+      print(
+        `  script runs: ${runs.map((line) => `${field(line, "script")} ${textField(line, "ending")} in ${seconds(Number(field(line, "ms")))}`).join(", ") || "none"}`,
       );
       print(
         `  usage: input ${field(usage, "inputTokens")}, cached ${field(usage, "cachedInputTokens")}, output ` +

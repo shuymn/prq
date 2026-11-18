@@ -158,8 +158,10 @@ export const SkillRef = v.object({
 });
 export type SkillRef = v.InferOutput<typeof SkillRef>;
 
-// One entry of a skill's `allowed-tools`, as the frontmatter wrote it.
-export const AllowedTool = v.object({ entry: v.string() });
+// One entry of a skill's `allowed-tools`, as the frontmatter wrote it, and whether a cloud turn runs it: only
+// `Bash(python3|python <a file of the skill> [*])` runs, in the workspace container; every other entry is shown as
+// declared.
+export const AllowedTool = v.object({ entry: v.string(), runs: v.boolean() });
 export type AllowedTool = v.InferOutput<typeof AllowedTool>;
 
 // The frontmatter fields the settings show: name, description, license (null when absent) and allowed-tools (null when
