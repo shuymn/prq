@@ -293,7 +293,9 @@ icon. Pixel art stays crisp only at whole multiples of its grid, so `brand` is 1
 those of its paths (Pencil does not scale a component's children), recording the grid (`asset grid=16`, `asset
 grid=12x8`) in each node's `context`. It is also placed on whole pixels: next to a name the mark centres on the name's
 cap height, or on its x-height (x-height top to baseline) when the name is lowercase only, rounded to the nearest whole
-pixel. The `Brand` frame holds both components and `brand` specimens at 32, 48 and 128px. The exported icons: favicon 16
-and 32 (with 48 for Windows), apple-touch 180 (the grid at 11×, 176px, centred on a 180px canvas filled with
-`accent.emphasis`, since iOS masks the corners itself), Chrome Web Store 128 (96px artwork, 6×, in 16px of transparent
-padding).
+pixel. The `Brand` frame holds both components and `brand` specimens at 32, 48 and 128px. The icons: `favicon.svg`
+(the `brand` drawing, which Chrome draws at every size), `favicon-32.png` and `apple-touch-icon.png` (180: the grid at
+11×, 176px, centred on a 180px canvas filled with `accent.emphasis`, since iOS masks the corners itself), written by
+`pnpm run icons` in `packages/server` from the code's drawing and the tokens (the PNGs rendered in Chrome). The 16 and
+48px rasters are not made: the SVG serves Chrome, the only browser the UI supports. The Chrome Web Store icon, 128
+(96px artwork, 6×, in 16px of transparent padding), comes with the extension.

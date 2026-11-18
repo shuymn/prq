@@ -1201,9 +1201,17 @@ hash, a commit SHA); everything else is read fresh.
 
 Browser and edge:
 
-- Built assets (scripts, styles, fonts) have content-hashed names and are served with
-  `Cache-Control: public, max-age=31536000, immutable`. The HTML shell (`/`, `/index.html` and every UI route that falls
-  back to it) is served with `no-cache`, so the next load after a deploy fetches the new bundle.
+- The UI is the Worker's static assets, with the `_headers` its build writes. Every file the build emitted under
+  `/assets/` (scripts, styles, fonts, content-hashed) is served with `Cache-Control: public, max-age=31536000,
+  immutable`. Every other path is `no-cache`: the HTML shell at `/` and every UI route that falls back to it, so the
+  next load after a deploy fetches the new bundle, and also a path no file has, which the fallback answers with the
+  shell as `text/html`: a script import of a missing file fails and nothing caches the answer for a year.
+  `/index.html` redirects to `/`, so the shell has one URL. The Worker's own routes (`/api/*`, `/agents/*`, `/cli/*`,
+  `/webhook`) reach the Worker first, a browser's navigation to one included.
+- Every static response carries a Content Security Policy that allows only the origin's own scripts, styles, fonts,
+  images (and `data:` images) and connections, no plugins, no `<base>`, no framing and forms to the origin only, and
+  requires Trusted Types with no policy, so no HTML or script string reaches a sink; the build emits no inline script.
+  It also carries `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`.
 - Every response the Worker generates is `Cache-Control: no-store`, errors included: `/api/*`, `/cli/*` and the Agents
   SDK's HTTP endpoints under `/agents/*` (the conversation history the UI fetches when it opens a PR). The Cloudflare
   cache and the Cache API are not used for them: every response is private and behind Access.
@@ -1246,6 +1254,8 @@ Server:
 
 ### Authentication boundary
 
+- The UI's static assets reach the browser without the Worker's check: the bundle holds no data, and every read goes to
+  a protected route. Access covers the whole host.
 - There are two Access applications. `/webhook` bypasses Access. The rest of the host is allowed for the host's email
   (browser) or a service token (`prq`). Agents SDK's WebSocket path (`/agents/:binding/:name`) is inside the protection.
 - On every protected path the Worker verifies `Cf-Access-Jwt-Assertion` with `jose`: an RS256 signature from the team's
@@ -1417,15 +1427,18 @@ prq/
 │  │   │   ├─ skill-runner.ts    the skill runner as data: its argv, the frame it reads and the trailer it writes
 │  │   │   ├─ workspace-git.ts   the checkout's git procedure as data, and whether a checkout is reused
 │  │   │   ├─ egress.ts          GitEgress: the container's only way out
-│  │   │   └─ client/            React UI (Vite)
+│  │   │   └─ client/            React UI (Vite): index.html, main.tsx, the components with one stylesheet each,
+│  │   │                         the base styles, the BrandMark's drawing, and public/ (_headers, the favicon set)
 │  │   ├─ scripts/           manual checks of a model provider, the tool loop and the GitHub App
 │  │   │                     (`pnpm run check:provider`, `check:tools`, `check:github`), not part of the Worker
 │  │   ├─ container/         the skill runner the image installs (prq-skill-run.py)
 │  │   ├─ Dockerfile         the workspace container's image
-│  │   ├─ wrangler.jsonc
-│  │   ├─ vite.config.ts
-│  │   └─ vitest.config.ts   two projects: the Worker's tests in workerd, the git procedure's and the skill runner's
-│  │                         (*.node.test.ts) in Node
+│  │   ├─ build/             the UI's build: the tokens as CSS (Style Dictionary), the generated _headers, the font
+│  │   │                     preload, the favicon script (`pnpm run icons`), and their Node tests
+│  │   ├─ wrangler.jsonc     the Worker, and the UI's build (dist/client) as its static assets
+│  │   ├─ vite.config.ts     src/client into dist/client (`pnpm run build`)
+│  │   └─ vitest.config.ts   two projects: the Worker's tests in workerd, the git procedure's, the skill runner's and
+│  │                         the UI build's (*.node.test.ts) in Node
 │  └─ cli/                 @prq/cli: prq, compiled by Bun into one binary (dist/prq; Node 24 runs the source too)
 │      └─ src/
 │          ├─ main.ts            the entry the binary is built from: arguments, the command, the exit code
@@ -1438,8 +1451,8 @@ prq/
 │          ├─ skills.ts          a skill's files from /cli/skill, checked whole, then written into the set
 │          ├─ answer.ts          the answer prq submit sends: answer.md, checked before any request
 │          ├─ commands/          one module per command
-│          ├─ e2e/               the compiled binary against the real Worker
-│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`), manual checks of a cloud question, of head reconciliation, of the workspace container, of compaction and of skills (`pnpm run check:cloud`, `check:reconcile`, `check:workspace`, `check:compaction`, `check:skills`)
+│          ├─ e2e/               the compiled binary against the real Worker; ui/, the web UI in Chrome against it
+│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access and its browser door, Chrome for the UI's browser check, the binary as a child process, the local stack (`pnpm run stack`), manual checks of a cloud question, of head reconciliation, of the workspace container, of compaction and of skills (`pnpm run check:cloud`, `check:reconcile`, `check:workspace`, `check:compaction`, `check:skills`)
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
 ├─ .claude/skills/verify-prq/  running the local stack with scripted jobs for a local agent, and reading its request log
 ├─ docs/                   design.md, decisions.md, ui.md, spikes.md
