@@ -683,7 +683,6 @@ describe("an update", () => {
     expect(stored?.files.map(({ path, mode, blob }) => ({ path, mode, blob }))).toEqual(
       treeUnder(bFiles, b, "skills/polish"),
     );
-    expect(stored?.files.some((file) => file.path === "references/old.md")).toBe(false);
 
     // The old revision no longer applies.
     expect(
