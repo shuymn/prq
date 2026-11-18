@@ -10,6 +10,7 @@
     "check:compaction": "node src/test/compaction-check.ts",
     "check:reconcile": "node src/test/reconcile-check.ts",
     "check:workspace": "node src/test/workspace-check.ts",
+    "dev-vars": "node src/test/dev-vars.ts",
     "typecheck": "tsc",
     "test": "vitest run"
   },

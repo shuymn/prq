@@ -1,8 +1,9 @@
 // The settings and the output of a manual check with the GitHub App and a model (check:workspace, check:compaction):
-// read from packages/server/.dev.vars, and nothing else configures them. The model (MODEL_BASE_URL, MODEL_API_KEY,
-// MODEL_ID, MODEL_CONTEXT_TOKENS), the App (GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY in PKCS#8) and the installation the
-// webhook names (GITHUB_INSTALLATION_ID, read by these checks only). Its output never holds the API key, the private
-// key, a JWT or a token. Exits 1 with the reason when the settings are missing or a step did not hold.
+// read from packages/server/.dev.vars (`pnpm run dev-vars write`; src/test/dev-vars.ts), and nothing else configures
+// them. The model (MODEL_BASE_URL, MODEL_API_KEY, MODEL_ID, MODEL_CONTEXT_TOKENS), the App (GITHUB_APP_ID,
+// GITHUB_APP_PRIVATE_KEY in PKCS#8) and the installation the webhook names (GITHUB_INSTALLATION_ID, read by these
+// checks only). Its output never holds the API key, the private key, a JWT or a token. Exits 1 with the reason when the
+// settings are missing or a step did not hold.
 
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
