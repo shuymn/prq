@@ -1461,7 +1461,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
         // The context as the provider measured it: the step's request and its output, under the prefix that request
         // carried. Once the tools are withdrawn, a request leaves their definitions out.
         outcome.contextTokens = measuredTokens(usage) ?? undefined;
-        outcome.contextFingerprint = loop === null || loop.withdrawnAt() === null ? prefix.fingerprint : prefix.bare;
+        outcome.contextFingerprint = loop?.withdrawn() === true ? prefix.bare : prefix.fingerprint;
       },
     });
     const metadata = this.#resultMetadata(row, { kind: "cloud", model: model.modelId });

@@ -170,10 +170,10 @@ export async function checkTools(
   for (const error of errors) {
     say(`error: ${classifyModelError(error, secret).reason}`);
   }
-  const withdrawn = loop.withdrawnAt();
+  const withdrawn = offered.indexOf("no tools offered");
   const total = await Promise.resolve(result.totalUsage).catch(() => undefined);
   say("");
-  say(`tools withdrawn: ${withdrawn === null ? "no" : `from step ${withdrawn + 1} (no tools offered)`}`);
+  say(`tools withdrawn: ${withdrawn < 0 ? "no" : `from step ${withdrawn + 1} (no tools offered)`}`);
   say(`finish reason: ${finishReason}`);
   say("answer:");
   for (const line of text.split("\n")) {

@@ -331,8 +331,8 @@ export type ToolLoop = {
   tools: ToolSet;
   prepareStep: (options: { stepNumber: number }) => PrepareStepResult<ToolSet> | undefined;
   onLanguageModelCallEnd: (event: Pick<LanguageModelCallEndEvent, "usage" | "content">) => void;
-  // The step from which the tools were withdrawn, if they were.
-  withdrawnAt: () => number | null;
+  // Whether the tools were withdrawn, from some step on.
+  withdrawn: () => boolean;
 };
 
 // A turn with a workspace: its tools, and the room that withdraws them (no tools offered) when the next request would
@@ -350,20 +350,20 @@ export async function toolLoop(
   const room = new ContextRoom(window);
   const tools = workspaceTools({ ...context, room });
   room.start(measured ?? Math.ceil((await requestChars(request)) / CHARS_PER_TOKEN));
-  let withdrawn: number | null = null;
+  let withdrawn = false;
   return {
     tools,
-    prepareStep: ({ stepNumber }) => {
+    prepareStep: () => {
       if (room.leftChars() >= MIN_RESULT_CHARS) {
         return undefined;
       }
-      withdrawn ??= stepNumber;
+      withdrawn = true;
       return { activeTools: [] };
     },
     onLanguageModelCallEnd: ({ usage, content }) => {
       room.measure(usage, JSON.stringify(content).length);
     },
-    withdrawnAt: () => withdrawn,
+    withdrawn: () => withdrawn,
   };
 }
 
