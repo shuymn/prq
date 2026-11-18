@@ -83,13 +83,13 @@ export function cloudAnswer(questionId: string, parts: UIMessage["parts"]): UIMe
   return { id: `answer-job-${questionId}`, role: "assistant", metadata, parts };
 }
 
-// A read of 9,000 characters (3,000 estimated tokens), settled.
-function fileRead(index: number) {
+// A read of 9,000 characters (3,000 estimated tokens), settled: of src/<index>.ts unless a path is given.
+export function fileRead(index: number, path = `src/${index}.ts`) {
   return {
     type: "tool-read_file" as const,
     toolCallId: `call-${index}`,
     state: "output-available" as const,
-    input: { path: `src/${index}.ts` },
+    input: { path },
     output: "x".repeat(9000),
   };
 }

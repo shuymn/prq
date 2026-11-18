@@ -406,37 +406,22 @@ export function readFiles(steps: readonly Step[], before: readonly string[]): st
   return [...files].toSorted();
 }
 
-// The list of files read, as prq puts it after the notes.
-function readFilesBlock(files: readonly string[]): string {
-  return `<read-files>\n${files.join("\n")}\n</read-files>`;
-}
-
-// The file lists a compaction renders, each as prq puts it after the notes: the previous notes' list, which a summary
-// request shows, and the new one.
-export function fileLists(...lists: readonly (readonly string[])[]): string[] {
-  return lists.filter((files) => files.length > 0).map(readFilesBlock);
-}
-
 // The tags prq wraps the notes and a summary request's parts in.
 const WRAPPERS = ["summary", "previous-summary", "conversation"];
 
-// Text without what prq generated at its edges, recognized by its exact rendering and peeled until none is left: a
-// wrapper around the whole text, and one of the compaction's file lists (`lists`) at its end. Everything else is the
-// text's own, a tag it names or a list it gives as an example included.
-function withoutGenerated(text: string, lists: readonly string[]): string {
+// A reply without the wrappers prq puts around a request's parts and the notes, where one encloses the whole reply,
+// peeled until none is left. Everything else is the reply's own, a tag or a file list it writes included: prq renders
+// the list of files read itself and never reads one back.
+function withoutWrappers(text: string): string {
   let body = text.trim();
   for (;;) {
-    const list = lists.find((block) => body === block || body.endsWith(`\n${block}`));
     const tag = WRAPPERS.find(
       (name) => body.length >= 2 * name.length + 5 && body.startsWith(`<${name}>`) && body.endsWith(`</${name}>`),
     );
-    if (list !== undefined) {
-      body = body.slice(0, -list.length).trim();
-    } else if (tag !== undefined) {
-      body = body.slice(tag.length + 2, -(tag.length + 3)).trim();
-    } else {
+    if (tag === undefined) {
       return body;
     }
+    body = body.slice(tag.length + 2, -(tag.length + 3)).trim();
   }
 }
 
@@ -523,33 +508,27 @@ export function nextBatch(
   return texts.length === 0 ? null : { request: summaryRequest(kind, texts.join(STEP_SEPARATOR), previous), end };
 }
 
-// The notes from the summaries: the history's, a split turn's checkpoint after it, and the list of files read, made
-// again each time. The history and the checkpoint go through the same recognition as a summary (with the compaction's
-// `lists`): the history is the previous notes, their file list included, when the steps held nothing to summarize.
-export function assembleNotes(
-  history: string,
-  turnContext: string | null,
-  files: readonly string[],
-  lists: readonly string[],
-): string {
-  const body = withoutGenerated(history, lists);
-  const summary =
-    turnContext === null
-      ? body
-      : `${body}\n\n---\n\n**Turn Context (split turn):**\n\n${withoutGenerated(turnContext, lists)}`;
-  return files.length === 0 ? summary : `${summary}\n\n${readFilesBlock(files)}`;
+// The notes' summaries, as the summarizer reads them in an update: the history's, then a split turn's checkpoint.
+export function notesBody(history: string, turnContext: string | null): string {
+  return turnContext === null ? history : `${history}\n\n---\n\n**Turn Context (split turn):**\n\n${turnContext}`;
+}
+
+// The notes the model reads: the summaries as they are stored, then the list of files read, which prq renders from what
+// the tools read, made again each time and never given to the summarizer.
+export function assembleNotes(history: string, turnContext: string | null, files: readonly string[]): string {
+  const body = notesBody(history, turnContext);
+  return files.length === 0 ? body : `${body}\n\n<read-files>\n${files.join("\n")}\n</read-files>`;
 }
 
 // --- One summary call ---
 
 // One summary, streamed and consumed whole, under the turn's output bounds (firstChunkMs, chunkMs) and, through the
 // model, the response bound, and with the notes' output limit. A summary that stalled, errored, ended other than
-// `stop`, or has no section its prompt asks for with text under it once what prq generated (with the compaction's file
-// `lists`) is removed is a failed attempt, which rejects; each model call's usage is reported either way.
+// `stop`, or has no section its prompt asks for with text under it once prq's wrappers are peeled is a failed attempt,
+// which rejects; each model call's usage is reported either way.
 export async function summarize(
   model: CloudModel,
   request: SummaryRequest,
-  lists: readonly string[],
   maxOutputTokens: number,
   signal: AbortSignal | undefined,
   onUsage: (usage: LanguageModelUsage) => void,
@@ -590,7 +569,7 @@ export async function summarize(
   if (ended.finishReason !== "stop") {
     throw new SummaryFailure(`the summary ended with finish reason ${ended.finishReason}`);
   }
-  const text = withoutGenerated(ended.text, lists);
+  const text = withoutWrappers(ended.text);
   if (!hasSectionText(text, SECTION_HEADINGS[request.kind])) {
     throw new SummaryFailure("the summary has no section with text");
   }

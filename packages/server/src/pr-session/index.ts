@@ -41,12 +41,12 @@ import {
   keptPart,
   measuredCount,
   nextBatch,
+  notesBody,
   notesText,
   partsChars,
   type Projected,
   readFiles,
   assembleNotes,
-  fileLists,
   type Step,
   type SummaryKind,
   type SummaryRequest,
@@ -1692,8 +1692,6 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const calls: SummaryCalls = { calls: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
     const started = Date.now();
     const files = readFiles([...cut.toSummarize, ...cut.turnPrefix], notes.readFiles);
-    // The file lists a summary may echo: the previous notes' list, which an update request shows, and the new one.
-    const lists = fileLists(notes.readFiles, files);
     let summaries: { history: string; turnContext: string | null };
     try {
       // Steps summarized in requests that each fit the window, oldest first, each updating the summary before it (the
@@ -1703,16 +1701,18 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
         let summary = previous;
         let batch = nextBatch(kind, steps, 0, summary, window, notesOutput);
         while (batch !== null) {
-          summary = await this.#summary(model, batch.request, lists, notesOutput, signal, calls);
+          summary = await this.#summary(model, batch.request, notesOutput, signal, calls);
           batch = nextBatch(kind, steps, batch.end, summary, window, notesOutput);
         }
         return summary;
       };
-      // The history: updated with the steps the cut removed before its turn (the previous notes fold into it, with the
-      // checkpoint of a turn the previous cut fell inside), or left as it was; "No prior history." (Pi's) before any.
+      // The history: updated with the steps the cut removed before its turn (the previous summaries fold into it, with
+      // the checkpoint of a turn the previous cut fell inside), or left as it was; "No prior history." (Pi's) before any.
+      // The summarizer reads the stored summaries only, never the list of files read.
+      const previous = notes.history === null ? null : notesBody(notes.history, notes.turnContext);
       const history =
         cut.toSummarize.length > 0
-          ? ((await inBatches("notes", cut.toSummarize, notes.text)) ?? NO_PRIOR_HISTORY)
+          ? ((await inBatches("notes", cut.toSummarize, previous)) ?? NO_PRIOR_HISTORY)
           : (notes.history ?? NO_PRIOR_HISTORY);
       // The checkpoint of the turn the cut falls inside, updated when the previous cut fell inside it too.
       const turnContext =
@@ -1729,7 +1729,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       log("prq.compaction.failed", { ...fields, reason, ...calls, ms: Date.now() - started }, "warn");
       return "failed";
     }
-    const text = assembleNotes(summaries.history, summaries.turnContext, files, lists);
+    const text = assembleNotes(summaries.history, summaries.turnContext, files);
     const adopted = this.ctx.storage.transactionSync(() =>
       adoptNotes(
         this.#sql,
@@ -1754,7 +1754,6 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   async #summary(
     model: CloudModel,
     request: SummaryRequest,
-    lists: readonly string[],
     maxOutputTokens: number,
     signal: AbortSignal | undefined,
     calls: SummaryCalls,
@@ -1762,7 +1761,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     for (let attempt = 1; ; attempt += 1) {
       calls.calls += 1;
       try {
-        return await summarize(model, request, lists, maxOutputTokens, signal, (usage) => {
+        return await summarize(model, request, maxOutputTokens, signal, (usage) => {
           const tokens = stepTokens(usage);
           calls.inputTokens += tokens.input;
           calls.outputTokens += tokens.output;
