@@ -72,7 +72,7 @@ describe("a context-length refusal through the adapter", () => {
     provider.reply(
       answerStream(sized("answer one", 7000), { prompt_tokens: 6000, completion_tokens: 7000 }),
       ...refusals,
-      answerStream("the turn's start"),
+      answerStream("## Progress So Far\nthe turn's start"),
       answerStream("answer two"),
     );
     await client.chat([Q1]);

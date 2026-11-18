@@ -440,6 +440,25 @@ function withoutGenerated(text: string, lists: readonly string[]): string {
   }
 }
 
+// The section headings each kind of summary's prompt asks for.
+const SECTION_HEADINGS: Record<SummaryKind, string[]> = {
+  notes: NOTES_FORMAT.match(/^## .+$/gm) ?? [],
+  "turn-prefix": TURN_PREFIX_FORMAT.match(/^## .+$/gm) ?? [],
+};
+
+// Whether a reply has a section its prompt asks for with text under it, up to the next heading.
+function hasSectionText(text: string, headings: readonly string[]): boolean {
+  const lines = text.split("\n");
+  return lines.some((line, index) => {
+    if (!headings.includes(line.trim())) {
+      return false;
+    }
+    const after = lines.slice(index + 1);
+    const end = after.findIndex((next) => /^#{1,2}\s/.test(next));
+    return (end < 0 ? after : after.slice(0, end)).some((next) => next.trim() !== "");
+  });
+}
+
 // --- The summary requests (Pi: generateSummary, compact) ---
 
 // Why a summary attempt was not adopted.
@@ -525,8 +544,8 @@ export function assembleNotes(
 
 // One summary, streamed and consumed whole, under the turn's output bounds (firstChunkMs, chunkMs) and, through the
 // model, the response bound, and with the notes' output limit. A summary that stalled, errored, ended other than
-// `stop`, or is empty once what prq generated (with the compaction's file `lists`) is removed is a failed attempt, which
-// rejects; each model call's usage is reported either way.
+// `stop`, or has no section its prompt asks for with text under it once what prq generated (with the compaction's file
+// `lists`) is removed is a failed attempt, which rejects; each model call's usage is reported either way.
 export async function summarize(
   model: CloudModel,
   request: SummaryRequest,
@@ -572,8 +591,8 @@ export async function summarize(
     throw new SummaryFailure(`the summary ended with finish reason ${ended.finishReason}`);
   }
   const text = withoutGenerated(ended.text, lists);
-  if (text === "") {
-    throw new SummaryFailure("the summary is empty");
+  if (!hasSectionText(text, SECTION_HEADINGS[request.kind])) {
+    throw new SummaryFailure("the summary has no section with text");
   }
   return text;
 }

@@ -74,8 +74,8 @@ describe("compaction after a commit", () => {
     const summary = await gate(stub);
     const model = new ScriptedModel().add(
       ...threeTurns(),
-      [...text("the notes"), { hold: summary }, finish()],
-      answerScript("the turn's start"),
+      [...text(facts("the notes")), { hold: summary }, finish()],
+      answerScript(progress("the turn's start")),
       answerScript("answer four"),
     );
     model.contextTokens = WINDOW;
@@ -111,7 +111,7 @@ describe("compaction after a commit", () => {
     expect(model.prompts().at(-1)).toEqual([
       {
         role: "user",
-        text: notesText("the notes\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start"),
+        text: notesText(splitNotes(facts("the notes"), progress("the turn's start"))),
       },
       { role: "assistant", text: sized("answer two", 3000) },
       { role: "user", text: "question q3" },
@@ -144,9 +144,24 @@ function turnPrompts(model: ScriptedModel) {
   return model.calls.flatMap((call, index) => (isSummaryCall(call) ? [] : [prompts[index] ?? []]));
 }
 
-// A summary script: its text and a normal finish.
-function notes(summary: string): Script {
-  return answerScript(summary, { input: 100, output: 50 });
+// A summary script: its reply and a normal finish.
+function notes(reply: string): Script {
+  return answerScript(reply, { input: 100, output: 50 });
+}
+
+// Replies as their prompts ask for them: a history with text in one of the notes' sections, and a split turn's
+// checkpoint with text in one of its own.
+function facts(body: string): string {
+  return `## Key facts\n${body}`;
+}
+
+function progress(body: string): string {
+  return `## Progress So Far\n${body}`;
+}
+
+// The notes from a history and a split turn's checkpoint, before any file list.
+function splitNotes(history: string, checkpoint: string): string {
+  return `${history}\n\n---\n\n**Turn Context (split turn):**\n\n${checkpoint}`;
 }
 
 // Q1 and Q2 with their answers of 3,000 estimated tokens, as their commits stored them: the projection before the third
@@ -173,6 +188,11 @@ describe("failed summaries", () => {
       "holds only wrappers prq generates, one inside another",
       [...text("<summary>\n<previous-summary>\n</previous-summary>\n</summary>"), finish("stop")],
     ],
+    [
+      "has its prompt's headings with only blank sections",
+      [...text("## Decisions\n\n## Key facts\n   \n"), finish("stop")],
+    ],
+    ["has text only under a heading its prompt does not ask for", [...text("## Summary\nThe notes."), finish("stop")]],
     ["errors", [...text("partial notes"), { fail: new Error("stream lost") }]],
   ] satisfies [string, Script][])(
     "does not adopt a summary that %s, tries it once more, then leaves the notes and runs the next job on the full context",
@@ -227,7 +247,7 @@ describe("failed summaries", () => {
     const model = new ScriptedModel().add(
       thirdTurn(),
       notes(`<summary>\n${body}\n</summary>`),
-      notes("the turn's start"),
+      notes(progress("the turn's start")),
     );
     model.contextTokens = WINDOW;
     useCloudModel(model);
@@ -237,7 +257,7 @@ describe("failed summaries", () => {
 
     expect(await notesRow(stub)).toMatchObject({
       history: body,
-      text: `${body}\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start`,
+      text: splitNotes(body, progress("the turn's start")),
     });
   });
 
@@ -249,8 +269,8 @@ describe("failed summaries", () => {
     const model = new ScriptedModel().add(
       thirdTurn(),
       [...text("cut notes"), finish("length")],
-      notes("the notes"),
-      notes("the turn's start"),
+      notes(facts("the notes")),
+      notes(progress("the turn's start")),
       answerScript("answer four"),
     );
     model.contextTokens = WINDOW;
@@ -266,7 +286,7 @@ describe("failed summaries", () => {
     expect(events(logs, "prq.compaction.started")).toMatchObject([{ jobId: (await jobOf(stub, "q3")).job_id }]);
     expect(model.calls.filter(isSummaryCall)).toHaveLength(3);
     expect(await notesRow(stub)).toMatchObject({
-      text: "the notes\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start",
+      text: splitNotes(facts("the notes"), progress("the turn's start")),
       rev: 1,
     });
   });
@@ -283,7 +303,10 @@ describe("failed summaries", () => {
       cloudAnswer("q2", [{ type: "text", text: sized("answer two", 5997) }]),
     ]);
     const held = await gate(stub);
-    const model = new ScriptedModel().add([...text("first notes"), { hold: held }, finish()], notes("second notes"));
+    const model = new ScriptedModel().add(
+      [...text(facts("first notes")), { hold: held }, finish()],
+      notes(facts("second notes")),
+    );
     useCloudModel(model);
 
     const compact = (jobId: string) =>
@@ -294,7 +317,12 @@ describe("failed summaries", () => {
     await held.open();
 
     expect([await first, second]).toEqual(["discarded", "adopted"]);
-    expect(await notesRow(stub)).toMatchObject({ text: "second notes", rev: 1, cut_message_id: "q2", cut_step: 0 });
+    expect(await notesRow(stub)).toMatchObject({
+      text: facts("second notes"),
+      rev: 1,
+      cut_message_id: "q2",
+      cut_step: 0,
+    });
     expect(events(logs, "prq.compaction.discarded")).toMatchObject([{ jobId: "first", notesRev: 0 }]);
   });
 });
@@ -317,7 +345,7 @@ describe("a cut that stays inside a split turn", () => {
       "the checkpoint",
       a1.id,
     );
-    const model = new ScriptedModel().add(notes("the checkpoint, read on"));
+    const model = new ScriptedModel().add(notes(progress("the checkpoint, read on")));
     useCloudModel(model);
 
     const result = await runInDurableObject(stub, (instance) =>
@@ -333,9 +361,9 @@ describe("a cut that stays inside a split turn", () => {
     expect(prompt).not.toContain("src/1.ts");
     expect(prompt.endsWith(TURN_PREFIX_UPDATE_PROMPT)).toBe(true);
     expect(await notesRow(stub)).toMatchObject({
-      text: assembleNotes("the history", "the checkpoint, read on", ["src/2.ts", "src/3.ts"], []),
+      text: assembleNotes("the history", progress("the checkpoint, read on"), ["src/2.ts", "src/3.ts"], []),
       history: "the history",
-      turn_context: "the checkpoint, read on",
+      turn_context: progress("the checkpoint, read on"),
       rev: 2,
       cut_message_id: a1.id,
       cut_step: 3,
@@ -383,7 +411,7 @@ const NOT_ADOPTED = {
 };
 
 function adoptedWith(history: string) {
-  const assembled = `${history}\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start\n\n${NEW_LIST}`;
+  const assembled = `${splitNotes(history, progress("the turn's start"))}\n\n${NEW_LIST}`;
   return { result: "adopted", notes: { history, text: assembled, rev: 2 } };
 }
 
@@ -425,7 +453,7 @@ describe("what prq generated in a summary", () => {
       // The reply tried twice when it is not adopted; otherwise the reply, then the split turn's start.
       const model = new ScriptedModel().add(
         notes(reply),
-        expected.result === "failed" ? notes(reply) : notes("the turn's start"),
+        expected.result === "failed" ? notes(reply) : notes(progress("the turn's start")),
       );
       useCloudModel(model);
 
@@ -451,6 +479,68 @@ describe("what prq generated in a summary", () => {
     ).toBe(
       "the earlier history\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start\n\n<read-files>\nsrc/a.ts\nsrc/b.ts\n</read-files>",
     );
+  });
+});
+
+// Notes made with the cut at Q1, holding a decision and a read of src/a.ts, then Q1's answer, which read src/b.ts, and
+// Q2's: the next cut falls in Q2's answer.
+const DECIDED = "## Decisions\n- Keep the compatibility fallback";
+
+async function notesBeforeARead(stub: DurableObjectStub<PrSession>): Promise<void> {
+  await seedHistory(stub, [
+    Q1,
+    cloudAnswer("q1", [
+      { type: "step-start" },
+      {
+        type: "tool-read_file",
+        toolCallId: "call-0",
+        state: "output-available",
+        input: { path: "src/b.ts" },
+        output: "1\texport const fallback = true;",
+      },
+      { type: "step-start" },
+      { type: "text", text: sized("answer one", 3000) },
+    ]),
+    Q2,
+    cloudAnswer("q2", [{ type: "text", text: sized("answer two", 6000) }]),
+  ]);
+  await sessionSql(
+    stub,
+    `UPDATE prq_notes SET text = ?, history = ?, rev = 1, cut_message_id = 'q1', cut_step = 0, read_files = ?
+     WHERE id = 1`,
+    `${DECIDED}\n\n<read-files>\nsrc/a.ts\n</read-files>`,
+    DECIDED,
+    JSON.stringify(["src/a.ts"]),
+  );
+}
+
+describe("a summary's reply", () => {
+  it("rejects a file-list-only reply naming the newly read file, and the next question still reads the decision", async () => {
+    captureLogs();
+    const session = await cloudSession("compaction", sockets);
+    const { stub, client } = session;
+    await notesBeforeARead(stub);
+    const reply = "<summary>\n<read-files>\nsrc/b.ts\n</read-files>\n</summary>";
+    const model = new ScriptedModel().add(notes(reply), notes(reply), answerScript("answer after compact"));
+    model.contextTokens = WINDOW;
+    useCloudModel(model);
+
+    const result = await runInDurableObject(stub, (instance) =>
+      prSessionSeams(instance).compactContext(model.model, WINDOW, { jobId: "probe" }),
+    );
+    await client.chat([Q1, Q2, Q3]);
+    await untilState(stub, "q3", "done");
+
+    const stored = await notesRow(stub);
+    const sawDecision = turnPrompts(model)
+      .at(-1)
+      ?.some((entry) => entry.text.includes(DECIDED));
+    expect({ result, rev: stored.rev, cut: stored.cut_message_id, sawDecision }).toEqual({
+      result: "failed",
+      rev: 1,
+      cut: "q1",
+      sawDecision: true,
+    });
   });
 });
 
@@ -480,7 +570,11 @@ describe("the next turn's context", () => {
       "UPDATE prq_session SET context_tokens = 18000, context_through = ?, context_notes_rev = 0 WHERE id = 1",
       a2.id,
     );
-    const model = new ScriptedModel().add(notes("the notes"), notes("the turn's start"), answerScript("answer three"));
+    const model = new ScriptedModel().add(
+      notes(facts("the notes")),
+      notes(progress("the turn's start")),
+      answerScript("answer three"),
+    );
     model.contextTokens = WINDOW;
     useCloudModel(model);
 
@@ -502,7 +596,7 @@ describe("the next turn's context", () => {
       { role: "user", text: "question q3" },
     ]);
     expect(stored.text).toBe(
-      "the notes\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start\n\n<read-files>\nsrc/app.ts\n</read-files>",
+      `${splitNotes(facts("the notes"), progress("the turn's start"))}\n\n<read-files>\nsrc/app.ts\n</read-files>`,
     );
   });
 });
@@ -525,14 +619,14 @@ describe("a lost compaction and a context-length refusal", () => {
     await untilState(session.stub, "q4", "pending");
 
     await abortAllDurableObjects();
-    model.add(notes("the notes"), notes("the turn's start"), answerScript("answer four"));
+    model.add(notes(facts("the notes")), notes(progress("the turn's start")), answerScript("answer four"));
     const stub = await prSessionStub(env, session.ref);
     await untilState(stub, "q4", "done");
 
     expect(model.calls.map(isSummaryCall)).toEqual([false, false, false, true, true, true, false]);
     expect(await notesRow(stub)).toMatchObject({ rev: 1 });
     expect(turnPrompts(model).at(-1)?.[0]?.text).toBe(
-      notesText("the notes\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start"),
+      notesText(splitNotes(facts("the notes"), progress("the turn's start"))),
     );
     expect(events(logs, "prq.compaction.done")).toMatchObject([{ jobId: (await jobOf(stub, "q4")).job_id }]);
   });
@@ -555,7 +649,7 @@ describe("a lost compaction and a context-length refusal", () => {
     const model = new ScriptedModel().add(
       answerScript(sized("answer one", 7000), { input: 6000, output: 7000 }),
       { refuse: refusal() },
-      notes("the turn's start"),
+      notes(progress("the turn's start")),
       { refuse: refusal() },
     );
     model.contextTokens = WINDOW;
@@ -592,7 +686,11 @@ describe("the count after a compaction", () => {
     async ([, reset]) => {
       captureLogs();
       const session = await cloudSession("compaction", sockets);
-      const model = new ScriptedModel().add(...threeTurns(), notes("the notes"), notes("the turn's start"));
+      const model = new ScriptedModel().add(
+        ...threeTurns(),
+        notes(facts("the notes")),
+        notes(progress("the turn's start")),
+      );
       model.contextTokens = WINDOW;
       useCloudModel(model);
       for (const asked of [[Q1], [Q1, Q2], [Q1, Q2, Q3]]) {
@@ -633,7 +731,7 @@ describe("waiting questions", () => {
     const Q5 = question("q5");
     const model = new ScriptedModel().add(
       [...text(sized("answer one", 7000)), { hold: turn }, finish("stop", { input: 11_000, output: 7000 })],
-      [...text("the turn's start"), { hold: summary }, finish()],
+      [...text(progress("the turn's start")), { hold: summary }, finish()],
       answerScript("answer w"),
       answerScript("answer five"),
     );
@@ -683,8 +781,8 @@ describe("the gate", () => {
     const model = new ScriptedModel().add(
       [...text("partial"), { fail: new Error("lost") }],
       ...threeTurns(),
-      [...text("the notes"), { hold: summary }, finish()],
-      notes("the turn's start"),
+      [...text(facts("the notes")), { hold: summary }, finish()],
+      notes(progress("the turn's start")),
       [...text("answer zero"), { hold: next }, finish()],
     );
     model.contextTokens = WINDOW;
@@ -757,7 +855,11 @@ describe("a small window", () => {
     const logs = captureLogs();
     const session = await cloudSession("compaction", sockets);
     const { stub, client } = session;
-    const model = new ScriptedModel().add(...threeTurns(), notes("the notes"), notes("the turn's start"));
+    const model = new ScriptedModel().add(
+      ...threeTurns(),
+      notes(facts("the notes")),
+      notes(progress("the turn's start")),
+    );
     model.contextTokens = WINDOW;
     useCloudModel(model);
     const compact = vi.spyOn(prSessionSeams(PrSession.prototype), "compactContext");
@@ -798,9 +900,9 @@ describe("a small window", () => {
       answerScript("a".repeat(40_000), { input: 200, output: 8000 }),
       answerScript("b".repeat(40_000), { input: 8200, output: 8000 }),
       answerScript("c".repeat(18_000), { input: 16_200, output: 3600 }),
-      notes("the first part"),
-      notes("both parts"),
-      notes("the turn's start"),
+      notes(facts("the first part")),
+      notes(facts("both parts")),
+      notes(progress("the turn's start")),
     );
     model.contextTokens = WINDOW;
     useCloudModel(model);
@@ -814,13 +916,13 @@ describe("a small window", () => {
     expect(prompts).toHaveLength(3);
     expect(prompts[0]).toContain("[User]: question q2");
     expect(prompts[0]).not.toContain("bbb");
-    expect(prompts[1]).toContain("<previous-summary>\nthe first part\n</previous-summary>");
+    expect(prompts[1]).toContain(`<previous-summary>\n${facts("the first part")}\n</previous-summary>`);
     expect(prompts[1]).toContain("bbb");
     expect(prompts[1]?.endsWith(UPDATE_SUMMARIZATION_PROMPT)).toBe(true);
     expect(prompts[2]).toContain("[User]: question q3");
     expectWithinWindow(model);
     expect(await notesRow(stub)).toMatchObject({
-      text: "both parts\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start",
+      text: splitNotes(facts("both parts"), progress("the turn's start")),
       cut_message_id: `answer-${(await jobOf(stub, "q3")).job_id}`,
     });
   });
@@ -836,9 +938,9 @@ describe("a small window", () => {
       answerScript("b".repeat(18_000), { input: 15_000, output: 3600 }),
       // A summary for each request the compaction could make, so that only the step's failure stops it; the next turn
       // takes the first one left as its answer.
-      notes("the first question"),
-      notes("the long answer"),
-      notes("the turn's start"),
+      notes(facts("the first question")),
+      notes(facts("the long answer")),
+      notes(progress("the turn's start")),
     );
     model.contextTokens = WINDOW;
     useCloudModel(model);
@@ -874,12 +976,16 @@ describe("a small window", () => {
   it.for([
     [
       "adopts the notes once every batch succeeded",
-      [notes("first"), notes("second"), notes("turn")],
-      { result: "adopted", notes: { history: "second", turn_context: "turn", rev: 1 }, failedThrough: null },
+      [notes(facts("first")), notes(facts("second")), notes(progress("turn"))],
+      {
+        result: "adopted",
+        notes: { history: facts("second"), turn_context: progress("turn"), rev: 1 },
+        failedThrough: null,
+      },
     ],
     [
       "leaves the notes as they were when a batch fails",
-      [notes("first"), failedBatch, failedBatch],
+      [notes(facts("first")), failedBatch, failedBatch],
       { result: "failed", notes: { text: null, rev: 0 }, failedThrough: "answer-job-q9" },
     ],
   ] satisfies [string, Script[], { result: string; notes: Partial<NotesRow>; failedThrough: string | null }][])(
@@ -904,7 +1010,7 @@ describe("a small window", () => {
       expect(prompts).toHaveLength(3);
       expect(prompts[0]).toContain(sized("answer 0", 3000));
       expect(prompts[0]).not.toContain(sized("answer 7", 3000));
-      expect(prompts[1]).toContain("<previous-summary>\nfirst\n</previous-summary>");
+      expect(prompts[1]).toContain(`<previous-summary>\n${facts("first")}\n</previous-summary>`);
       expect(prompts[1]).toContain(sized("answer 7", 3000));
       expect(await notesRow(stub)).toMatchObject(expected.notes);
       expect(await contextRow(stub)).toMatchObject({ compaction_failed_through: expected.failedThrough });
