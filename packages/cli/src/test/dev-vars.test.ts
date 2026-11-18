@@ -29,6 +29,8 @@ const MODEL = {
   MODEL_CONTEXT_TOKENS: "200000",
   // Passed through as it is: what a parser could take for a quote, a comment, an escape or an expansion.
   MODEL_NOTE: '  sentinel "quoted" `tick` # not a comment $HOME ${HOME} \\n = end  ',
+  // Next in the file (parseEnv sorts the names): a value after one with a backslash, starting as a comment does.
+  MODEL_NOTE_HASH: "# sentinel after a backslash",
 };
 const APP_ID = "918273645";
 const INSTALLATION_ID = "5647382910";
@@ -212,22 +214,43 @@ describe("dev-vars write", () => {
     expect(await readdir(join(repo, "packages", "server"))).toStrictEqual([]);
   });
 
-  it("refuses a value no quoting carries as it is, naming its variable", async () => {
-    await writeFile(join(secrets, "model.env"), `${modelEnv(MODEL)}MODEL_ID="sentinel'quote"\n`);
-    expect(await devVars("write")).toMatchObject({
-      code: 1,
-      stderr:
-        "dev-vars: MODEL_ID holds a single quote or a carriage return, which packages/server/.dev.vars cannot hold as " +
-        "it is\n",
-    });
+  it.each([
+    ["a single quote", "MODEL_ID", `${modelEnv(MODEL)}MODEL_ID="sentinel'quote"\n`],
+    ["a NUL", "MODEL_ID", modelEnv({ ...MODEL, MODEL_ID: "sentinel\0nul" })],
+  ])("refuses a value holding %s, naming its variable", async (_what, name, text) => {
+    await writeFile(join(secrets, "model.env"), text);
 
-    await writeFile(join(secrets, "model.env"), modelEnv(MODEL));
-    await writeFile(join(secrets, "github-app", "private-key.pk8.pem"), PRIVATE_KEY.replaceAll("\n", "\r\n"));
     expect(await devVars("write")).toMatchObject({
       code: 1,
+      stdout: "",
       stderr:
-        "dev-vars: GITHUB_APP_PRIVATE_KEY holds a single quote or a carriage return, which packages/server/.dev.vars " +
+        `dev-vars: ${name} holds a single quote, a carriage return or a NUL, which packages/server/.dev.vars ` +
         "cannot hold as it is\n",
+    });
+    expect(await readdir(join(repo, "packages", "server"))).toStrictEqual([]);
+  });
+
+  it("refuses a key with a carriage return, naming its variable", async () => {
+    await writeFile(join(secrets, "github-app", "private-key.pk8.pem"), PRIVATE_KEY.replaceAll("\n", "\r\n"));
+
+    expect(await devVars("write")).toMatchObject({
+      code: 1,
+      stdout: "",
+      stderr:
+        "dev-vars: GITHUB_APP_PRIVATE_KEY holds a single quote, a carriage return or a NUL, which " +
+        "packages/server/.dev.vars cannot hold as it is\n",
+    });
+    expect(await readdir(join(repo, "packages", "server"))).toStrictEqual([]);
+  });
+
+  // wrangler's parser would read its closing quote as escaped, and take the next variable into it.
+  it("refuses a value ending in a backslash, naming its variable", async () => {
+    await writeFile(join(secrets, "model.env"), modelEnv({ ...MODEL, MODEL_NOTE: "sentinel ends in a backslash \\" }));
+
+    expect(await devVars("write")).toMatchObject({
+      code: 1,
+      stdout: "",
+      stderr: "dev-vars: MODEL_NOTE ends with a backslash, which packages/server/.dev.vars cannot hold as it is\n",
     });
     expect(await readdir(join(repo, "packages", "server"))).toStrictEqual([]);
   });

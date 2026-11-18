@@ -17,8 +17,9 @@
 //
 // Each value is written between single quotes, which both parsers that read the file take as they are, newlines
 // included, with no escape or expansion: wrangler's (dotenv 16.3.1's parse, bundled in wrangler-dist/cli.js) and
-// Node's (util.parseEnv, which the checks here use, and --env-file, which packages/server's use). A value holding a
-// single quote, or a carriage return (dotenv reads \r\n as \n), is refused.
+// Node's (util.parseEnv, which the checks here use, and --env-file, which packages/server's use). Refused: a value
+// holding a single quote, a carriage return (dotenv reads \r\n as \n) or a NUL (--env-file ends the value there), and
+// one ending in a backslash (dotenv takes the closing quote as escaped and the next line into the value).
 
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -125,8 +126,13 @@ async function settings(window: string | undefined): Promise<Map<string, string>
   vars.set("GITHUB_INSTALLATION_ID", field("installation_id"));
 
   for (const [name, value] of vars) {
-    if (/['\r]/.test(value)) {
-      throw new Refusal(`${name} holds a single quote or a carriage return, which ${TARGET} cannot hold as it is`);
+    if (/['\r\0]/.test(value)) {
+      throw new Refusal(
+        `${name} holds a single quote, a carriage return or a NUL, which ${TARGET} cannot hold as it is`,
+      );
+    }
+    if (value.endsWith("\\")) {
+      throw new Refusal(`${name} ends with a backslash, which ${TARGET} cannot hold as it is`);
     }
   }
   return vars;
