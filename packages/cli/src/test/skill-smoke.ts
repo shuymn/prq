@@ -15,6 +15,7 @@ import * as v from "valibot";
 import { field, promptsHeld, textField, TOOL_CALL_MARKUP } from "./compaction.ts";
 import { deliver, getMessages, ask, savePrompt } from "./pr.ts";
 import type { GithubApp } from "./reconcile.ts";
+import { chatRequest } from "./scripted.ts";
 import type { Verdict } from "./skill-context.ts";
 import { registerSkill, skillLink, YOMIYASU } from "./skill-github.ts";
 import { type ModelSettings, startWorker, type Worker } from "./worker.ts";
@@ -172,7 +173,11 @@ export async function checkSmoke(
     for (const [index, question] of QUESTIONS.entries()) {
       const id = `smoke-${index + 1}`;
       print(`question ${id}: ${question}`);
-      const from = { logs: worker.logs().length, timings: timed.timings.length };
+      const from = {
+        logs: worker.logs().length,
+        timings: timed.timings.length,
+        requests: worker.modelRequests().length,
+      };
       await ask(worker, pr, id, question);
       const job = await untilEnded(
         worker,
@@ -180,6 +185,11 @@ export async function checkSmoke(
         (entry) => entry.target.kind === "answer" && entry.target.messageId === id,
       );
       const parts = job === undefined ? [] : await answerParts(worker, pr, `answer-${job.jobId}`);
+      // The tools the answer's first request offered, and the containers seen while the Worker runs (they are gone
+      // once it closes).
+      const [first] = worker.modelRequests().slice(from.requests).map(chatRequest);
+      const offered = (first?.tools ?? []).map((entry) => entry.function.name);
+      const running = await tracked.workspaces();
       const { activations, firstText, beforeText, wholeBody, text } = activationOf(parts, "yomiyasu");
       const others = parts
         .filter((part) => part.type.startsWith("tool-") && part.type !== "tool-activate_skill")
@@ -206,7 +216,8 @@ export async function checkSmoke(
         `  logged activations: ${logged.map((line) => `${field(line, "outcome")} ${field(line, "chars")} characters`).join(", ") || "none"}`,
       );
       print(
-        `  other tool calls: ${others.join(", ") || "none"}; tool-call markup in the answer: ${TOOL_CALL_MARKUP.test(text) ? "yes" : "no"}`,
+        `  tools offered: ${offered.join(", ") || "none"}; workspace containers: ${running.length}; other tool calls: ` +
+          `${others.join(", ") || "none"}; tool-call markup in the answer: ${TOOL_CALL_MARKUP.test(text) ? "yes" : "no"}`,
       );
       const runs = logs.filter((line) => line.includes("prq.skill.script") && field(line, "jobId") === job?.jobId);
       print(
