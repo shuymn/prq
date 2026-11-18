@@ -412,6 +412,8 @@ function adoptedWith(history: string) {
 
 describe("a summary's reply", () => {
   const ordinary = `${DECIDED}\n\n## Key facts\n- src/b.ts sets the fallback.`;
+  const japanese = "## 目的\n互換性のための代替処理を残す。\n\n## 重要な事実\n- src/b.ts が代替処理を有効にしている。";
+  const deeper = "### Decisions\n- Keep the compatibility fallback\n\n### Key facts\n- src/b.ts sets the fallback.";
   const indented =
     "## Key facts\n- Keep this exact block:\n\n  <read-files>\n  ALLOW_ONLY_CHANGED_FILES=false\n  </read-files>";
   const fixture = "## Decisions\n- Use this list as the fixture:\n\n<read-files>\nsrc/b.ts\n</read-files>";
@@ -432,8 +434,10 @@ describe("a summary's reply", () => {
       NOT_ADOPTED,
     ],
     ["its prompt's headings with only blank sections", "## Decisions\n\n## Key facts\n   \n", NOT_ADOPTED],
-    ["text under a heading its prompt does not ask for", "## Summary\nThe fallback stays.", NOT_ADOPTED],
+    ["headings of its own language and level with only blank sections", "## 決定事項\n\n### 重要な事実\n", NOT_ADOPTED],
     ["an ordinary summary", ordinary, adoptedWith(ordinary)],
+    ["a summary with Japanese headings", japanese, adoptedWith(japanese)],
+    ["a summary with third-level headings", deeper, adoptedWith(deeper)],
     [
       "an ordinary summary inside wrappers",
       `<previous-summary>\n<summary>\n${ordinary}\n</summary>\n</previous-summary>`,
@@ -442,7 +446,7 @@ describe("a summary's reply", () => {
     ["an indented <read-files> example inside a section", indented, adoptedWith(indented)],
     ["a file list it writes inside a section", fixture, adoptedWith(fixture)],
   ] satisfies [string, string, { result: string; notes: Partial<NotesRow> }][])(
-    "is adopted only with a section its prompt asks for with text, the file list its own: %s",
+    "is adopted only with a heading that has text under it, the file list its own: %s",
     async ([, reply, expected]) => {
       captureLogs();
       const session = await cloudSession("compaction", sockets);

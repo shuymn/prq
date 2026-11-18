@@ -425,21 +425,19 @@ function withoutWrappers(text: string): string {
   }
 }
 
-// The section headings each kind of summary's prompt asks for.
-const SECTION_HEADINGS: Record<SummaryKind, string[]> = {
-  notes: NOTES_FORMAT.match(/^## .+$/gm) ?? [],
-  "turn-prefix": TURN_PREFIX_FORMAT.match(/^## .+$/gm) ?? [],
-};
+// A Markdown heading line, at any level and in any language: the prompts ask for no language, so a summary may name
+// its sections in the conversation's.
+const HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 
-// Whether a reply has a section its prompt asks for with text under it, up to the next heading.
-function hasSectionText(text: string, headings: readonly string[]): boolean {
+// Whether a reply has a section with text under it, up to the next heading.
+function hasSectionText(text: string): boolean {
   const lines = text.split("\n");
   return lines.some((line, index) => {
-    if (!headings.includes(line.trim())) {
+    if (!HEADING.test(line)) {
       return false;
     }
     const after = lines.slice(index + 1);
-    const end = after.findIndex((next) => /^#{1,2}\s/.test(next));
+    const end = after.findIndex((next) => HEADING.test(next));
     return (end < 0 ? after : after.slice(0, end)).some((next) => next.trim() !== "");
   });
 }
@@ -524,8 +522,8 @@ export function assembleNotes(history: string, turnContext: string | null, files
 
 // One summary, streamed and consumed whole, under the turn's output bounds (firstChunkMs, chunkMs) and, through the
 // model, the response bound, and with the notes' output limit. A summary that stalled, errored, ended other than
-// `stop`, or has no section its prompt asks for with text under it once prq's wrappers are peeled is a failed attempt,
-// which rejects; each model call's usage is reported either way.
+// `stop`, or has no heading with text under it once prq's wrappers are peeled is a failed attempt, which rejects; each
+// model call's usage is reported either way.
 export async function summarize(
   model: CloudModel,
   request: SummaryRequest,
@@ -570,7 +568,7 @@ export async function summarize(
     throw new SummaryFailure(`the summary ended with finish reason ${ended.finishReason}`);
   }
   const text = withoutWrappers(ended.text);
-  if (!hasSectionText(text, SECTION_HEADINGS[request.kind])) {
+  if (!hasSectionText(text)) {
     throw new SummaryFailure("the summary has no section with text");
   }
   return text;
