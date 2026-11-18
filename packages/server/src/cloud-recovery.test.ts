@@ -17,6 +17,7 @@ import {
   untilState,
   usageOf,
 } from "./test/cloud.ts";
+import { contextRow } from "./test/compaction.ts";
 import {
   answerScript,
   finish,
@@ -24,9 +25,11 @@ import {
   ScriptedModel,
   type StreamPart,
   text,
+  toolCall,
   useCloudModel,
 } from "./test/model.ts";
-import { type Gate, gate, jobOf, prSessionSeams } from "./test/session.ts";
+import { clearSkills, type Gate, gate, jobOf, prSessionSeams } from "./test/session.ts";
+import { registered, skillWith } from "./test/skills.ts";
 
 const sockets: AgentSocket[] = [];
 
@@ -161,6 +164,42 @@ describe("restart after a reset", () => {
     expect(await messageRows(session)).toEqual(before);
     expect(events(logs, "prq.job.restarted")).toEqual([]);
     expect(events(logs, "prq.job.usage")).toMatchObject([{ jobId: job.job_id, outcome: "done", starts: 1 }]);
+  });
+
+  it("keeps no measurement for a recovered result that holds a skill call: the next question counts the estimate", async () => {
+    captureLogs();
+    await clearSkills();
+    await registered(skillWith("polish", { body: "Polish the answer.\n" }));
+    const session = await cloudSession("recovery", sockets);
+    // At a 16,384-token window (14,336 for a request): q0's measurement leaves q1 the room for one result, and would
+    // leave q2 less once q1's answer is counted on top of it.
+    const model = new ScriptedModel().add(
+      answerScript("A short first answer.", { input: 14_205, output: 10 }),
+      [toolCall("activate_skill", { name: "polish" }, "call-1"), finish("tool-calls", { input: 1000, output: 10 })],
+      answerScript(`${"Clear text ".repeat(7)}done.`),
+    );
+    model.contextTokens = 16_384;
+    useCloudModel(model);
+    await session.client.chat([question("q0", "?")]);
+    await untilState(session.stub, "q0", "done");
+    expect((await contextRow(session.stub)).context_tokens).toBe(14_215);
+    const held = await holdCommit(session.stub, "after");
+    await session.client.chat([question("q1", "?")]);
+    await held.reached();
+
+    const stub = await resetAndRestart(session, model, answerScript("answer two"));
+    await untilState(stub, "q1", "done");
+    const job = await jobOf(stub, "q1");
+    expect(await contextRow(stub)).toMatchObject({ context_tokens: null, context_through: `answer-${job.job_id}` });
+
+    await (await session.open()).chat([question("q2", "?")]);
+    await untilState(stub, "q2", "done");
+    // On q0's measurement q2's request would leave less than a result's room and be offered no tools.
+    expect((model.calls.at(-1)?.tools ?? []).map((entry) => entry.name)).toEqual([
+      "activate_skill",
+      "read_skill_resource",
+    ]);
+    await clearSkills();
   });
 
   it("fails a run whose incomplete text was appended before the reset, with its stored reason and no new start", async () => {

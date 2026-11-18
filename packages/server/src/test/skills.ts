@@ -1,7 +1,7 @@
 // The skill routes as the settings call them, against the served GitHub (src/test/github.ts), with the App configured
 // in the env each call gets; and the Hub's stored copy, read back.
 
-import { ErrorResponse, type SkillRef } from "@prq/protocol";
+import { ErrorResponse, type Skill, type SkillRef } from "@prq/protocol";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import * as v from "valibot";
@@ -101,6 +101,49 @@ export async function storedRows(): Promise<{ skills: number; files: number }> {
 export async function storedFiles(name: string) {
   const bundle = await (await hub()).skillBundle(name);
   return bundle === null ? null : { skill: bundle.skill, files: bundle.files };
+}
+
+// A skill version whose SKILL.md has the description and the body, with the files besides (paths in the skill), as a
+// confirm hands it to the Hub; the commit and the source as given.
+export function skillWith(
+  name: string,
+  {
+    description = `The ${name} skill.`,
+    body = "",
+    files = {},
+    sha = "1".repeat(40),
+    path = `skills/${name}`,
+  }: {
+    description?: string;
+    body?: string;
+    files?: Record<string, string | Uint8Array>;
+    sha?: string;
+    path?: string;
+  } = {},
+): SkillVersion {
+  const all = { "SKILL.md": `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n${body}`, ...files };
+  return {
+    name,
+    description,
+    license: null,
+    allowedTools: null,
+    source: { owner: OWNER, repo: REPO, path },
+    ref: { name: "main", kind: "branch" },
+    sha,
+    files: Object.entries(all).map(([file, content]) => {
+      const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+      return { path: file, mode: "100644" as const, size: bytes.byteLength, blob: "2".repeat(40), content: bytes };
+    }),
+  };
+}
+
+// Registers a version through the Hub's own call, as a confirm does; the stored skill.
+export async function registered(version: SkillVersion): Promise<Skill> {
+  const stored = await (await hub()).registerSkill(version);
+  if ("error" in stored) {
+    throw new Error(`the Hub refused the skill: ${stored.detail}`);
+  }
+  return stored;
 }
 
 // A small skill stored through the Hub's own call, as a confirm stores one.

@@ -124,6 +124,32 @@ export function readSkillFiles(sql: SqlStorage, name: string): SkillFileContent[
     }));
 }
 
+// What a cloud turn's skill tool reads of a registered skill at the revision its turn listed: a stored file's bytes;
+// for a path that names no stored file, every path the skill stores (sorted), from which the tool lists a directory or
+// says that nothing is there; or that the registration is no longer at that revision (updated, or removed).
+export type SkillRead =
+  | { kind: "file"; content: Uint8Array }
+  | { kind: "paths"; paths: string[] }
+  | { kind: "changed" };
+
+export function readSkillPath(sql: SqlStorage, name: string, rev: number, path: string): SkillRead {
+  const [row] = sql.exec<{ rev: number }>("SELECT rev FROM prq_skills WHERE name = ?", name).toArray();
+  if (row?.rev !== rev) {
+    return { kind: "changed" };
+  }
+  const [file] = sql
+    .exec<{ content: ArrayBuffer }>("SELECT content FROM prq_skill_files WHERE name = ? AND path = ?", name, path)
+    .toArray();
+  if (file !== undefined) {
+    return { kind: "file", content: new Uint8Array(file.content) };
+  }
+  const paths = sql
+    .exec<{ path: string }>("SELECT path FROM prq_skill_files WHERE name = ? ORDER BY path", name)
+    .toArray()
+    .map((entry) => entry.path);
+  return { kind: "paths", paths };
+}
+
 // Writes the version under its name at rev: the row (registered_at kept when the name is registered), and exactly its
 // files, those of the version before removed; the stored skill. The caller runs it inside a transaction with its own
 // checks.

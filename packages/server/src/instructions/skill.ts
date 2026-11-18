@@ -82,6 +82,15 @@ function allowedToolsEntries(field: string | string[]): string[] {
   return entries;
 }
 
+// A SKILL.md's body: its text after the frontmatter's closing `---` line and that line's end, as stored (a leading BOM
+// dropped); null when the bytes are not UTF-8 or hold no frontmatter, which registration refuses.
+export function skillBody(bytes: Uint8Array): string | null {
+  // Each line with its line end, which trimEnd drops, so the lines after the closing one join into the rest exactly.
+  const lines = utf8Text(bytes)?.split(/(?<=\n)/) ?? [];
+  const end = lines.findIndex((line, index) => index > 0 && line.trimEnd() === "---");
+  return lines[0]?.trimEnd() === "---" && end > 0 ? lines.slice(end + 1).join("") : null;
+}
+
 // The frontmatter of a SKILL.md, or why it is refused: the text between a first line `---` and the next `---` line,
 // read as YAML with aliases refused; name in the specification's form, description 1–1,024 characters, license and
 // allowed-tools within their caps.

@@ -41,9 +41,11 @@ import {
   isSkillVersion,
   readSkill,
   readSkillFiles,
+  readSkillPath,
   readSkills,
   skillChanged,
   type SkillBundle,
+  type SkillRead,
   type SkillVersion,
   writeSkill,
 } from "./instructions/skills.ts";
@@ -504,6 +506,12 @@ export class Hub extends Agent<Env, HubView> {
   skillBundle(name: string): SkillBundle | null {
     const skill = readSkill(this.#sql, name);
     return skill === null ? null : { skill, files: readSkillFiles(this.#sql, name) };
+  }
+
+  // A file of a registered skill, or its paths, as a cloud turn's skill tool reads them: only while the registration is
+  // at the revision the turn listed, so a turn never reads two versions of one skill.
+  async skillRead(name: string, rev: number, path: string): Promise<SkillRead> {
+    return readSkillPath(this.#sql, name, rev, path);
   }
 
   // Registers a skill read and checked by a confirm, in one transaction with its checks: the name is free, and fewer

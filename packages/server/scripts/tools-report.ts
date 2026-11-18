@@ -9,7 +9,8 @@ import { estimateTokens } from "../src/pr-session/compaction.ts";
 import { contextBudget } from "../src/pr-session/context-budget.ts";
 import { classifyModelError, redact } from "../src/pr-session/model.ts";
 import { instructionPrefix } from "../src/pr-session/prefix.ts";
-import { NO_ROOM, toolLoop, TURN_LOOP } from "../src/pr-session/tools.ts";
+import { NO_ROOM } from "../src/pr-session/tools.ts";
+import { toolLoop, TURN_LOOP } from "../src/pr-session/turn-tools.ts";
 import { type CloudModel, stepTokens } from "../src/pr-session/turn.ts";
 import { FakeWorkspace, type Files } from "../src/test/workspace.ts";
 
@@ -126,7 +127,7 @@ export async function checkTools(
   const { system } = prefix;
   const messages = [{ role: "user" as const, content: QUESTION }];
   const start = estimateTokens(prefix.chars + JSON.stringify(messages).length);
-  const loop = toolLoop({ workspace, target, prepared }, window, start);
+  const loop = toolLoop({ code: { workspace, target, prepared } }, window, start);
   say(`tools check: model ${model.modelId}, window ${window} (reserve ${contextBudget(window).reserve})`);
   say(`question: ${QUESTION}`);
   const offered: string[] = [];

@@ -8,12 +8,11 @@ import {
   MIN_RESULT_CHARS,
   NO_ROOM,
   TOOL_RESULT_CHARS,
-  toolLoop,
-  TURN_LOOP,
   TWO_TIPS,
   WORKSPACE_TIMED_OUT,
   workspaceTools,
 } from "./pr-session/tools.ts";
+import { toolLoop, TURN_LOOP } from "./pr-session/turn-tools.ts";
 import { WORKSPACE_CALL_MS, type WorkspaceClient, type WorkspaceTarget } from "./pr-session/workspace.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket } from "./test/chat.ts";
@@ -385,7 +384,7 @@ async function hangingTurn(abortSignal?: AbortSignal) {
     [toolCall("read_file", { path: "src/rates.ts" }), finish("tool-calls")],
     answerScript("answered from what was read"),
   );
-  const loop = toolLoop({ workspace, target: TARGET, prepared }, 131_072, 0);
+  const loop = toolLoop({ code: { workspace, target: TARGET, prepared } }, 131_072, 0);
   const ended: unknown[] = [];
   const result = streamText({
     model: model.model,
