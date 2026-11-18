@@ -204,7 +204,7 @@ function run(
 async function snapshot(root: string): Promise<string[]> {
   const out: string[] = [];
   const walk = async (dir: string, prefix: string): Promise<void> => {
-    for (const entry of (await readdir(dir).catch(() => [])).toSorted()) {
+    for (const entry of (await readdir(dir).catch((): string[] => [])).toSorted()) {
       const path = join(dir, entry);
       const relative = `${prefix}${entry}`;
       if (relative === "repo") {

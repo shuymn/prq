@@ -1,9 +1,9 @@
-// The Node test project (vitest.config.ts): the git procedure's tests run in Node, with Node's types, outside the
-// Worker's runtime types.
+// What runs in Node, with Node's types, outside the Worker's runtime types: the Node test project's tests
+// (vitest.config.ts), and the web UI's build (vite.config.ts, build/).
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["src/**/*.node.test.ts"]
+  "include": ["src/**/*.node.test.ts", "vite.config.ts", "build"]
 }

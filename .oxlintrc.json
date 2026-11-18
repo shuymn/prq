@@ -8,5 +8,20 @@
   "options": {
     "typeAware": true,
     "reportUnusedDisableDirectives": "error"
-  }
+  },
+  // The web UI's React rules. An override's rules apply only with its plugins listed.
+  "overrides": [
+    {
+      "files": ["packages/server/src/client/**"],
+      "plugins": ["react"],
+      "rules": {
+        // The automatic JSX runtime (tsconfig.client.json) needs no React in scope.
+        "react/react-in-jsx-scope": "off",
+        // A stylesheet is imported for its effect.
+        "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
+        // The build's define (src/client/env.d.ts) follows Vite's naming.
+        "no-underscore-dangle": ["error", { "allow": ["__PRQ_VERSION__"] }]
+      }
+    }
+  ]
 }

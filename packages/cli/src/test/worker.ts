@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 import { createTestHarness, experimental_readRawConfig } from "wrangler";
 
+import { requireClientBuild } from "./client-build.ts";
+
 // .example never resolves, so a key set fetch the wrapper does not answer cannot reach the network.
 const TEAM_DOMAIN = "https://team.prq.example";
 const AUDIENCE = "prq-test-audience";
@@ -101,11 +103,19 @@ function workerInput(secrets: Record<string, string>, containers: boolean) {
 }
 
 // containers: the Workspace runs its container in Docker (the manual workspace check only; tests run without Docker).
+// clientIndex: the web UI's built page; the Worker does not start without it (client-build.ts).
 export async function startWorker({
   model = NO_MODEL,
   githubApp = NO_GITHUB_APP,
   containers = false,
-}: { model?: ModelSettings; githubApp?: GithubAppSettings; containers?: boolean } = {}): Promise<Worker> {
+  clientIndex,
+}: {
+  model?: ModelSettings;
+  githubApp?: GithubAppSettings;
+  containers?: boolean;
+  clientIndex?: string;
+} = {}): Promise<Worker> {
+  requireClientBuild(clientIndex);
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const jwk: JWK = { ...(await exportJWK(publicKey)), kid: KEY_ID, alg: "RS256", use: "sig" };
   let fetches = 0;

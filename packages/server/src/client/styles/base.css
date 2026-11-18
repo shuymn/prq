@@ -1,0 +1,26 @@
+/* The cascade layers, declared once and first: the tokens' custom properties, then the page's defaults, then the
+   components and the screens built from them. */
+@layer reset, tokens, base, components, screens;
+
+@layer reset {
+  body {
+    margin: 0;
+  }
+}
+
+@layer base {
+  /* Dark only (design/README.md). */
+  :root {
+    color-scheme: dark;
+    background: var(--color-bg-canvas);
+    color: var(--color-fg-default);
+  }
+
+  /* On the body, not the root: the root's font size stays the one every rem in the tokens is relative to. The `font`
+     shorthand resets font-size-adjust, which then takes the web font's x-height for the fallback fonts while it loads;
+     every rule that sets `font` sets it again. */
+  body {
+    font: var(--text-body);
+    font-size-adjust: from-font;
+  }
+}

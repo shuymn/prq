@@ -1,0 +1,44 @@
+@layer components {
+  [data-component="AppHeader"] {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--gap-group);
+    block-size: var(--size-header);
+    padding-inline: var(--inset-page);
+    background: var(--color-bg-subtle);
+
+    /* The mark and the name centre in the header, so the mark, an even size in an even height, sits on whole pixels. */
+    & .start {
+      display: flex;
+      align-items: center;
+      gap: var(--gap-related);
+    }
+
+    /* "prq" is lowercase only, so the mark centres on its x-height: 1px below the line's centre, the nearest whole
+       pixel (design/components.md, AppHeader). */
+    & .mark-box {
+      display: flex;
+      translate: 0 1px;
+    }
+
+    /* The name and the version share a baseline. */
+    & .name {
+      display: flex;
+      align-items: baseline;
+      gap: var(--gap-related);
+    }
+
+    & .product {
+      font: var(--text-heading);
+      font-size-adjust: from-font;
+      color: var(--color-fg-default);
+    }
+
+    & .version {
+      font: var(--text-small);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+  }
+}

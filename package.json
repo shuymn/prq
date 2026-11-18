@@ -10,7 +10,7 @@
     "fmt:fix": "oxfmt",
     "knip": "knip",
     "typecheck": "pnpm -r --no-bail run typecheck",
-    "test": "pnpm -r --no-bail run test",
+    "test": "pnpm --filter @prq/server run build && pnpm -r --no-bail run test",
     "prepare": "lefthook install"
   },
   "devDependencies": {

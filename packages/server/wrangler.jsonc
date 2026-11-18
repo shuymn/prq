@@ -27,6 +27,14 @@
   // Workspace then has no container. The owner's check (`pnpm run check:workspace` in packages/cli, AGENTS.md) runs it
   // with Docker through an inline copy of this config that turns containers on (packages/cli/src/test/worker.ts).
   "dev": { "enable_containers": false },
+  // The web UI, built by `pnpm run build` (vite.config.ts) with its `_headers` (docs/design.md, Caching). A path that is
+  // no file gets the shell, so the client's routes load it; the Worker's own routes reach the Worker first, a browser's
+  // navigation included, which the fallback would otherwise answer with the shell. `/index.html` redirects to `/`.
+  "assets": {
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/agents/*", "/cli/*", "/webhook", "/webhook/*"],
+  },
   "observability": {
     "enabled": true,
   },
