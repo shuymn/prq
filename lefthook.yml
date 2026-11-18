@@ -12,6 +12,11 @@ pre-commit:
     - name: lint
       glob: "*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}"
       run: pnpm exec oxlint --type-aware --deny-warnings --no-error-on-unmatched-pattern {staged_files}
+    # The web UI's staged stylesheets take only design tokens (stylelint.config.mjs); CI checks them all (pnpm run
+    # lint:css).
+    - name: lint-css
+      glob: "packages/server/src/client/**/*.css"
+      run: pnpm exec stylelint {staged_files}
     # Formats the staged files and restages them; CI checks the whole tree (pnpm run fmt). oxfmt skips the files it
     # does not format and those .oxfmtrc.json ignores.
     - name: fmt

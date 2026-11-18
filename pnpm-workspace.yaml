@@ -71,6 +71,8 @@ catalog:
   oxfmt: 0.78.0
   oxlint: 1.93.0
   oxlint-tsgolint: 7.0.2007
+  # The UI's stylesheets: raw colors, sizes and fonts refused in favour of the design tokens (stylelint.config.mjs).
+  stylelint: 18.0.0
 
 # Dependency build scripts, each reviewed: none runs. esbuild, lefthook and workerd take their platform binaries from
 # optionalDependencies; core-js-pure's postinstall only prints a funding message.

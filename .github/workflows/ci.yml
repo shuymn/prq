@@ -46,6 +46,10 @@ jobs:
       - name: Run linter
         run: pnpm run lint
 
+      # The web UI's stylesheets take only design tokens (stylelint.config.mjs).
+      - name: Check stylesheets
+        run: pnpm run lint:css
+
       - name: Run formatter
         run: pnpm run fmt
 
