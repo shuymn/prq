@@ -320,11 +320,15 @@ function where(reader: Reader, path: string, sha: string): string {
   return `${reader.owner}/${reader.repo}${path === "" ? "" : ` ${path}`} at ${sha.slice(0, 7)}`;
 }
 
-// The skill's regular files at the commit, sorted by path, and its SKILL.md among them, checked against every cap before
-// any blob is read: no symlink or submodule, a complete tree, each path through the shared validator, no paths
-// differing only in case, at most SKILL_FILES files, SKILL_FILE_BYTES each and SKILL_BYTES in all, and a SKILL.md at its
-// root.
-async function readTree(reader: Reader, sha: string, path: string): Promise<{ files: TreeFile[]; skillMd: TreeFile }> {
+// The skill's regular files at the commit, sorted by path, its SKILL.md among them, and their bytes in all, checked
+// against every cap before any blob is read: no symlink or submodule, a complete tree, each path through the shared
+// validator, no paths differing only in case, at most SKILL_FILES files, SKILL_FILE_BYTES each and SKILL_BYTES in all,
+// and a SKILL.md at its root.
+async function readTree(
+  reader: Reader,
+  sha: string,
+  path: string,
+): Promise<{ files: TreeFile[]; skillMd: TreeFile; total: number }> {
   const at = where(reader, path, sha);
   const tree = await call(`the tree of ${at}`, `no directory ${path === "" ? "/" : path} at ${sha}`, async () => {
     const treeish = path === "" ? sha : `${sha}:${encodedPath(path)}`;
@@ -354,9 +358,11 @@ async function readTree(reader: Reader, sha: string, path: string): Promise<{ fi
     }
     files.push({ path: entry.path, mode: entry.mode, size: entry.size, blob: entry.sha });
   }
-  const issue = files.map((file) => skillPathIssue(file.path)).find((found) => found !== null);
-  if (issue !== undefined) {
-    throw invalid(issue);
+  for (const file of files) {
+    const issue = skillPathIssue(file.path);
+    if (issue !== null) {
+      throw invalid(issue);
+    }
   }
   const collision = skillManifestIssue(files.map((file) => file.path));
   if (collision !== null) {
@@ -377,7 +383,7 @@ async function readTree(reader: Reader, sha: string, path: string): Promise<{ fi
   if (skillMd === undefined) {
     throw new SkillFailure("not_found", `no ${SKILL_MD} in ${at}`);
   }
-  return { files: files.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)), skillMd };
+  return { files: files.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)), skillMd, total };
 }
 
 const utf8 = new TextEncoder();
@@ -491,7 +497,7 @@ export function fetchSkill(
   return unit(SKILL_FETCH_MS, async (signal) => {
     const reader = await readerFor(client, owner, repo, signal);
     await requireCommit(reader, request.sha);
-    const { files, skillMd } = await readTree(reader, request.sha, path);
+    const { files, skillMd, total } = await readTree(reader, request.sha, path);
     const skillMdBytes = await readBlob(reader, skillMd);
     const frontmatter = frontmatterOf(skillMdBytes);
     if (frontmatter.name !== request.name) {
@@ -528,7 +534,7 @@ export function fetchSkill(
       repo: `${owner}/${repo}`,
       sha: request.sha,
       files: files.length,
-      bytes: files.reduce((sum, file) => sum + file.size, 0),
+      bytes: total,
     });
     return {
       ...frontmatter,
