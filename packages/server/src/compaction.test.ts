@@ -666,6 +666,43 @@ describe("a small window", () => {
     });
   });
 
+  it("fails, adopting nothing, when one step alone does not fit a request, and runs the next job on the full context", async () => {
+    const logs = captureLogs();
+    const session = await cloudSession("compaction", sockets);
+    const { stub, client } = session;
+    // An answer that alone does not fit a request at the window, with a decision at its end.
+    const decided = "FINAL_DECISION_use_src_final_ts";
+    const model = new ScriptedModel().add(
+      answerScript(`${"a".repeat(60_000)}${decided}`, { input: 800, output: 12_010 }),
+      answerScript("b".repeat(18_000), { input: 15_000, output: 3600 }),
+      notes("the first question"),
+      answerScript("answer three"),
+    );
+    model.contextTokens = WINDOW;
+    useCloudModel(model);
+    for (const asked of [[Q1], [Q1, Q2], [Q1, Q2, Q3]]) {
+      await client.chat(asked);
+      await untilState(stub, asked.at(-1)?.id ?? "", "done");
+    }
+
+    // The batch before the answer was summarized; the answer itself was sent to no summary.
+    const prompts = model.calls.filter(isSummaryCall).map(summaryPrompt);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("[User]: question q1");
+    expect(prompts[0]).not.toContain("aaa");
+    expect(await notesRow(stub)).toMatchObject({ text: null, rev: 0, cut_message_id: null });
+    const a2 = `answer-${(await jobOf(stub, "q2")).job_id}`;
+    expect(await contextRow(stub)).toMatchObject({ compaction_failed_through: a2 });
+    expect(events(logs, "prq.compaction.failed")).toMatchObject([
+      { calls: 1, reason: expect.stringContaining("does not fit") },
+    ]);
+    expect(
+      turnPrompts(model)
+        .at(-1)
+        ?.some((message) => message.text.includes(decided)),
+    ).toBe(true);
+  });
+
   const failedBatch: Script = [...text("cut"), finish("length")];
   it.for([
     [

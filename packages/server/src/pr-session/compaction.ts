@@ -455,12 +455,10 @@ export function requestTokens(request: SummaryRequest, maxOutputTokens: number):
   return estimateTokens(SUMMARIZATION_SYSTEM_PROMPT.length + request.prompt.length) + maxOutputTokens;
 }
 
-// Room a step cut to fit keeps for the note that says so.
-const TRUNCATION_NOTE_CHARS = 64;
-
 // The request for the steps from `from` on that fit one summary call: as many as fit, oldest first, so that the request
-// with its output allowance is within the window (requestTokens). A step that alone does not fit is cut to the room
-// left. `end` is the index after the last step taken; the request is null when those steps hold nothing to summarize.
+// with its output allowance is within the window (requestTokens). A step that alone does not fit fails the compaction:
+// cutting it would drop its end from both the summary and the kept part. `end` is the index after the last step taken;
+// the request is null when those steps hold nothing to summarize.
 export function nextBatch(
   kind: SummaryKind,
   steps: readonly Step[],
@@ -486,11 +484,7 @@ export function nextBatch(
       continue;
     }
     if (texts.length === 0) {
-      if (room <= TRUNCATION_NOTE_CHARS) {
-        throw new SummaryFailure("the previous summary leaves no room in the window for a summary request");
-      }
-      texts.push(truncateForSummary(text, room - TRUNCATION_NOTE_CHARS));
-      end += 1;
+      throw new SummaryFailure("a step does not fit in one summary request within the window");
     }
     break;
   }

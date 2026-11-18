@@ -820,14 +820,16 @@ never summarized, and once answered it enters the kept part with its answer, whe
 - **Failure.** A summary that stalled, errored, ended other than `stop` (its output limit included) or is empty once
   the file list and tags prq generates are removed is not adopted. Each summary request, estimated as a turn's are
   (characters ÷ 3) with the notes' output limit added, fits the window: a part too large for one request is summarized
-  in batches, oldest first, each updating the summary of the ones before, and a step too large alone is cut to fit. The
-  notes and the cut are adopted only once every batch has succeeded. Each batch is one streamed call under the same
-  bounds as a turn's model requests (see [Billing limits](#billing-limits)) and the notes' output limit, and it is tried
-  once more, so the gate's longest hold grows with the batches: when the provider stops sending, each attempt ends
-  within 120 s of its last output, at most two attempts per batch, and a provider still streaming is not cut, as for a
-  turn. A provider that counts the request higher than the estimate may still refuse it; that attempt fails like any
-  other. When compaction fails, the stored notes and history stay as they were, and the next job runs on the full
-  context.
+  in batches, oldest first, each updating the summary of the ones before, and a step too large for a request alone
+  fails the compaction rather than being cut, which would leave its end in neither the notes nor the kept part. So a
+  session whose window was lowered below one of its steps cannot compact, and its next job over the window fails with
+  the provider's reason. The notes and the cut are adopted only once every batch has succeeded. Each batch is one
+  streamed call under the same bounds as a turn's model requests (see [Billing limits](#billing-limits)) and the
+  notes' output limit, and it is tried once more, so the gate's longest hold grows with the batches: when the provider
+  stops sending, each attempt ends within 120 s of its last output, at most two attempts per batch, and a provider
+  still streaming is not cut, as for a turn. A provider that counts the request higher than the estimate may still
+  refuse it; that attempt fails like any other. When compaction fails, the stored notes and history stay as they were,
+  and the next job runs on the full context.
 - Everything before the cut point is in the notes, so no message leaves the context without being reflected in them.
 - The notes are language-neutral: the compaction prompt does not ask for a particular language, and the prompts for
   analysis and answers decide how the final text reads.
