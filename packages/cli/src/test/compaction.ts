@@ -32,10 +32,45 @@ const COMPACTION_MS = 10 * 60_000;
 const MAX_QUESTIONS = 16;
 // A wrong key in the provider's format: the provider refuses it before any model runs.
 const WRONG_KEY = "sk-prq-check-wrong-key-000000000000";
-// The name the decision fixes, and the question that needs it.
+// The name the decision fixes; the recall question needs it.
 const NAME = "Kestrel";
-const DECISION = `A decision for the rest of this conversation: refer to this pull request's change as a whole as "Project ${NAME}", and keep each answer to at most three sentences. Confirm it in one sentence.`;
-const RECALL = "What name did I ask you to use for this pull request's change as a whole? Reply with that name only.";
+
+// The check's questions in one language: the decision, a code question about a file, the question about the last file
+// read, and the recall of the decision's name.
+type Questions = { decision: string; code: (file: string) => string; lastFile: string; recall: string };
+
+export const ENGLISH: Questions = {
+  decision: `A decision for the rest of this conversation: refer to this pull request's change as a whole as "Project ${NAME}", and keep each answer to at most three sentences. Confirm it in one sentence.`,
+  code: (file) =>
+    `Call the read_file tool now on ${file} (even if you read it before), and say in two sentences what it does in this pull request.`,
+  lastFile: "Which file of this pull request did you read last? Answer with its path only.",
+  recall: "What name did I ask you to use for this pull request's change as a whole? Reply with that name only.",
+};
+
+export const JAPANESE: Questions = {
+  decision: `この会話の残りについての決定事項です。このプルリクエストの変更全体を「Project ${NAME}」と呼び、各回答は3文以内にしてください。確認を1文で答えてください。`,
+  code: (file) =>
+    `今すぐ read_file ツールで ${file} を読み（前に読んでいても）、このプルリクエストでそのファイルが何をしているかを2文で説明してください。`,
+  lastFile: "このプルリクエストのファイルで最後に読んだのはどれですか。パスだけを答えてください。",
+  recall: "このプルリクエストの変更全体を何と呼ぶよう頼みましたか。その名前だけを答えてください。",
+};
+
+// A Markdown heading line, at any level.
+const HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
+
+// Each heading of a text with the first non-blank line under it, up to the next heading.
+function outline(text: string): string[] {
+  const lines = text.split("\n");
+  return lines.flatMap((line, index) => {
+    if (!HEADING.test(line)) {
+      return [];
+    }
+    const after = lines.slice(index + 1);
+    const end = after.findIndex((next) => HEADING.test(next));
+    const under = (end < 0 ? after : after.slice(0, end)).find((next) => next.trim() !== "");
+    return [`${line.trim()} / ${under === undefined ? "(empty)" : firstLine(under)}`];
+  });
+}
 
 const Files = v.array(v.object({ filename: v.string(), status: v.string(), changes: v.number() }));
 const ContextRow = v.object({
@@ -238,6 +273,7 @@ export async function checkCompaction(
   settings: CompactionCheck,
   pr: PrRef,
   print: (line: string) => void,
+  questions: Questions,
 ): Promise<boolean> {
   const window = Number(settings.model.MODEL_CONTEXT_TOKENS);
   const limit = contextLimit(window);
@@ -272,7 +308,7 @@ export async function checkCompaction(
     }
 
     const decisionFrom = worker.logs().length;
-    if ((await askUntil(worker, pr, "decision", DECISION, limit, print)) !== null) {
+    if ((await askUntil(worker, pr, "decision", questions.decision, limit, print)) !== null) {
       print(
         `  a compaction that keeps the decision: ${(await untilCompacted(worker, pr, 0, decisionFrom)) ? "adopted" : "not adopted"}`,
       );
@@ -288,14 +324,7 @@ export async function checkCompaction(
       const id = `code-${index + 1}`;
       const rev = (await notes(worker, pr)).rev;
       const from = worker.logs().length;
-      const started = await askUntil(
-        worker,
-        pr,
-        id,
-        `Call the read_file tool now on ${file} (even if you read it before), and say in two sentences what it does in this pull request.`,
-        limit,
-        print,
-      );
+      const started = await askUntil(worker, pr, id, questions.code(file), limit, print);
       if (started === null) {
         await report(worker, pr, id, limit, print);
         continue;
@@ -330,8 +359,8 @@ export async function checkCompaction(
     }
 
     print("step 3: two questions asked while the summary runs");
-    await ask(worker, pr, "queued-1", "Which file of this pull request did you read last? Answer with its path only.");
-    await ask(worker, pr, "queued-2", RECALL);
+    await ask(worker, pr, "queued-1", questions.lastFile);
+    await ask(worker, pr, "queued-2", questions.recall);
     const waiting = (await sessionView(worker, pr)).jobs.filter(
       (job) => answerTo("queued-1")(job) || answerTo("queued-2")(job),
     );
@@ -349,7 +378,6 @@ export async function checkCompaction(
     const ids = idsOf(after);
     const cutIndex = stored.cut_message_id === null ? -1 : ids.indexOf(stored.cut_message_id);
     const decisionIndex = ids.indexOf(decisionAnswer);
-    const sections = (stored.text ?? "").split("\n").filter((line) => line.startsWith("## "));
     print(`  compaction: ${adopted ? "adopted" : "NOT adopted"}, notes rev ${trigger.rev} -> ${stored.rev}`);
     print(
       `  cut: ${stored.cut_message_id ?? "none"} step ${stored.cut_step ?? "-"} (message ${cutIndex + 1} of ${ids.length})`,
@@ -357,7 +385,10 @@ export async function checkCompaction(
     print(
       `  the decision's answer: message ${decisionIndex + 1}, ${decisionIndex < cutIndex ? "before" : "NOT before"} the cut`,
     );
-    print(`  notes: ${(stored.text ?? "").length} characters, sections: ${sections.join(" | ")}`);
+    print(`  notes: ${(stored.text ?? "").length} characters; each heading with its first line:`);
+    for (const line of outline(stored.text ?? "")) {
+      print(`    ${line}`);
+    }
     const read = v.parse(v.array(v.string()), JSON.parse(stored.read_files));
     print(`  files read: ${read.join(", ") || "none"}`);
     for (const line of events(worker, 0, /prq\.compaction\./)) {

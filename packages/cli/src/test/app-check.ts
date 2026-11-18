@@ -33,19 +33,19 @@ export type AppCheck = (
   print: (line: string) => void,
 ) => Promise<boolean>;
 
-// Runs a check named `name` against the pull request its one argument names, with the settings of
-// packages/server/.dev.vars, and sets the exit code.
-export async function runAppCheck(name: string, check: AppCheck): Promise<void> {
+// Runs a check named `name` against the pull request its one argument names, besides any of the check's `options`, with
+// the settings of packages/server/.dev.vars, and sets the exit code.
+export async function runAppCheck(name: string, check: AppCheck, options: readonly string[] = []): Promise<void> {
   function fail(reason: string): never {
     process.stderr.write(`${name} check: ${reason}\n`);
     process.exit(1);
   }
 
-  // A "--" before the argument (as some package managers pass it) is not an argument.
-  const args = process.argv.slice(2).filter((arg) => arg !== "--");
+  // A "--" before the argument (as some package managers pass it) is not an argument, nor is an option of the check.
+  const args = process.argv.slice(2).filter((arg) => arg !== "--" && !options.includes(arg));
   const target = args.length === 1 ? /^([^/\s]+)\/([^#\s]+)#([1-9][0-9]*)$/.exec(args[0] ?? "") : null;
   if (target === null) {
-    fail(`usage: check:${name} <owner>/<repo>#<number>`);
+    fail(`usage: check:${name} ${options.map((option) => `[${option}] `).join("")}<owner>/<repo>#<number>`);
   }
   const [, owner = "", repo = "", number = ""] = target;
 
