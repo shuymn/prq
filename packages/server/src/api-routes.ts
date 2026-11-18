@@ -19,7 +19,7 @@ import {
 import { Hono } from "hono";
 import * as v from "valibot";
 
-import { type CallBound, errorResponse, invalidRequest } from "./http.ts";
+import { type CallBound, errorResponse, hubCall, invalidRequest } from "./http.ts";
 import { hubStub, prSessionStub } from "./names.ts";
 import { skillRoutes } from "./skill-routes.ts";
 
@@ -78,10 +78,13 @@ export function apiRoutes(bound: CallBound) {
       })
       // The host's instructions for the settings (docs/design.md, Instructions and skills): both prompts, and the
       // registered skills sorted by name. Only reads.
-      .get("/instructions", async (c) => {
-        const call = (async (): Promise<Instructions> => (await hubStub(c.env)).instructions())();
-        return c.json(await bound(call, ROUTE_CALL_MS, "the Hub's instructions"));
-      })
+      .get("/instructions", async (c) =>
+        c.json(
+          await hubCall(bound, c.env, "the Hub's instructions", async (hub): Promise<Instructions> =>
+            hub.instructions(),
+          ),
+        ),
+      )
       // The host's skills: register, update and remove.
       .route("/skills", skillRoutes(bound))
       // Saves a prompt, stored before the answer; the last save wins. A save that lands after the route stopped waiting
@@ -93,8 +96,12 @@ export function apiRoutes(bound: CallBound) {
         async (c) => {
           const { kind } = c.req.valid("param");
           const { text } = c.req.valid("json");
-          const call = (async (): Promise<Prompt | ErrorResponse> => (await hubStub(c.env)).savePrompt(kind, text))();
-          const result = await bound(call, ROUTE_CALL_MS, "the Hub's prompt save");
+          const result = await hubCall(
+            bound,
+            c.env,
+            "the Hub's prompt save",
+            async (hub): Promise<Prompt | ErrorResponse> => hub.savePrompt(kind, text),
+          );
           return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
         },
       )

@@ -4,7 +4,6 @@ import {
   PreviewSkillRequest,
   PreviewUpdateRequest,
   RegisterSkillRequest,
-  ROUTE_CALL_MS,
   type Skill,
   SkillName,
   type SkillUpdatePreview,
@@ -15,12 +14,11 @@ import * as v from "valibot";
 
 import { readGithubAppConfig } from "./config.ts";
 import { type GithubClient, githubFor } from "./github.ts";
-import { type CallBound, errorResponse, invalidRequest } from "./http.ts";
+import { type CallBound, errorResponse, hubCall, invalidRequest } from "./http.ts";
 import { fetchSkill, previewSkill, SkillFailure } from "./instructions/fetch.ts";
 import { parseSkillLink, type SkillLink } from "./instructions/link.ts";
 import { skillChanged } from "./instructions/skills.ts";
 import { log } from "./log.ts";
-import { hubStub } from "./names.ts";
 
 // /api/skills (docs/design.md, Instructions and skills): the host registers, updates and removes skills. A preview reads
 // GitHub and stores nothing; a confirm reads every file by the previewed SHA here in the Worker, so the Hub is never
@@ -56,19 +54,13 @@ async function fromGithub<T>(c: AppContext, phase: string, read: () => Promise<T
   }
 }
 
-type HubStub = Awaited<ReturnType<typeof hubStub>>;
-
 // What an update's preview reads: a ref of the registered repository and path, or a new link.
 type UpdateTarget = { ref: string } | { link: SkillLink };
 
 export function skillRoutes(bound: CallBound) {
-  // A Hub call bounded as each route's: when the bound passes, the route answers 503 and the call keeps running.
-  const hubCall = <T>(c: AppContext, what: string, call: (hub: HubStub) => Promise<T>): Promise<T> =>
-    bound((async () => call(await hubStub(c.env)))(), ROUTE_CALL_MS, what);
-
   // A preview of what an update would pin, beside the registered version: the name must stay.
   const previewUpdate = async (c: AppContext, name: string, target: UpdateTarget, github: GithubClient) => {
-    const current = await hubCall(c, "the Hub's skill", (hub) => hub.skill(name));
+    const current = await hubCall(bound, c.env, "the Hub's skill", (hub) => hub.skill(name));
     if (current === null) {
       return errorResponse(c, "not_found", `no skill named ${name} is registered`);
     }
@@ -102,7 +94,7 @@ export function skillRoutes(bound: CallBound) {
         if (preview instanceof Response) {
           return preview;
         }
-        if ((await hubCall(c, "the Hub's skill", (hub) => hub.skill(preview.name))) !== null) {
+        if ((await hubCall(bound, c.env, "the Hub's skill", (hub) => hub.skill(preview.name))) !== null) {
           return errorResponse(c, "skill_exists", `a skill named ${preview.name} is registered already; update it`);
         }
         return c.json(preview);
@@ -118,8 +110,11 @@ export function skillRoutes(bound: CallBound) {
         if (version instanceof Response) {
           return version;
         }
-        const stored = await hubCall(c, "the Hub's skill registration", async (hub): Promise<Skill | ErrorResponse> =>
-          hub.registerSkill(version),
+        const stored = await hubCall(
+          bound,
+          c.env,
+          "the Hub's skill registration",
+          async (hub): Promise<Skill | ErrorResponse> => hub.registerSkill(version),
         );
         return "error" in stored ? errorResponse(c, stored.error, stored.detail) : c.json(stored, 201);
       })
@@ -160,7 +155,7 @@ export function skillRoutes(bound: CallBound) {
             return github;
           }
           const changed = async () => {
-            const current = await hubCall(c, "the Hub's skill", (hub) => hub.skill(name));
+            const current = await hubCall(bound, c.env, "the Hub's skill", (hub) => hub.skill(name));
             return current?.rev === expectedRev ? null : errorResponse(c, "skill_changed", skillChanged(name));
           };
           const before = await changed();
@@ -171,8 +166,11 @@ export function skillRoutes(bound: CallBound) {
           if (version instanceof Response) {
             return (await changed()) ?? version;
           }
-          const stored = await hubCall(c, "the Hub's skill update", async (hub): Promise<Skill | ErrorResponse> =>
-            hub.updateSkill(version, expectedRev),
+          const stored = await hubCall(
+            bound,
+            c.env,
+            "the Hub's skill update",
+            async (hub): Promise<Skill | ErrorResponse> => hub.updateSkill(version, expectedRev),
           );
           return "error" in stored ? errorResponse(c, stored.error, stored.detail) : c.json(stored);
         },
@@ -180,7 +178,7 @@ export function skillRoutes(bound: CallBound) {
       // Removes whatever version is registered.
       .delete("/:name", vValidator("param", SkillPath, invalidRequest), async (c) => {
         const { name } = c.req.valid("param");
-        const removed = await hubCall(c, "the Hub's skill removal", (hub) => hub.removeSkill(name));
+        const removed = await hubCall(bound, c.env, "the Hub's skill removal", (hub) => hub.removeSkill(name));
         return removed ? c.body(null, 204) : errorResponse(c, "not_found", `no skill named ${name} is registered`);
       })
   );
