@@ -4,7 +4,7 @@
 
 import { createHmac, randomUUID } from "node:crypto";
 
-import { AgentPage, type AgentRow, type PrRef, RetryResponse, sessionName } from "@prq/protocol";
+import { AgentPage, type AgentRow, type PrRef, PrSessionView, RetryResponse, sessionName } from "@prq/protocol";
 import * as v from "valibot";
 
 import { HOST_ID, WEBHOOK_SECRET, type Worker } from "./worker.ts";
@@ -124,15 +124,27 @@ const StoredMessages = v.array(
   }),
 );
 
-// The conversation the session stores, as the UI loads it (get-messages): each message's ID, role and text.
-export async function storedMessages(worker: Worker, pr: PrRef): Promise<{ id: string; role: string; text: string }[]> {
+// The conversation as the UI loads it (get-messages), as the Worker sent it.
+export async function getMessages(worker: Worker, pr: PrRef): Promise<unknown> {
   const res = await fetch(new URL(`/agents/pr-session/${sessionName(pr)}/get-messages`, worker.url()), {
     headers: { "Cf-Access-Jwt-Assertion": await worker.token() },
   });
   if (res.status !== 200) {
     throw new Error(`get-messages answered ${res.status}`);
   }
-  return v.parse(StoredMessages, await res.json()).map(({ id, role, parts }) => ({
+  const body: unknown = await res.json();
+  return body;
+}
+
+// The session's view, as its Durable Object gives it.
+export async function sessionView(worker: Worker, pr: PrRef): Promise<PrSessionView> {
+  const session = await worker.durableObject("PrSession", sessionName(pr));
+  return v.parse(PrSessionView, await session["view"]?.());
+}
+
+// The conversation the session stores, as the UI loads it (get-messages): each message's ID, role and text.
+export async function storedMessages(worker: Worker, pr: PrRef): Promise<{ id: string; role: string; text: string }[]> {
+  return v.parse(StoredMessages, await getMessages(worker, pr)).map(({ id, role, parts }) => ({
     id,
     role,
     text: parts.map((part) => part.text ?? "").join(""),

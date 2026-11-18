@@ -13,10 +13,10 @@ import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
-import { type PrRef, PrSessionView, sessionName } from "@prq/protocol";
+import { type PrRef, type PrSessionView, sessionName } from "@prq/protocol";
 import * as v from "valibot";
 
-import { ask, deliver } from "./pr.ts";
+import { ask, deliver, getMessages, sessionView } from "./pr.ts";
 import type { GithubApp } from "./reconcile.ts";
 import { type ModelSettings, startWorker, type Worker } from "./worker.ts";
 
@@ -196,30 +196,19 @@ async function removeContainer(id: string): Promise<void> {
 
 // --- The session ---
 
-async function view(worker: Worker, pr: PrRef): Promise<PrSessionView> {
-  const session = await worker.durableObject("PrSession", sessionName(pr));
-  return v.parse(PrSessionView, await session["view"]?.());
-}
-
 // The job the predicate picks, once it has ended or JOB_MS passed.
 export async function untilEnded(worker: Worker, pr: PrRef, pick: (job: Job) => boolean): Promise<Job | undefined> {
   const started = Date.now();
-  let job = (await view(worker, pr)).jobs.find(pick);
+  let job = (await sessionView(worker, pr)).jobs.find(pick);
   while (job?.state !== "done" && job?.state !== "failed" && Date.now() - started < JOB_MS) {
     await sleep(POLL_MS);
-    job = (await view(worker, pr)).jobs.find(pick);
+    job = (await sessionView(worker, pr)).jobs.find(pick);
   }
   return job;
 }
 
 async function stored(worker: Worker, pr: PrRef): Promise<v.InferOutput<typeof Stored>> {
-  const res = await fetch(new URL(`/agents/pr-session/${sessionName(pr)}/get-messages`, worker.url()), {
-    headers: { "Cf-Access-Jwt-Assertion": await worker.token() },
-  });
-  if (res.status !== 200) {
-    throw new Error(`get-messages answered ${res.status}`);
-  }
-  return v.parse(Stored, await res.json());
+  return v.parse(Stored, await getMessages(worker, pr));
 }
 
 // The Worker's log events of the workspace and the egress since the given count of lines.

@@ -5,10 +5,10 @@
 
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { MessageMetadata, type PrRef, PrSessionView, sessionName } from "@prq/protocol";
+import { MessageMetadata, type PrRef, type PrSessionView } from "@prq/protocol";
 import * as v from "valibot";
 
-import { ask } from "./pr.ts";
+import { ask, getMessages, sessionView } from "./pr.ts";
 import { type ModelSettings, startWorker, type Worker } from "./worker.ts";
 
 const PR: PrRef = { owner: "acme", repo: "widgets", number: 7 };
@@ -26,24 +26,13 @@ const Stored = v.array(
   }),
 );
 
-async function view(worker: Worker): Promise<PrSessionView> {
-  const session = await worker.durableObject("PrSession", sessionName(PR));
-  return v.parse(PrSessionView, await session["view"]?.());
-}
-
 // The question's job, once the session has made one.
 async function answerJob(worker: Worker): Promise<PrSessionView["jobs"][number] | undefined> {
-  return (await view(worker)).jobs.find((entry) => entry.target.kind === "answer");
+  return (await sessionView(worker, PR)).jobs.find((entry) => entry.target.kind === "answer");
 }
 
 async function stored(worker: Worker): Promise<v.InferOutput<typeof Stored>> {
-  const res = await fetch(new URL(`/agents/pr-session/${sessionName(PR)}/get-messages`, worker.url()), {
-    headers: { "Cf-Access-Jwt-Assertion": await worker.token() },
-  });
-  if (res.status !== 200) {
-    throw new Error(`get-messages answered ${res.status}`);
-  }
-  return v.parse(Stored, await res.json());
+  return v.parse(Stored, await getMessages(worker, PR));
 }
 
 // Asks the question and reports how its job ended. With expectRefusal, the check passes when the provider refused the

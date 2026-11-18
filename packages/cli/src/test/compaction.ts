@@ -15,10 +15,10 @@
 import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { type PrRef, PrSessionView, sessionName } from "@prq/protocol";
+import { type PrRef, type PrSessionView, sessionName } from "@prq/protocol";
 import * as v from "valibot";
 
-import { ask, deliver } from "./pr.ts";
+import { ask, deliver, getMessages, sessionView } from "./pr.ts";
 import type { GithubApp } from "./reconcile.ts";
 import { type ModelSettings, startWorker, type Worker } from "./worker.ts";
 import { readPull, untilEnded, workspaceContainers } from "./workspace.ts";
@@ -75,14 +75,7 @@ async function changedFiles(pr: PrRef): Promise<string[]> {
 
 // The conversation as the UI loads it (get-messages), as it was sent.
 async function messages(worker: Worker, pr: PrRef): Promise<unknown[]> {
-  const res = await fetch(new URL(`/agents/pr-session/${sessionName(pr)}/get-messages`, worker.url()), {
-    headers: { "Cf-Access-Jwt-Assertion": await worker.token() },
-  });
-  if (res.status !== 200) {
-    throw new Error(`get-messages answered ${res.status}`);
-  }
-  const body: unknown = await res.json();
-  return v.parse(v.array(v.unknown()), body);
+  return v.parse(v.array(v.unknown()), await getMessages(worker, pr));
 }
 
 function hash(list: unknown[]): string {
@@ -123,11 +116,6 @@ async function notes(worker: Worker, pr: PrRef): Promise<v.InferOutput<typeof No
     "SELECT text, rev, cut_message_id, cut_step, read_files FROM prq_notes WHERE id = 1",
   );
   return v.parse(NotesRow, row);
-}
-
-async function view(worker: Worker, pr: PrRef): Promise<PrSessionView> {
-  const session = await worker.durableObject("PrSession", sessionName(pr));
-  return v.parse(PrSessionView, await session["view"]?.());
 }
 
 function answerTo(id: string): (job: Job) => boolean {
@@ -197,7 +185,7 @@ async function askUntil(
     if (started !== undefined) {
       return started;
     }
-    const job = (await view(worker, pr)).jobs.find(answerTo(id));
+    const job = (await sessionView(worker, pr)).jobs.find(answerTo(id));
     if (job?.state === "failed") {
       return null;
     }
@@ -321,7 +309,9 @@ export async function checkCompaction(
       const before = await messages(worker, pr);
       const ids = idsOf(before);
       const at =
-        (await view(worker, pr)).jobs.find(answerTo(id))?.state === "done" ? "after its commit" : "at its turn's start";
+        (await sessionView(worker, pr)).jobs.find(answerTo(id))?.state === "done"
+          ? "after its commit"
+          : "at its turn's start";
       const cut = ids.indexOf(cutOf(started));
       const decision = ids.indexOf(decisionAnswer);
       if (cut <= decision) {
@@ -346,7 +336,7 @@ export async function checkCompaction(
     print("step 3: two questions asked while the summary runs");
     await ask(worker, pr, "queued-1", "Which file of this pull request did you read last? Answer with its path only.");
     await ask(worker, pr, "queued-2", RECALL);
-    const waiting = (await view(worker, pr)).jobs.filter(
+    const waiting = (await sessionView(worker, pr)).jobs.filter(
       (job) => answerTo("queued-1")(job) || answerTo("queued-2")(job),
     );
     const notesWhileQueued = await notes(worker, pr);
