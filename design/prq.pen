@@ -8585,29 +8585,7 @@
                               "id": "fcVXj",
                               "name": "agent",
                               "fill": "$color-fg-muted",
-                              "content": "agent-7f3a · since 10:12",
-                              "lineHeight": "$text-small-line-height",
-                              "fontFamily": "$text-small-font-family",
-                              "fontSize": "$text-small-font-size",
-                              "fontWeight": "$text-small-font-weight"
-                            },
-                            {
-                              "id": "cwIII",
-                              "type": "ref",
-                              "ref": "dVG23",
-                              "name": "retry",
-                              "descendants": {
-                                "TrPON": {
-                                  "content": "Retry"
-                                }
-                              }
-                            },
-                            {
-                              "type": "text",
-                              "id": "L3cEEN",
-                              "name": "retry-error",
-                              "fill": "$color-danger-fg",
-                              "content": "Couldn't retry. Try again.",
+                              "content": "cloud · started 10:12",
                               "lineHeight": "$text-small-line-height",
                               "fontFamily": "$text-small-font-family",
                               "fontSize": "$text-small-font-size",
@@ -8692,7 +8670,7 @@
                       "id": "dgjIZ",
                       "name": "meta",
                       "fill": "$color-fg-muted",
-                      "content": "deepseek-chat · 1,204 tokens so far",
+                      "content": "deepseek-chat",
                       "lineHeight": "$text-small-line-height",
                       "fontFamily": "$text-small-font-family",
                       "fontSize": "$text-small-font-size",
@@ -11443,35 +11421,13 @@
                               "id": "f02Qa",
                               "name": "agent",
                               "fill": "$color-fg-muted",
-                              "content": "agent-7f3a · since 10:12",
+                              "content": "cloud · started 10:12",
                               "lineHeight": "$text-small-line-height",
                               "fontFamily": "$text-small-font-family",
                               "fontSize": "$text-small-font-size",
                               "fontWeight": "$text-small-font-weight"
-                            },
-                            {
-                              "id": "dXRrE",
-                              "type": "ref",
-                              "ref": "dVG23",
-                              "name": "retry",
-                              "descendants": {
-                                "TrPON": {
-                                  "content": "Retry"
-                                }
-                              }
                             }
                           ]
-                        },
-                        {
-                          "type": "text",
-                          "id": "a55xbK",
-                          "name": "retry-error",
-                          "fill": "$color-danger-fg",
-                          "content": "Couldn't retry. Try again.",
-                          "lineHeight": "$text-small-line-height",
-                          "fontFamily": "$text-small-font-family",
-                          "fontSize": "$text-small-font-size",
-                          "fontWeight": "$text-small-font-weight"
                         }
                       ]
                     }
@@ -11709,6 +11665,46 @@
                           "fontFamily": "$text-small-font-family",
                           "fontSize": "$text-small-font-size",
                           "fontWeight": "$text-small-font-weight"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "j6ywBx",
+                          "name": "meta",
+                          "gap": "$gap-related",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "aduZw",
+                              "name": "answered",
+                              "gap": "$gap-tight",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "it550",
+                                  "name": "answered-label",
+                                  "fill": "$color-fg-muted",
+                                  "content": "Answered at",
+                                  "lineHeight": "$text-small-line-height",
+                                  "fontFamily": "$text-small-font-family",
+                                  "fontSize": "$text-small-font-size",
+                                  "fontWeight": "$text-small-font-weight"
+                                },
+                                {
+                                  "id": "k7der",
+                                  "type": "ref",
+                                  "ref": "rSY60",
+                                  "name": "sha",
+                                  "descendants": {
+                                    "nVVeD": {
+                                      "content": "a1b2c3d"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          ]
                         }
                       ]
                     }
@@ -13836,7 +13832,7 @@
                           "content": "Couldn't register the skill"
                         },
                         "K6ewc": {
-                          "content": "A skill named review is already registered. Remove it first, or cancel."
+                          "content": "Couldn't reach the server. Try again."
                         },
                         "ZE43w": {
                           "enabled": false
@@ -14279,7 +14275,7 @@
                           "content": "Couldn't apply the update"
                         },
                         "K6ewc": {
-                          "content": "The skill changed since this review. Review the update again."
+                          "content": "The skill changed since this review. Cancel, then choose Review update for a fresh review."
                         },
                         "ZE43w": {
                           "enabled": false
@@ -14307,12 +14303,12 @@
                           }
                         },
                         {
-                          "id": "P0z6Rx",
+                          "id": "zDQPA",
                           "type": "ref",
-                          "ref": "Q9zYwc",
+                          "ref": "j4j1Py",
                           "name": "confirm",
                           "descendants": {
-                            "c3l83T": {
+                            "cMeuW": {
                               "content": "Apply update to e4f5a6b"
                             }
                           }
@@ -18372,12 +18368,6 @@
                         },
                         "f02Qa": {
                           "content": "cloud · started 10:14"
-                        },
-                        "dXRrE": {
-                          "enabled": false
-                        },
-                        "a55xbK": {
-                          "enabled": false
                         }
                       }
                     }
@@ -18528,13 +18518,49 @@
                       "width": "fill_container",
                       "descendants": {
                         "OIkGM": {
-                          "content": "Question at"
+                          "content": "“Can I retry before the 60…”"
+                        },
+                        "i1Lrb": {
+                          "enabled": false
                         },
                         "i1Lrb/nVVeD": {
                           "content": "e4f5a6b"
                         },
-                        "Sz52G": {
-                          "content": "cloud · started 10:14 (1 min)"
+                        "Idyt6": {
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "lJHSd",
+                              "name": "meta",
+                              "width": "fill_container",
+                              "gap": "$gap-tight",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "KIF2A",
+                                  "name": "meta-text",
+                                  "fill": "$color-fg-muted",
+                                  "content": "cloud · started 10:14 (1 min) · at",
+                                  "lineHeight": "$text-small-line-height",
+                                  "fontFamily": "$text-small-font-family",
+                                  "fontSize": "$text-small-font-size",
+                                  "fontWeight": "$text-small-font-weight"
+                                },
+                                {
+                                  "id": "zL43i",
+                                  "type": "ref",
+                                  "ref": "rSY60",
+                                  "name": "workspace",
+                                  "descendants": {
+                                    "nVVeD": {
+                                      "content": "e4f5a6b"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          ]
                         },
                         "n3ksi": {
                           "enabled": false
@@ -19376,7 +19402,10 @@
                       "width": "fill_container",
                       "descendants": {
                         "taL8h": {
-                          "content": "Question at"
+                          "content": "“Does a retry also stop the…”"
+                        },
+                        "OLIpg": {
+                          "enabled": false
                         },
                         "OLIpg/nVVeD": {
                           "content": "e4f5a6b"
@@ -20040,12 +20069,6 @@
                         },
                         "f02Qa": {
                           "content": "cloud · started 10:13"
-                        },
-                        "dXRrE": {
-                          "enabled": false
-                        },
-                        "a55xbK": {
-                          "enabled": false
                         }
                       }
                     },
@@ -20214,13 +20237,49 @@
                       "width": "fill_container",
                       "descendants": {
                         "OIkGM": {
-                          "content": "Question at"
+                          "content": "“Why does a retry issue a…”"
+                        },
+                        "i1Lrb": {
+                          "enabled": false
                         },
                         "i1Lrb/nVVeD": {
                           "content": "e4f5a6b"
                         },
-                        "Sz52G": {
-                          "content": "cloud · started 10:13 (1 min)"
+                        "Idyt6": {
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "uxRxc",
+                              "name": "meta",
+                              "width": "fill_container",
+                              "gap": "$gap-tight",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "agOn9",
+                                  "name": "meta-text",
+                                  "fill": "$color-fg-muted",
+                                  "content": "cloud · started 10:13 (1 min) · at",
+                                  "lineHeight": "$text-small-line-height",
+                                  "fontFamily": "$text-small-font-family",
+                                  "fontSize": "$text-small-font-size",
+                                  "fontWeight": "$text-small-font-weight"
+                                },
+                                {
+                                  "id": "sHHFB",
+                                  "type": "ref",
+                                  "ref": "rSY60",
+                                  "name": "workspace",
+                                  "descendants": {
+                                    "nVVeD": {
+                                      "content": "e4f5a6b"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          ]
                         },
                         "n3ksi": {
                           "enabled": false
@@ -20238,7 +20297,10 @@
                       "width": "fill_container",
                       "descendants": {
                         "taL8h": {
-                          "content": "Question at"
+                          "content": "“Does Retry also work on a…”"
+                        },
+                        "OLIpg": {
+                          "enabled": false
                         },
                         "OLIpg/nVVeD": {
                           "content": "e4f5a6b"
@@ -20829,6 +20891,9 @@
                         },
                         "KbIKX": {
                           "enabled": false
+                        },
+                        "k7der/nVVeD": {
+                          "content": "7a8b9c0"
                         }
                       }
                     }
@@ -21015,13 +21080,49 @@
                       "width": "fill_container",
                       "descendants": {
                         "V0qx1H": {
-                          "content": "Question at"
+                          "content": "“Walk me through every han…”"
+                        },
+                        "IUndT": {
+                          "enabled": false
                         },
                         "IUndT/nVVeD": {
                           "content": "7a8b9c0"
                         },
-                        "cSW5x": {
-                          "content": "Spend limit reached · cloud"
+                        "V2DPCJ": {
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "dxwJe",
+                              "name": "meta",
+                              "width": "fill_container",
+                              "gap": "$gap-tight",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "oV813",
+                                  "name": "meta-text",
+                                  "fill": "$color-fg-muted",
+                                  "content": "Spend limit reached · cloud · at",
+                                  "lineHeight": "$text-small-line-height",
+                                  "fontFamily": "$text-small-font-family",
+                                  "fontSize": "$text-small-font-size",
+                                  "fontWeight": "$text-small-font-weight"
+                                },
+                                {
+                                  "id": "dg4CD",
+                                  "type": "ref",
+                                  "ref": "rSY60",
+                                  "name": "workspace",
+                                  "descendants": {
+                                    "nVVeD": {
+                                      "content": "7a8b9c0"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          ]
                         },
                         "E1jJ3": {
                           "enabled": false
@@ -25834,7 +25935,7 @@
           "alignItems": "center",
           "children": [
             {
-              "id": "wLTbl",
+              "id": "eTHMj",
               "type": "ref",
               "ref": "v80cy",
               "name": "SkillReview update",
@@ -25846,6 +25947,17 @@
                 },
                 "BFF6T": {
                   "enabled": false
+                },
+                "zDQPA": {
+                  "id": "D9Qik",
+                  "type": "ref",
+                  "ref": "Q9zYwc",
+                  "name": "confirm",
+                  "descendants": {
+                    "c3l83T": {
+                      "content": "Apply update to e4f5a6b"
+                    }
+                  }
                 }
               }
             }
@@ -27005,12 +27117,6 @@
                 },
                 "f02Qa": {
                   "content": "cloud · started 10:14"
-                },
-                "dXRrE": {
-                  "enabled": false
-                },
-                "a55xbK": {
-                  "enabled": false
                 }
               }
             }
@@ -27106,12 +27212,6 @@
                 "fcVXj": {
                   "content": "cloud · started 10:14"
                 },
-                "cwIII": {
-                  "enabled": false
-                },
-                "L3cEEN": {
-                  "enabled": false
-                },
                 "RHHz1": {
                   "content": "What changed"
                 },
@@ -27122,7 +27222,7 @@
                   "content": "The previous version stays"
                 },
                 "dgjIZ": {
-                  "content": "deepseek-chat · 1,204 tokens so far"
+                  "content": "deepseek-chat"
                 }
               }
             }
@@ -27706,6 +27806,9 @@
                 },
                 "KbIKX": {
                   "enabled": false
+                },
+                "k7der/nVVeD": {
+                  "content": "7a8b9c0"
                 }
               }
             }
@@ -30602,7 +30705,7 @@
       "y": 19097,
       "descendants": {
         "AhCkq": {
-          "content": "States: detail.send-failed. Guides: accessibility (the failure announced in the assertive region; Discard returns focus to the field; Send aria-disabled, described by the hint), persistent-toast-notifications (the failure stays inline until Try again or Discard), forms, color, icons."
+          "content": "States: detail.send-failed, settled: the history read after the send lacks the question (before that it shows as sent, with Send off and the Reload warning). Guides: accessibility (the failure announced in the assertive region; Discard returns focus to the field; Send aria-disabled, described by the hint), persistent-toast-notifications (the failure stays inline until Try again, Discard or a later history read that holds the question), forms, color, icons."
         }
       }
     },
@@ -30615,7 +30718,7 @@
       "y": 16321,
       "descendants": {
         "AhCkq": {
-          "content": "States: panel.send-failed. Guides: accessibility (the failure announced in the assertive region; Discard returns focus to the field; Send aria-disabled, described by the hint), persistent-toast-notifications (the failure stays inline until Try again or Discard), forms, color, icons, responsive-design (the actions wrap under the status)."
+          "content": "States: panel.send-failed, settled: the history read after the send failed (before that it shows as sent, with Send off and the Reload warning). Guides: accessibility (the failure announced in the assertive region; Discard returns focus to the field; Send aria-disabled, described by the hint), persistent-toast-notifications (the failure stays inline until Try again, Discard or a later history read that holds the question), forms, color, icons, responsive-design (the actions wrap under the status)."
         }
       }
     }
