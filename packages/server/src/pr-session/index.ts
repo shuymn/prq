@@ -1699,21 +1699,24 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       // `previous` when the steps held nothing to summarize.
       const inBatches = async (kind: SummaryKind, steps: readonly Step[], previous: string | null) => {
         let summary = previous;
-        let batch = nextBatch(kind, steps, 0, summary, window, notesOutput);
-        while (batch !== null) {
+        let from = 0;
+        for (;;) {
+          const batch = nextBatch(kind, steps, from, summary, window, notesOutput);
+          if (batch === null) {
+            return summary;
+          }
           summary = await this.#summary(model, batch.request, notesOutput, signal, calls);
-          batch = nextBatch(kind, steps, batch.end, summary, window, notesOutput);
+          from = batch.end;
         }
-        return summary;
       };
       // The history: updated with the steps the cut removed before its turn (the previous summaries fold into it, with
       // the checkpoint of a turn the previous cut fell inside), or left as it was; "No prior history." (Pi's) before any.
       // The summarizer reads the stored summaries only, never the list of files read.
-      const previous = notes.history === null ? null : notesBody(notes.history, notes.turnContext);
-      const history =
-        cut.toSummarize.length > 0
-          ? ((await inBatches("notes", cut.toSummarize, previous)) ?? NO_PRIOR_HISTORY)
-          : (notes.history ?? NO_PRIOR_HISTORY);
+      let history = notes.history ?? NO_PRIOR_HISTORY;
+      if (cut.toSummarize.length > 0) {
+        const previous = notes.history === null ? null : notesBody(notes.history, notes.turnContext);
+        history = (await inBatches("notes", cut.toSummarize, previous)) ?? NO_PRIOR_HISTORY;
+      }
       // The checkpoint of the turn the cut falls inside, updated when the previous cut fell inside it too.
       const turnContext =
         cut.turnPrefix.length === 0
