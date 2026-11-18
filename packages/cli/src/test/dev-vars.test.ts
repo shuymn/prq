@@ -159,6 +159,16 @@ describe("dev-vars write", () => {
     expect((await written()).node["STALE"]).toBeUndefined();
   });
 
+  it("passes git none of its environment but what git needs, which child-process diagnostics would print", async () => {
+    env = { ...env, NODE_DEBUG: "child_process", MODEL_API_KEY: "sentinel-exported-api-key" };
+
+    const result = await devVars("write");
+
+    expect(result.code).toBe(0);
+    // The diagnostics are on, and print git's environment.
+    expect(result.stderr).toMatch(/CHILD_PROCESS \d+: spawn[\s\S]*env: \{[\s\S]*PATH: /);
+  });
+
   it("takes the window from --window over model.env's, or in place of it", async () => {
     const result = await devVars("write", "--window", "20000");
     expect(result.stdout).toContain("window: 20000 tokens (--window)\n");

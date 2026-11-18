@@ -28,8 +28,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, parseEnv } from "node:util";
 
-import { REPOSITORY_VARIABLES } from "../git.ts";
-
 const SERVER = "packages/server";
 const TARGET = `${SERVER}/.dev.vars`;
 // An unfinished write's file, beside the target so a rename replaces it whole; .gitignore's .dev.vars.* covers it.
@@ -39,6 +37,18 @@ const APP = ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID"
 const EXPECTED = [...MODEL, ...APP];
 const NUMBER = /^[1-9][0-9]*$/;
 const USAGE = "usage: dev-vars write [--window <tokens>] | status | remove";
+// All git gets of this process's environment: what it needs to find itself, and the owner's config, which may name more
+// ignore rules. Nothing else, since Node's child-process diagnostics (NODE_DEBUG=child_process) print a child's
+// environment, and none of the variables that would point git at another repository.
+const GIT_ENVIRONMENT = [
+  "PATH",
+  "HOME",
+  "XDG_CONFIG_HOME",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_CONFIG_NOSYSTEM",
+  "GIT_CEILING_DIRECTORIES",
+];
 
 // Only for tests: a secrets directory and a repository of their own.
 const secrets = process.env["PRQ_DEV_VARS_SECRETS"] ?? join(homedir(), ".config", "prq");
@@ -122,11 +132,12 @@ async function settings(window: string | undefined): Promise<Map<string, string>
   return vars;
 }
 
-// Whether git ignores the target in the repository, asked without a variable that would point git at another one.
+// Whether git ignores the target in the repository.
 async function ignored(): Promise<boolean> {
   const env: Record<string, string> = {};
-  for (const [name, value] of Object.entries(process.env)) {
-    if (value !== undefined && !REPOSITORY_VARIABLES.has(name)) {
+  for (const name of GIT_ENVIRONMENT) {
+    const value = process.env[name];
+    if (value !== undefined) {
       env[name] = value;
     }
   }
