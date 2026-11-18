@@ -59,6 +59,10 @@ export const HUB_SCHEMA: SchemaSteps = [
   // of the index on the agent alone.
   "CREATE INDEX prq_claims_agent_claimed ON prq_claims (agent_id, claimed_at)",
   "DROP INDEX prq_claims_agent",
+  // The host's two prompts (docs/design.md, Instructions and skills): each kind's text and when it was saved (epoch ms).
+  // A kind without a row has never been saved and reads as the empty prompt.
+  `CREATE TABLE prq_prompts (
+    kind TEXT PRIMARY KEY CHECK (kind IN ('analysis', 'answer')), text TEXT NOT NULL, saved_at INTEGER NOT NULL)`,
 ];
 
 export const PR_SESSION_SCHEMA: SchemaSteps = [

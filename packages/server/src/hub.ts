@@ -6,6 +6,7 @@ import {
   type ClaimResponse,
   type ErrorResponse,
   type HubView,
+  type Instructions,
   LEDGER_PAGE_BYTES,
   LEDGER_PAGE_ROWS,
   type LedgerPage,
@@ -17,9 +18,12 @@ import {
   MAX_ROW_CLAIMS,
   parseSessionName,
   type PrRef,
+  type Prompt,
+  PromptKind,
   REPO_PAGE_BYTES,
   REPO_PAGE_ROWS,
   type RepoPage,
+  SavePromptRequest,
   WaitRequest,
   waitBoundMs,
   type WaitResponse,
@@ -28,6 +32,7 @@ import { Agent, type Connection } from "agents";
 import * as v from "valibot";
 
 import { refuseSubAgent, sendServerVersion } from "./agents.ts";
+import { readPrompts, writePrompt } from "./instructions/prompts.ts";
 import {
   claimReleasedAt,
   LedgerEntry,
@@ -456,6 +461,24 @@ export class Hub extends Agent<Env, HubView> {
       (row) => row.repo,
     );
     return page ?? overflow("repos", stored[0]?.repo);
+  }
+
+  // --- Instructions ---
+
+  // The host's instructions (docs/design.md, Instructions and skills): both prompts, and the registered skills, of
+  // which there are none yet. A cloud turn reads them at its start, and /cli/context with its first page.
+  async instructions(): Promise<Instructions> {
+    return { prompts: readPrompts(this.#sql), skills: [] };
+  }
+
+  // Replaces a kind's prompt and answers it as stored. A kind or a text the protocol refuses changes nothing.
+  savePrompt(kind: PromptKind, text: string): Prompt | ErrorResponse {
+    if (!v.is(PromptKind, kind) || !v.is(SavePromptRequest, { text })) {
+      return { error: "bad_request", detail: "not a prompt kind and text" };
+    }
+    const saved = writePrompt(this.#sql, kind, text, this.clock());
+    log("prq.prompt.saved", { kind, chars: text.length });
+    return saved;
   }
 
   // The Hub's clock (spied on in tests, which set the time a presence ends and its alarm runs).

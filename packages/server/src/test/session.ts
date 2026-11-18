@@ -49,6 +49,13 @@ export async function newSession(repo: string, sockets: AgentSocket[]) {
 
 export type Session = Awaited<ReturnType<typeof newSession>>;
 
+// Removes the host's prompts: the Hub, and what is saved in it, outlives a test within its file.
+export async function clearPrompts(): Promise<void> {
+  await runInDurableObject(await hub(), (_, state) => {
+    state.storage.sql.exec("DELETE FROM prq_prompts");
+  });
+}
+
 export function hub(): Promise<DurableObjectStub<Hub>> {
   return hubStub(env);
 }

@@ -17,6 +17,15 @@ export {
   waitBoundMs,
 } from "./cli.ts";
 export { ErrorCode, ErrorResponse } from "./errors.ts";
+export {
+  ContextInstructions,
+  Instructions,
+  Prompt,
+  PROMPT_CHARS,
+  PromptKind,
+  Prompts,
+  SavePromptRequest,
+} from "./instructions.ts";
 export { MessageMetadata } from "./messages.ts";
 export {
   AgentId,

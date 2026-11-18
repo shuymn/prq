@@ -38,6 +38,7 @@ describe("schema", () => {
         "prq_claims",
         "prq_repos",
         "prq_ledger_totals",
+        "prq_prompts",
       ];
       for (const table of tables) {
         sql.exec(`DROP TABLE ${table}`);
