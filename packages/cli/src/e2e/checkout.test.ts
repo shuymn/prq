@@ -481,7 +481,10 @@ describe("prq checkout", () => {
     expect(stderrLines(exit)).toEqual([
       `prq: ${jobs} is a symlink, not followed; nothing is written through it (set PRQ_HOME to keep prq's state elsewhere)`,
     ]);
-    expect(await readdir(join(elsewhere, basename(claimed.dir)))).toEqual(["context.json"]);
+    expect((await readdir(join(elsewhere, basename(claimed.dir)))).toSorted()).toEqual([
+      "context.json",
+      "instructions",
+    ]);
     expect(await repo.clone.worktrees()).toEqual(registrations);
   });
 

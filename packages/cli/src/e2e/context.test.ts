@@ -2,12 +2,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, stat, symlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-import { ClaimResponse } from "@prq/protocol";
+import { ClaimResponse, PROMPT_CHARS } from "@prq/protocol";
 import * as v from "valibot";
 import { describe, expect, it } from "vitest";
 
 import { result, stderrLines } from "../test/cli.ts";
-import { ask, push, retry, sha } from "../test/pr.ts";
+import { latch } from "../test/latch.ts";
+import { ask, push, retry, savePrompt, sha } from "../test/pr.ts";
 import { useStack } from "../test/stack.ts";
 
 const stack = useStack();
@@ -37,6 +38,22 @@ async function claim(agentId: string) {
   return v.parse(Claimed, result(exit));
 }
 
+const NEVER_SAVED = { text: "", savedAt: null };
+
+// A published set's directory, as context.json names it.
+const SET = /\/instructions\/set-[0-9A-Za-z]{6}$/;
+
+const Saved = v.looseObject({
+  instructions: v.object({
+    prompts: v.object({ analysis: v.object({ text: v.string() }), answer: v.object({ text: v.string() }) }),
+    dir: v.string(),
+  }),
+});
+
+async function savedContext(dir: string) {
+  return v.parse(Saved, JSON.parse(await readFile(join(dir, "context.json"), "utf8")));
+}
+
 describe("prq context", () => {
   it("an analysis: writes context.json into the claim's directory and names no question", async () => {
     await present("laptop");
@@ -55,6 +72,7 @@ describe("prq context", () => {
       messages: 0,
       context: contextPath,
       question: null,
+      prompt: null,
       answer: join(claimed.dir, "answer.md"),
       next: "checkout",
     });
@@ -63,10 +81,82 @@ describe("prq context", () => {
       pr,
       details: expect.objectContaining({ headSha: sha("h1") }),
       job: claimed.job,
+      instructions: {
+        prompts: { analysis: NEVER_SAVED, answer: NEVER_SAVED },
+        dir: expect.stringMatching(SET),
+      },
       messages: [],
     });
     expect(await exists(join(claimed.dir, "question.md"))).toBe(false);
+    // A blank prompt is no file: the set is published empty.
+    expect(await readdir(join(claimed.dir, "instructions"))).toEqual([
+      basename((await savedContext(claimed.dir)).instructions.dir),
+    ]);
   });
+
+  it("an answer: the answer prompt in a new set each run; a path an earlier run printed still opens", async () => {
+    await present("laptop");
+    // The analysis prompt at its cap, which an answer job never carries into its set.
+    await savePrompt(stack.worker(), "analysis", "a".repeat(PROMPT_CHARS));
+    await savePrompt(stack.worker(), "answer", "Answer in the language of the question.\n");
+    await ask(stack.worker(), pr, "q1", "なぜ?");
+    const claimed = await claim("laptop");
+
+    const first = await stack.run(["context", "--agent-id", "laptop"]);
+    expect(first.code).toBe(0);
+    const firstPrompt = v.parse(v.object({ prompt: v.string() }), result(first)).prompt;
+    expect(firstPrompt).toMatch(new RegExp(`^${claimed.dir}/instructions/set-[0-9A-Za-z]{6}/prompt\\.md$`));
+    expect(await readFile(firstPrompt, "utf8")).toBe("Answer in the language of the question.\n");
+    expect(await readdir(join(firstPrompt, ".."))).toEqual(["prompt.md"]);
+    const firstSaved = await savedContext(claimed.dir);
+    expect(firstSaved.instructions.dir).toBe(join(firstPrompt, ".."));
+    expect(firstSaved.instructions.prompts.analysis.text).toBe("a".repeat(PROMPT_CHARS));
+
+    await savePrompt(stack.worker(), "answer", "Answer briefly.");
+    const second = await stack.run(["context", "--agent-id", "laptop"]);
+    expect(second.code).toBe(0);
+    const secondPrompt = v.parse(v.object({ prompt: v.string() }), result(second)).prompt;
+    expect(secondPrompt).not.toBe(firstPrompt);
+    expect(await readFile(secondPrompt, "utf8")).toBe("Answer briefly.");
+    expect((await savedContext(claimed.dir)).instructions.dir).toBe(join(secondPrompt, ".."));
+    // The first run's path still opens, as that run printed it.
+    expect(await readFile(firstPrompt, "utf8")).toBe("Answer in the language of the question.\n");
+    expect((await readdir(join(claimed.dir, "instructions"))).toSorted()).toEqual(
+      [basename(join(firstPrompt, "..")), basename(join(secondPrompt, ".."))].toSorted(),
+    );
+  });
+
+  it("a later page that fails: exit 1, and context.json and the sets as the earlier run left them", async () => {
+    await present("laptop");
+    await savePrompt(stack.worker(), "answer", "Answer in the language of the question.");
+    // A question larger than a page, so the context takes two.
+    await ask(stack.worker(), pr, "huge-q", "x".repeat(12 * 1024 * 1024));
+    const claimed = await claim("laptop");
+    expect((await stack.run(["context", "--agent-id", "laptop"])).code).toBe(0);
+    const context = await readFile(join(claimed.dir, "context.json"));
+    const sets = await readdir(join(claimed.dir, "instructions"));
+
+    await savePrompt(stack.worker(), "answer", "Answer briefly.");
+    // The first page forwarded as the Worker answers it, the second answered 500.
+    const passed = latch();
+    passed.open();
+    stack
+      .access()
+      .plan("/cli/context", { kind: "hold", answered: latch(), release: passed }, { kind: "reply", status: 500 });
+    const failed = await stack.run(["context", "--agent-id", "laptop"]);
+
+    expect(failed.code).toBe(1);
+    expect(failed.stdout).toBe("");
+    expect(
+      stack
+        .access()
+        .log.filter((entry) => entry.route === "/cli/context")
+        .map((entry) => entry.status)
+        .slice(-2),
+    ).toEqual([200, 500]);
+    expect((await readFile(join(claimed.dir, "context.json"))).equals(context)).toBe(true);
+    expect(await readdir(join(claimed.dir, "instructions"))).toEqual(sets);
+  }, 120_000);
 
   it("a question larger than a page: its parts joined, question.md byte for byte", async () => {
     await present("laptop");

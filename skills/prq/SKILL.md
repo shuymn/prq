@@ -27,10 +27,11 @@ The exit code comes first: the Rules below say what each failure leads to.
    - `next` `answer` (`"saved": true`: an answer to this job is already saved): step 5.
    - `next` `context`: step 4.
 4. **Context.** Run `prq context`. Read the file at its `context` path (the pull request, its details, the job and the
-   conversation) and, for an `answer` job, the question in the file at its `question` path. When its `next` is
-   `checkout`, run `prq checkout` as a background command and go on when it exits (fetching a large repository can
-   take up to 25 minutes). Its `path` is a worktree at the job's commit: read the code there by absolute paths, without
-   `cd`, and leave its files as they are. Then step 5.
+   conversation) and, for an `answer` job, the question in the file at its `question` path. When its `prompt` is a
+   path, read that file too: it is the host's prompt for this kind of job, and what you write in step 5 follows it.
+   When its `next` is `checkout`, run `prq checkout` as a background command and go on when it exits (fetching a large
+   repository can take up to 25 minutes). Its `path` is a worktree at the job's commit: read the code there by
+   absolute paths, without `cd`, and leave its files as they are. Then step 5.
 5. **Answer.** The job's `target.kind` (in each job the commands print, and in `context.json`) says what to write:
    `analysis` a summary of the pull request, `answer` the reply to the question. Write it to the `answer` path the
    commands print (`answer.md` in the job's directory). When the job's directory has no `context.json` yet, do step 4
@@ -55,4 +56,5 @@ The exit code comes first: the Rules below say what each failure leads to.
   job. The one exception is exit 3.
 - `prq claim` runs only at step 3. A claim made while a job is in progress ends that job's claim, and its answer can
   no longer be stored.
-- How an answer reads (language, length, format) follows the host's instructions to this session.
+- How an answer reads (language, length, format) follows the job's prompt (step 4), then the host's instructions to
+  this session.

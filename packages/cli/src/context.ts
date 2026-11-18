@@ -1,18 +1,27 @@
-import type { ContextResponse } from "@prq/protocol";
+import type { ContextInstructions, ContextResponse } from "@prq/protocol";
 
 import { CliError, EXIT } from "./errors.ts";
 
 // A conversation message whole: a message sent in parts, joined.
 type Message = Omit<ContextResponse["messages"][number], "part">;
 
-// A job's context as prq context writes it: the last page's pull request, details and job, and the whole conversation.
-export type Context = Pick<ContextResponse, "pr" | "details" | "job"> & { messages: Message[] };
+// A job's context as prq context writes it: the last page's pull request, details and job, the first page's
+// instructions, and the whole conversation.
+export type Context = Pick<ContextResponse, "pr" | "details" | "job"> & {
+  instructions: ContextInstructions;
+  messages: Message[];
+};
 
-// Reads every page of a job's context, from no cursor until nextCursor is null, and joins each message sent in parts
-// (docs/design.md, Owner and jobs). A part continues the message collected so far: the same ID, its offset where the
-// collected text ends and the same whole length; the message is whole when its text reaches that length. Pages that do
-// not join that way (a part out of order, a page sequence that ends inside a message, a cursor seen before) end the
-// command, as does a page of another job.
+// A server that sends no instructions has no prompts to send.
+const NO_INSTRUCTIONS: ContextInstructions = {
+  prompts: { analysis: { text: "", savedAt: null }, answer: { text: "", savedAt: null } },
+};
+
+// Reads every page of a job's context, from no cursor until nextCursor is null, keeps the first page's instructions,
+// and joins each message sent in parts (docs/design.md, Owner and jobs). A part continues the message collected so far:
+// the same ID, its offset where the collected text ends and the same whole length; the message is whole when its text
+// reaches that length. Pages that do not join that way (a part out of order, a page sequence that ends inside a
+// message, a cursor seen before) end the command, as does a page of another job.
 export async function readContext(
   jobId: string,
   page: (cursor: string | undefined) => Promise<ContextResponse>,
@@ -21,11 +30,13 @@ export async function readContext(
   const cursors = new Set<string>();
   let open: { message: Message; length: number } | null = null;
   let cursor: string | undefined;
+  let instructions: ContextInstructions | undefined;
   for (;;) {
     const response = await page(cursor);
     if (response.job.jobId !== jobId) {
       throw broken(`a page is of job ${response.job.jobId}, not ${jobId}`);
     }
+    instructions ??= response.instructions ?? NO_INSTRUCTIONS;
     for (const { part, ...message } of response.messages) {
       if (open !== null) {
         const collected = open.message.text.length;
@@ -54,7 +65,7 @@ export async function readContext(
         throw broken(`the last page ends inside message ${JSON.stringify(open.message.id)}`);
       }
       const { pr, details, job } = response;
-      return { pr, details, job, messages };
+      return { pr, details, job, instructions, messages };
     }
     if (cursors.has(response.nextCursor)) {
       throw broken("a page names a cursor already read");
