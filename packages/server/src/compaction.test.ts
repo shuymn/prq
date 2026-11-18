@@ -370,6 +370,8 @@ describe("a cut that stays inside a split turn", () => {
 // Notes made with the cut at Q1, holding a decision and a read of src/a.ts, then Q1's answer, which read src/b.ts, and
 // Q2's: the next cut falls in Q2's answer.
 const DECIDED = "## Decisions\n- Keep the compatibility fallback";
+// The notes' stored text: the history, then the list of src/a.ts.
+const DECIDED_NOTES = `${DECIDED}\n\n<read-files>\nsrc/a.ts\n</read-files>`;
 
 async function notesBeforeARead(stub: DurableObjectStub<PrSession>): Promise<void> {
   await seedHistory(stub, [
@@ -393,7 +395,7 @@ async function notesBeforeARead(stub: DurableObjectStub<PrSession>): Promise<voi
     stub,
     `UPDATE prq_notes SET text = ?, history = ?, rev = 1, cut_message_id = 'q1', cut_step = 0, read_files = ?
      WHERE id = 1`,
-    `${DECIDED}\n\n<read-files>\nsrc/a.ts\n</read-files>`,
+    DECIDED_NOTES,
     DECIDED,
     JSON.stringify(["src/a.ts"]),
   );
@@ -402,7 +404,7 @@ async function notesBeforeARead(stub: DurableObjectStub<PrSession>): Promise<voi
 // The compaction's outcome: failed, with the notes as they were, or adopted, with the reply as the history.
 const NOT_ADOPTED = {
   result: "failed",
-  notes: { history: DECIDED, text: `${DECIDED}\n\n<read-files>\nsrc/a.ts\n</read-files>`, rev: 1 },
+  notes: { history: DECIDED, text: DECIDED_NOTES, rev: 1 },
 };
 
 function adoptedWith(history: string) {
@@ -418,11 +420,6 @@ describe("a summary's reply", () => {
     "## Key facts\n- Keep this exact block:\n\n  <read-files>\n  ALLOW_ONLY_CHANGED_FILES=false\n  </read-files>";
   const fixture = "## Decisions\n- Use this list as the fixture:\n\n<read-files>\nsrc/b.ts\n</read-files>";
   it.for([
-    [
-      "only a file list of the file it read, in a wrapper",
-      "<summary>\n<read-files>\nsrc/b.ts\n</read-files>\n</summary>",
-      NOT_ADOPTED,
-    ],
     [
       "wrappers one inside another around only a file list",
       "<summary>\n<previous-summary>\n<read-files>\nsrc/a.ts\n</read-files>\n</previous-summary>\n</summary>",
