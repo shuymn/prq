@@ -18,6 +18,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { type PrRef, type PrSessionView, sessionName } from "@prq/protocol";
 import * as v from "valibot";
 
+import { contextLimit } from "../../../server/src/pr-session/context-budget.ts";
 import { ask, deliver, getMessages, sessionView } from "./pr.ts";
 import type { GithubApp } from "./reconcile.ts";
 import { type ModelSettings, startWorker, type Worker } from "./worker.ts";
@@ -52,11 +53,6 @@ const NotesRow = v.object({
 const Messages = v.array(v.looseObject({ id: v.string(), role: v.string() }));
 
 type Job = PrSessionView["jobs"][number];
-
-// The window less the reserve (packages/server/src/pr-session/context-budget.ts): the context is compacted above it.
-function contextLimit(window: number): number {
-  return window - Math.min(16_384, Math.floor(window / 8));
-}
 
 // The pull request's changed files, largest first, from GitHub's API without credentials (a public repository).
 async function changedFiles(pr: PrRef): Promise<string[]> {
