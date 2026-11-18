@@ -550,12 +550,7 @@ export class Hub extends Agent<Env, HubView> {
   }
 
   #writeSkill(version: SkillVersion): Skill {
-    writeSkill(this.#sql, version, this.#next(), this.clock());
-    const skill = readSkill(this.#sql, version.name);
-    if (skill === null) {
-      throw new Error("the skill just written is not stored");
-    }
-    return skill;
+    return writeSkill(this.#sql, version, this.#next(), this.clock());
   }
 
   // Removes a skill, whatever its revision: its row and files. Whether one was registered.

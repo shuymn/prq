@@ -125,30 +125,34 @@ export function readSkillFiles(sql: SqlStorage, name: string): SkillFileContent[
 }
 
 // Writes the version under its name at rev: the row (registered_at kept when the name is registered), and exactly its
-// files, those of the version before removed. The caller runs it inside a transaction with its own checks.
-export function writeSkill(sql: SqlStorage, version: SkillVersion, rev: number, now: number): void {
-  sql.exec(
-    `INSERT INTO prq_skills (name, rev, owner, repo, path, ref, ref_kind, sha, description, allowed_tools, license,
+// files, those of the version before removed; the stored skill. The caller runs it inside a transaction with its own
+// checks.
+export function writeSkill(sql: SqlStorage, version: SkillVersion, rev: number, now: number): Skill {
+  const row = sql
+    .exec<SkillRow>(
+      `INSERT INTO prq_skills (name, rev, owner, repo, path, ref, ref_kind, sha, description, allowed_tools, license,
        registered_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (name) DO UPDATE SET rev = excluded.rev, owner = excluded.owner, repo = excluded.repo,
        path = excluded.path, ref = excluded.ref, ref_kind = excluded.ref_kind, sha = excluded.sha,
        description = excluded.description, allowed_tools = excluded.allowed_tools, license = excluded.license,
-       updated_at = excluded.updated_at`,
-    version.name,
-    rev,
-    version.source.owner,
-    version.source.repo,
-    version.source.path,
-    version.ref.name,
-    version.ref.kind,
-    version.sha,
-    version.description,
-    version.allowedTools === null ? null : JSON.stringify(version.allowedTools),
-    version.license,
-    now,
-    now,
-  );
+       updated_at = excluded.updated_at
+     RETURNING *`,
+      version.name,
+      rev,
+      version.source.owner,
+      version.source.repo,
+      version.source.path,
+      version.ref.name,
+      version.ref.kind,
+      version.sha,
+      version.description,
+      version.allowedTools === null ? null : JSON.stringify(version.allowedTools),
+      version.license,
+      now,
+      now,
+    )
+    .one();
   sql.exec("DELETE FROM prq_skill_files WHERE name = ?", version.name);
   for (const file of version.files) {
     const { buffer, byteOffset, byteLength } = file.content;
@@ -162,6 +166,7 @@ export function writeSkill(sql: SqlStorage, version: SkillVersion, rev: number, 
       buffer.slice(byteOffset, byteOffset + byteLength),
     );
   }
+  return skillOf(row);
 }
 
 // Removes a skill's row and files; whether it was registered.
