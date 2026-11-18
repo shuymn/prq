@@ -471,7 +471,7 @@ export function requestTokens(request: SummaryRequest, maxOutputTokens: number):
 // The request for the steps from `from` on that fit one summary call: as many as fit, oldest first, so that the request
 // with its output allowance is within the window (requestTokens). A step that alone does not fit fails the compaction:
 // cutting it would drop its end from both the summary and the kept part. `end` is the index after the last step taken;
-// the request is null when those steps hold nothing to summarize.
+// null when the steps from `from` on hold nothing to summarize.
 export function nextBatch(
   kind: SummaryKind,
   steps: readonly Step[],
@@ -479,7 +479,7 @@ export function nextBatch(
   previous: string | null,
   window: number,
   maxOutputTokens: number,
-): { request: SummaryRequest | null; end: number } {
+): { request: SummaryRequest; end: number } | null {
   const limit = (window - maxOutputTokens) * CHARS_PER_TOKEN - SUMMARIZATION_SYSTEM_PROMPT.length;
   let room = limit - summaryRequest(kind, "", previous).prompt.length;
   const texts: string[] = [];
@@ -501,7 +501,7 @@ export function nextBatch(
     }
     break;
   }
-  return { request: texts.length === 0 ? null : summaryRequest(kind, texts.join(STEP_SEPARATOR), previous), end };
+  return texts.length === 0 ? null : { request: summaryRequest(kind, texts.join(STEP_SEPARATOR), previous), end };
 }
 
 // The notes from the summaries: the history's, a split turn's checkpoint after it, and the list of files read, made

@@ -184,18 +184,6 @@ function wholeSecondFrom(ms: number): Date {
 type ContextMeasure = { tokens: number | null; through: string; notesRev: number };
 type AfterTurn = { measure: ContextMeasure; compact: CloudModel | null };
 
-// What #summarizeSteps summarizes: the kind of summary, its steps, the summary they update, and the window and output
-// allowance each request fits.
-type SummaryBatches = {
-  kind: SummaryKind;
-  steps: readonly Step[];
-  previous: string | null;
-  window: number;
-  maxOutputTokens: number;
-  // The file lists the compaction renders, removed from a summary that echoes one (compaction.ts, fileLists).
-  lists: readonly string[];
-};
-
 // What a compaction's summary calls used, for its log.
 type SummaryCalls = { calls: number; inputTokens: number; outputTokens: number; cachedInputTokens: number };
 
@@ -1708,15 +1696,20 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     const lists = fileLists(notes.readFiles, files);
     let summaries: { history: string; turnContext: string | null };
     try {
+      // Steps summarized in requests that each fit the window, oldest first, each updating the summary before it (the
+      // first updates `previous`, or makes a new one without): one call per batch. The last batch's summary, or
+      // `previous` when the steps held nothing to summarize.
+      const inBatches = async (kind: SummaryKind, steps: readonly Step[], previous: string | null) => {
+        let summary = previous;
+        let batch = nextBatch(kind, steps, 0, summary, window, notesOutput);
+        while (batch !== null) {
+          summary = await this.#summary(model, batch.request, lists, notesOutput, signal, calls);
+          batch = nextBatch(kind, steps, batch.end, summary, window, notesOutput);
+        }
+        return summary;
+      };
       // The history: updated with the steps the cut removed before its turn (the previous notes fold into it, with the
       // checkpoint of a turn the previous cut fell inside), or left as it was; "No prior history." (Pi's) before any.
-      const inBatches = (kind: SummaryKind, steps: readonly Step[], previous: string | null) =>
-        this.#summarizeSteps(
-          model,
-          { kind, steps, previous, window, maxOutputTokens: notesOutput, lists },
-          signal,
-          calls,
-        );
       const history =
         cut.toSummarize.length > 0
           ? ((await inBatches("notes", cut.toSummarize, notes.text)) ?? NO_PRIOR_HISTORY)
@@ -1755,27 +1748,6 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       ms: Date.now() - started,
     });
     return adopted === null ? "discarded" : "adopted";
-  }
-
-  // Steps summarized in requests that each fit the window, oldest first, each updating the summary before it (the first
-  // updates `previous`, or makes a new one without): one call per batch. The summary of the last batch, or `previous`
-  // when the steps held nothing to summarize.
-  async #summarizeSteps(
-    model: CloudModel,
-    { kind, steps, previous, window, maxOutputTokens, lists }: SummaryBatches,
-    signal: AbortSignal | undefined,
-    calls: SummaryCalls,
-  ): Promise<string | null> {
-    let summary = previous;
-    for (let from = 0; from < steps.length;) {
-      const batch = nextBatch(kind, steps, from, summary, window, maxOutputTokens);
-      if (batch.request === null) {
-        break;
-      }
-      summary = await this.#summary(model, batch.request, lists, maxOutputTokens, signal, calls);
-      from = batch.end;
-    }
-    return summary;
   }
 
   // One summary, tried once more when it fails, unless the caller's signal ended it.

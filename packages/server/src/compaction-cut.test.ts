@@ -254,7 +254,7 @@ describe("the files read", () => {
 
 // The prompt of a summary request for Q1, a new summary or an update of `previous`, as compaction builds it.
 function promptOf(kind: SummaryKind, previous: string | null): string {
-  return nextBatch(kind, projectionSteps([Q1]), 0, previous, 1_048_576, 8192).request?.prompt ?? "";
+  return nextBatch(kind, projectionSteps([Q1]), 0, previous, 1_048_576, 8192)?.request.prompt ?? "";
 }
 
 describe("the prompts", () => {
