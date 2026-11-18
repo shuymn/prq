@@ -10,6 +10,18 @@ export function hubStub(env: Env) {
   return getAgentByName(env.Hub, HUB_NAME);
 }
 
+// A call to the Hub, the stub's lookup included, under `bound` (withTimeout, or a route's injected bound) at `ms`:
+// when the bound passes, the caller stops waiting and the call keeps running.
+export function boundedHubCall<T>(
+  bound: (call: PromiseLike<T>, ms: number, what: string) => Promise<T>,
+  env: Env,
+  ms: number,
+  what: string,
+  call: (hub: Awaited<ReturnType<typeof hubStub>>) => PromiseLike<T>,
+): Promise<T> {
+  return bound((async () => call(await hubStub(env)))(), ms, what);
+}
+
 export function prSessionStub(env: Env, ref: PrRef) {
   return getAgentByName(env.PrSession, sessionName(ref));
 }

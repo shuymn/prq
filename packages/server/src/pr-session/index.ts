@@ -27,7 +27,7 @@ import { readGithubAppConfig, readModelConfig } from "../config.ts";
 import { type GithubClient, githubFor, githubStatus, type PullRequestState } from "../github.ts";
 import type { SkillRead } from "../instructions/skills.ts";
 import { errorName, log } from "../log.ts";
-import { hubStub, workspaceStub } from "../names.ts";
+import { boundedHubCall, hubStub, workspaceStub } from "../names.ts";
 import { migrate, PR_SESSION_SCHEMA } from "../schema.ts";
 import { SerialQueue, WaitTimeout, withTimeout } from "../wait.ts";
 import {
@@ -1570,8 +1570,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   // The host's instructions as the Hub holds them now (spied on in tests): both prompts, and the skills. The bound
   // covers the Hub's start.
   protected async readInstructions(): Promise<Instructions> {
-    const read = hubStub(this.env).then((hub) => hub.instructions());
-    return v.parse(Instructions, await withTimeout(read, HUB_CALL_MS, "the Hub's instructions"));
+    const what = "the Hub's instructions";
+    const read = boundedHubCall(withTimeout, this.env, HUB_CALL_MS, what, async (hub): Promise<unknown> =>
+      hub.instructions(),
+    );
+    return v.parse(Instructions, await read);
   }
 
   // What a turn's skill tools read with: the skills the turn listed, and the Hub's read of a skill's path at the
@@ -1582,10 +1585,8 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       kind: job.target.kind,
       read: async (name, rev, path, signal) => {
         const call = () =>
-          withTimeout(
-            hubStub(this.env).then(async (hub): Promise<unknown> => hub.skillRead(name, rev, path)),
-            HUB_CALL_MS,
-            "the Hub's skill read",
+          boundedHubCall(withTimeout, this.env, HUB_CALL_MS, "the Hub's skill read", async (hub): Promise<unknown> =>
+            hub.skillRead(name, rev, path),
           );
         return v.parse(SkillReadAnswer, await raceAbort(call, signal)) satisfies SkillRead;
       },
