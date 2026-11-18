@@ -265,6 +265,18 @@ describe("dev-vars write", () => {
     });
     expect(await readdir(join(repo, "packages", "server"))).toStrictEqual([]);
   });
+
+  it("refuses a temporary file git does not ignore, with the target ignored", async () => {
+    await writeFile(join(repo, ".gitignore"), "/packages/server/.dev.vars\n");
+
+    expect(await devVars("write")).toMatchObject({
+      code: 1,
+      stdout: "",
+      stderr:
+        "dev-vars: git does not ignore the temporary file beside packages/server/.dev.vars, so it is not written\n",
+    });
+    expect(await readdir(join(repo, "packages", "server"))).toStrictEqual([]);
+  });
 });
 
 describe("dev-vars status", () => {

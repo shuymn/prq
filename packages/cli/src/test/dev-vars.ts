@@ -138,8 +138,8 @@ async function settings(window: string | undefined): Promise<Map<string, string>
   return vars;
 }
 
-// Whether git ignores the target in the repository.
-async function ignored(): Promise<boolean> {
+// Whether git ignores a path of the repository.
+async function ignored(path: string): Promise<boolean> {
   const env: Record<string, string> = {};
   for (const name of GIT_ENVIRONMENT) {
     const value = process.env[name];
@@ -148,7 +148,7 @@ async function ignored(): Promise<boolean> {
     }
   }
   return new Promise((resolve, reject) => {
-    execFile("git", ["-C", root, "check-ignore", "--quiet", "--", TARGET], { env }, (error) => {
+    execFile("git", ["-C", root, "check-ignore", "--quiet", "--", path], { env }, (error) => {
       if (error === null || error.code === 1) {
         resolve(error === null);
       } else {
@@ -162,14 +162,18 @@ async function write(window: string | undefined): Promise<void> {
   if (window !== undefined && !NUMBER.test(window)) {
     throw new Refusal("--window takes a whole number of tokens");
   }
-  if (!(await ignored())) {
+  // Written in full to a file of its own, readable by the owner alone, then renamed over the target: git ignores both.
+  const temporaryName = `${TEMPORARY}${randomBytes(8).toString("hex")}`;
+  const temporary = join(root, SERVER, temporaryName);
+  if (!(await ignored(TARGET))) {
     throw new Refusal(`git does not ignore ${TARGET}, so it is not written`);
+  }
+  if (!(await ignored(`${SERVER}/${temporaryName}`))) {
+    throw new Refusal(`git does not ignore the temporary file beside ${TARGET}, so it is not written`);
   }
   const vars = await settings(window);
   const text = [...vars].map(([name, value]) => `${name}='${value}'\n`).join("");
 
-  // Written in full to a file of its own, readable by the owner alone, then renamed over the target.
-  const temporary = join(root, SERVER, `${TEMPORARY}${randomBytes(8).toString("hex")}`);
   const handle = await open(temporary, "wx", 0o600);
   try {
     try {
