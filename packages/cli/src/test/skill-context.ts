@@ -46,7 +46,7 @@ type Sentinel = { key: string; line: string };
 // A skill call as answer 1 made it: the tool, the skill, and the skill's commit and revision then.
 type SkillCall = { tool: string; name: string; sha: string; rev: number };
 // What the turn after the last removal checks against: answer 1's skill calls.
-export type ContextState = { calls: SkillCall[]; sentinels: Sentinel[] };
+type ContextState = { calls: SkillCall[]; sentinels: Sentinel[] };
 
 function bodyKey(name: string): string {
   return `body of ${name}`;

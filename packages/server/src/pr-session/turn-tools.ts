@@ -19,7 +19,7 @@ import { WORKSPACE_CALL_MS } from "./workspace.ts";
 // no tool reaches the provider uncounted.
 
 // Which tools a turn is offered.
-export type Offered = { workspace: boolean; skills: boolean };
+type Offered = { workspace: boolean; skills: boolean };
 
 function byName<T>([a]: [string, T], [b]: [string, T]): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -58,7 +58,7 @@ export const TURN_LOOP = {
   timeout: { ...STREAM_TIMEOUT, toolMs: WORKSPACE_CALL_MS },
 };
 
-export type ToolLoop = {
+type ToolLoop = {
   tools: ToolSet;
   prepareStep: (options: { stepNumber: number }) => PrepareStepResult<ToolSet> | undefined;
   onLanguageModelCallEnd: (event: Pick<LanguageModelCallEndEvent, "usage" | "content">) => void;
