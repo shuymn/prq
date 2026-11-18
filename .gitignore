@@ -19,6 +19,7 @@ dist/
 
 # Test and coverage output
 coverage/
+test-output/
 
 # Logs
 npm-debug.log*

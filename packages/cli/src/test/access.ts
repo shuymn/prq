@@ -2,13 +2,14 @@
 // does for a service token, it checks CF-Access-Client-Id and CF-Access-Client-Secret, removes them and forwards the
 // request with a signed Cf-Access-Jwt-Assertion; a bad token gets 403 with an HTML body and no Prq-Version. It is also
 // the tests' wait point and fault injector: per route, the next requests can be answered here, held, cut off or
-// rewritten (Plan), and every request is logged.
+// rewritten (Plan), and every request is logged. Next to it, the browser's door (door.ts) forwards a browser's requests
+// and WebSockets with the application's token, as Access does for the host signed in.
 
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { Socket } from "node:net";
 import { text } from "node:stream/consumers";
 
+import { type Door, type DoorEntry, startDoor } from "./door.ts";
 import type { Latch } from "./latch.ts";
 import type { Worker } from "./worker.ts";
 
@@ -46,6 +47,9 @@ type LogEntry = {
 
 export type Access = {
   url: string;
+  // The browser's door to the Worker (door.ts), and the requests it forwarded.
+  door: string;
+  doorLog(): DoorEntry[];
   clientId: string;
   clientSecret: string;
   mode: Mode;
@@ -66,10 +70,12 @@ export async function startAccess(worker: Worker): Promise<Access> {
   const clientSecret = randomBytes(32).toString("hex");
   const queued = new Map<string, Plan[]>();
   const persistent = new Map<string, Plan>();
-  const sockets = new Set<Socket>();
+  let door: Door | undefined;
 
   const access: Access = {
     url: "",
+    door: "",
+    doorLog: () => door?.log ?? [],
     clientId,
     clientSecret,
     mode: "forward",
@@ -82,6 +88,7 @@ export async function startAccess(worker: Worker): Promise<Access> {
     },
     log: [],
     clear() {
+      door?.log.splice(0);
       queued.clear();
       persistent.clear();
       access.log.length = 0;
@@ -89,10 +96,11 @@ export async function startAccess(worker: Worker): Promise<Access> {
       access.serverVersion = null;
     },
     async close() {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+      const closed = new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+      server.closeAllConnections();
+      await Promise.all([door?.close(), closed]);
     },
   };
 
@@ -229,16 +237,20 @@ export async function startAccess(worker: Worker): Promise<Access> {
   const server = createServer((req, res) => {
     handle(req, res).catch(() => res.destroy());
   });
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-  });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (address === null || typeof address === "string") {
+    server.close();
     throw new Error("the stand-in is not listening on a port");
   }
   access.url = `http://127.0.0.1:${address.port}`;
+  try {
+    door = await startDoor(worker);
+  } catch (error) {
+    server.close();
+    throw error;
+  }
+  access.door = door.url;
   return access;
 }
 

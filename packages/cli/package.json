@@ -22,6 +22,7 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "jose": "catalog:",
+    "playwright": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:",
