@@ -751,12 +751,19 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
   /api/skills/preview` (`409 skill_exists` when the name is registered), `POST /api/skills`, `POST
   /api/skills/:name/preview` (the new version beside the current one), `PUT /api/skills/:name` (with `expectedRev`),
   `DELETE /api/skills/:name`; `GET /api/instructions` lists the skills sorted by name. A refusal answers 400, 404, 409,
-  422 (`invalid_skill`) or 503 with the reason the settings show. A turn does not use skills yet.
+  422 (`invalid_skill`) or 503 with the reason the settings show.
 - **Context budget.** Only each skill's `name` and `description` stay in the model context. The body and the files it
   refers to are loaded on demand through two tools: `activate_skill(name)` returns the `SKILL.md` body, and
-  `read_skill_resource(name, path)` returns a file inside that skill's directory (path-checked, so it cannot leave it).
-  Injecting every `SKILL.md` body into every turn was rejected because the cost grows with the number of skills,
-  whether or not they are used.
+  `read_skill_resource(name, path)` returns a file inside that skill's directory (path-checked, so it cannot leave it),
+  once the skill was activated in the same turn. Injecting every `SKILL.md` body into every turn was rejected because
+  the cost grows with the number of skills, whether or not they are used. A skill tool's input and result reach the
+  model only in the turn that called it: a later turn reads each call as a short marker, so a turn that needs the skill
+  again activates it again. What the model wrote itself (its prose, another tool's input) is kept as any text is, a
+  quoted line of a skill included (see [Model context](#model-context)).
+- **A turn holds the skills it listed.** A cloud turn reads the skill list (name, description, revision) with its
+  prompt, once at its start, and every skill call of the turn reads that revision: a skill updated or removed
+  meanwhile answers that its current version applies from the next question (or summary), so pages and files of two
+  versions never meet in one turn.
 - **When a skill is used is the model's decision**, made from the descriptions and the two prompts. The core has no
   dedicated step for any skill.
 - **Scripts run in the cloud workspace.** A skill's script runs in the workspace container (its image includes `python3`) and only
@@ -797,12 +804,14 @@ or an analysis's task.
   the alternative; they drop the results committed after the question was stored and keep earlier open questions.
 - **The job's own part.** An answer's question is read by the job's target, never as the last user message. An
   analysis gets the task "Summarize the pull request at head `<sha>`.", which is not stored. Before them comes the
-  system prompt, what changes least first (see [Caching](#caching)): the core's lines, the host's prompt of the job's
-  kind (in `<host-instructions>` tags; nothing when it is blank), the pull request and its details (or that no webhook
-  has arrived), and the job (the head an analysis summarizes, or the commit an answer is about, or that no push has
-  been seen yet).
+  system prompt, what changes least first (see [Caching](#caching)): the core's lines, the skill list (with a skill
+  registered: the core's one line on how skills are activated, then one JSON record `{"name", "description"}` per
+  skill, sorted by name, so a description holding a line break or a tag stays inside its string), the host's prompt of
+  the job's kind (in `<host-instructions>` tags; nothing when it is blank), the pull request and its details (or that
+  no webhook has arrived), and the job (the head an analysis summarizes, or the commit an answer is about, or that no
+  push has been seen yet).
 - **The instruction prefix.** The system message and the definitions of the tools the turn is offered are the turn's
-  prefix. The host's prompt in it is read once, at the turn's start; the pull request's facts are read again after an
+  prefix. The host's prompt and the skill list in it are read once, at the turn's start; the pull request's facts are read again after an
   at-start compaction, which a delivery may have changed meanwhile, and the first request and the workspace's base
   follow them. Compaction shrinks the conversation, never the prefix, so the numbers compaction decides by count it
   (characters ÷ 3):
@@ -856,10 +865,14 @@ never summarized, and once answered it enters the kept part with its answer, whe
   context (the prefix, the notes, the kept part and what came after) until a model call measures it. A call whose tools
   were withdrawn left their definitions out: its measurement is kept under the instruction part without them, and a
   turn under the same instruction part counts it with its own definitions estimated on top. The prefix is
-  compared by a SHA-256 of the system message's instruction part (the core's lines and the host's prompt) and the tool
-  definitions; the pull request's facts and the job's line are left out, since they change with every head and job
-  while their size barely does, and a fingerprint holding them would never let an answer reuse the count of the
-  analysis before it.
+  compared by a SHA-256 of the system message's instruction part (the core's lines, the skill list and the host's
+  prompt) and the tool definitions, so a skill registered, removed or described anew is estimated too; the pull
+  request's facts and the job's line are left out, since they change with every head and job while their size barely
+  does, and a fingerprint holding them would never let an answer reuse the count of the analysis before it. A turn
+  whose result holds a skill tool call keeps no measurement: its requests held results that every later turn reads as
+  markers (see Status lines and markers below), so its measurement would overstate the next count (at a 16,384-token
+  window, a measured 12,000-character page would leave the next turn no room for its tools), and the count after it
+  is the estimate on the markers. A context-length refusal is recorded as before.
 - **Tools.** A job with a workspace commit reads the code through four tools, each a git command at that commit, so a
   path resolves in the commit's tree only and a symlink is its link text, never followed: `list_files` (the paths, all
   or under a path), `read_file` (a file with line numbers), `grep` (an extended regular expression, each match as
@@ -867,7 +880,39 @@ never summarized, and once answered it enters the kept part with its answer, whe
   patch; when the history does not reach the merge base, the two tips, and the result says so). What a tool takes from
   the model follows `--end-of-options` or `--`, so it is never read as an option. A failure (a missing path, a bad
   pattern, a workspace that did not answer) comes back to the model as `error: …` text, and the turn goes on. A question
-  asked before any push has no workspace commit and gets no tools.
+  asked before any push has no workspace commit and gets no git tools.
+- **Skill tools.** While a skill is registered, a turn is also offered `activate_skill` and `read_skill_resource`,
+  with or without a workspace: before the first push an author can still have a skill's prose instructions applied,
+  with no code to read and no script run. A turn's tools are one set, decided at its start from its workspace and its
+  skill list and sorted by name: its definitions are the ones the prefix counts, its fingerprints hash and its requests
+  carry, so no tool reaches the provider uncounted. `activate_skill` returns the `SKILL.md` body (the frontmatter
+  removed, nothing rewritten) in pages, as `read_file` pages a file, the first page after a header naming the skill's
+  repository and path, how its files are read, and that its scripts do not run here; the pages join into the body
+  exactly, its final line end included. The rest of the body or file from the call's start is shown whole when its
+  result, status line and header included, fits the room left; only a page that does not end it keeps room for its
+  continuation note, so a short skill fits a room too small for a page. A start that leaves nothing of a nonempty body
+  is an error and activates nothing. `read_skill_resource` reads a file
+  of a skill activated earlier in the turn, with line numbers (a binary file as its size), or lists a directory (`.`
+  for all of it); it refuses a skill not activated in the turn, `SKILL.md` (read through activation), and a path the
+  skill-path validator refuses or that names nothing stored. A skill counts as activated only once a page of its body
+  was delivered, decided when the call ends: a call that waited on the Hub while a parallel result took the room
+  delivers nothing and activates nothing. Each call reads the Hub at the turn's revision within 10 s and the tool
+  call's abort; a failure is `error: …` text and the turn goes on. Logs name each call by its skill, revision, commit,
+  path and characters (`prq.skill.activated`, `prq.skill.read`), never its text.
+- **Status lines and markers.** Once a skill call has resolved its skill at the turn's revision, its result starts with
+  a line the server writes: `[<tool> skill <name> at <sha> rev <rev>: <outcome>]`, the outcome `read`, `no room`
+  (nothing delivered for lack of room) or `error` (a refusal or a failure after resolution). It is composed last, after
+  the final room check, so it says what the model received. A result without one is an error found before the skill
+  resolved (a name the turn did not list, a revision that moved) or the SDK's error state. In every turn after the one
+  that made it, a skill tool call is read as a marker: its input is the skill's name alone and its result
+  `[<tool> of skill <name> at <sha7> rev <rev> in an earlier turn: <outcome>; activate the skill again to use it]`,
+  the commit, revision and outcome read from the status line alone (the result's first line matched whole, so nothing
+  after it can stand in for it; without one, `no room` for the no-room notice and `error` otherwise, at `unknown`).
+  No argument, path or text of the result reaches it. The same view is what the turn sends, what the context count
+  and the at-start cut are taken on, and what a summary request carries, so a skill tool's input and result, which can
+  hold the skill's own rules on headings and layout, never reach the notes. Only skill tool parts become markers: an
+  answer or another tool's input that quotes a line of a skill is kept, counted and summarized like any other text. The
+  stored history keeps the results as they were (the UI shows them).
 - **Pages.** A tool result is at most 12,000 characters. A longer output comes in pages, and a note at the end of a
   page says where the next one starts: a line, and a character inside a line longer than a page, so any part of a
   large file or of a minified line can be reached. The output before a page is read and dropped as it streams, never
@@ -946,7 +991,8 @@ never summarized, and once answered it enters the kept part with its answer, whe
 - The notes are language-neutral: the compaction prompt does not ask for a particular language, and the prompts for
   analysis and answers decide how the final text reads. A summary request carries neither of the host's prompts: they
   live only in a turn's system message, which is never stored, so a prompt such as "use no headings" reaches the
-  summarizer only through the answers written under it.
+  summarizer only through the answers written under it. It carries no skill tool's input or result either: each skill
+  tool call is its marker there.
 - Notes come from compaction, which runs on the cloud model inside cloud turns, so a local session has none: a local
   agent reads the whole conversation through `prq context` and manages its own window.
 
@@ -1056,7 +1102,8 @@ Server:
   then the pull request's facts (the same for every job at a head), and last the job's line, the only part that
   changes per job. The tool definitions are a field of their own whose place the provider decides. The analysis notes
   follow, and messages and tool results (including skill activations) are appended after them, keeping earlier steps
-  as they were. A prefix still misses after a prompt or skill edit, a switch between the analysis and answer prompts,
+  as they were within a turn; an earlier turn's skill result is its marker in a later turn, so a later turn's prefix
+  matches only up to the first one. A prefix still misses after a prompt or skill edit, a switch between the analysis and answer prompts,
   the removal of reasoning at the end of a turn, a compaction, or the provider's eviction. Savings are judged from the
   provider's reported cache hits, not assumed.
 - **Workspace.** A container starts from empty each time (see [Workspace (cloud)](#workspace-cloud)); a checkout cache
@@ -1217,8 +1264,10 @@ prq/
 │  │   │   │   ├─ compaction.ts  compaction: the cut, the summary prompts (Pi's) and calls
 │  │   │   │   ├─ notes.ts       the analysis notes and the context count as stored
 │  │   │   │   ├─ prefix.ts      a turn's instruction prefix: its size and fingerprint
-│  │   │   │   ├─ projection.ts  what a job's model reads of the conversation
-│  │   │   │   ├─ tools.ts       the cloud agent's tools and the turn's loop
+│  │   │   │   ├─ projection.ts  what a job's model reads of the conversation, earlier skill results as markers
+│  │   │   │   ├─ tools.ts       the cloud agent's git tools and the bounds every tool result keeps
+│  │   │   │   ├─ skill-tools.ts the skill tools, their status lines and an earlier turn's markers
+│  │   │   │   ├─ turn-tools.ts  a turn's one set of tools, their definitions and the turn's loop
 │  │   │   │   ├─ room.ts        how much a turn may still read: the window less the newest measured request
 │  │   │   │   ├─ pages.ts       a page of a command's output, from any line or character
 │  │   │   │   ├─ workspace.ts   what the tools call: the workspace's client and its bounds
@@ -1248,7 +1297,7 @@ prq/
 │          ├─ answer.ts          the answer prq submit sends: answer.md, checked before any request
 │          ├─ commands/          one module per command
 │          ├─ e2e/               the compiled binary against the real Worker
-│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`), manual checks of a cloud question, of head reconciliation, of the workspace container, of compaction and of skill registration (`pnpm run check:cloud`, `check:reconcile`, `check:workspace`, `check:compaction`, `check:skills`)
+│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`), manual checks of a cloud question, of head reconciliation, of the workspace container, of compaction and of skills (`pnpm run check:cloud`, `check:reconcile`, `check:workspace`, `check:compaction`, `check:skills`)
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
 ├─ .claude/skills/verify-prq/  running the local stack with scripted jobs for a local agent, and reading its request log
 ├─ docs/                   design.md, decisions.md, ui.md, spikes.md
@@ -1296,10 +1345,13 @@ Only a deployment can show these.
 - **Compaction at real context lengths.** Compaction was exercised with a deliberately small window (20,000 tokens, also
   through the Worker against the real provider: `check:compaction`); its behavior with a real context length, how often
   it runs, and the answers' quality after it on real pull requests are not measured.
-- **Skills.** Fetching a skill at a pinned commit and storing it in the Hub has run against real GitHub only through the
-  Worker in wrangler's local runtime (`check:skills`, a public skill of about 2 MB through an installation on another
-  account), not on a deployment. Not built yet: whether models choose to activate a skill from its description alone,
-  running a script under `allowed-tools` in the workspace container, and materializing skills into a local job
-  directory.
+- **Skills.** Fetching a skill at a pinned commit and storing it in the Hub, and cloud turns that list skills, have run
+  against real GitHub only through the Worker in wrangler's local runtime (`check:skills`: a public skill of about 2 MB
+  through an installation on another account, and turns under a scripted model), not on a deployment. Whether a model
+  activates a skill is observed, not required (`check:skills <pull request>`): with DeepSeek flash, an answer prompt
+  naming the skill activated it in 4 of 6 answers, and one also stating the step in 5 of 6. How a host words its prompt
+  for a model is the host's to tune. Whether models activate a skill from its description alone is not measured. Not
+  built yet: running a script under `allowed-tools` in the workspace container, and materializing skills into a local
+  job directory.
 - **Browser client.** `useAgentChat` with a local owner (an appended answer, reconnection) was exercised through a Node
   client speaking the same WebSocket protocol, not in a browser.
