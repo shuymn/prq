@@ -9,6 +9,7 @@
     "check:cloud": "node src/test/cloud-check.ts",
     "check:compaction": "node src/test/compaction-check.ts",
     "check:reconcile": "node src/test/reconcile-check.ts",
+    "check:skills": "node src/test/skills-check.ts",
     "check:workspace": "node src/test/workspace-check.ts",
     "dev-vars": "node src/test/dev-vars.ts",
     "typecheck": "tsc",
@@ -23,7 +24,8 @@
     "jose": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "wrangler": "catalog:"
+    "wrangler": "catalog:",
+    "yaml": "catalog:"
   },
   "engines": {
     "node": "24.x"
