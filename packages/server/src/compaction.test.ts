@@ -8,7 +8,6 @@ import {
   assembleNotes,
   notesText,
   requestTokens,
-  SUMMARIZATION_SYSTEM_PROMPT,
   TURN_PREFIX_UPDATE_PROMPT,
   UPDATE_SUMMARIZATION_PROMPT,
 } from "./pr-session/compaction.ts";
@@ -708,15 +707,14 @@ describe("the gate", () => {
   });
 });
 
-// Each summary call's request with its output allowance, estimated as compaction sizes it (characters ÷ 3) and as a
-// provider counting characters ÷ 5 would: both within the window.
+// Each summary call's request with its output allowance, estimated as compaction sizes it (characters ÷ 3): within the
+// window. A provider counting fewer tokens per character counts it lower still.
 function expectWithinWindow(model: ScriptedModel): void {
   for (const call of model.calls.filter(isSummaryCall)) {
     const prompt = summaryPrompt(call);
     const output = call.maxOutputTokens ?? 0;
     expect(output).toBe(4000);
     expect(requestTokens({ kind: "notes", prompt }, output)).toBeLessThanOrEqual(WINDOW);
-    expect(Math.ceil((SUMMARIZATION_SYSTEM_PROMPT.length + prompt.length) / 5) + output).toBeLessThanOrEqual(WINDOW);
   }
 }
 
