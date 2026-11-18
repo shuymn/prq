@@ -54,21 +54,22 @@ start), and keeps those rows. "New push not summarized" does not count, nor does
 
 One pull request: the summary, its history by version, the conversation and the jobs.
 
-| Element         | Data                                                                                                                                                                                                                                 | Narrow panel                  |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-| Header          | repository, number, title, PR state, link to the PR on GitHub                                                                                                                                                                        | **[panel]** (compact)         |
-| Summary         | the latest analysis (Markdown), the head SHA it was made for, the time, the model and tokens used                                                                                                                                    | **[panel]**                   |
-| Version history | the analyses by head SHA: SHA (short), time, status (done, running, waiting, failed, superseded). Selecting one only displays that summary; questions are still answered at the latest analyzed head unless the question names a SHA | **[panel]** (as a menu)       |
-| Conversation    | the full history in saved order: user questions and answers. Each answer is paired with its question and shows the SHA it was answered against, the model and the tokens used                                                        | **[panel]**                   |
-| Composer        | text field and send. Disabled or marked while the connection is down                                                                                                                                                                 | **[panel]**                   |
-| Job status      | for each job: target (head SHA or question), state (waiting, running, failed, done), and while running the agent ID that is working on it and since when                                                                             | **[panel]** (inline, compact) |
-| Job actions     | "Retry" on any claimed or failed job, at any time (the host may know the local session is gone before the stalled mark appears)                                                                                                      | **[panel]**                   |
+| Element         | Data                                                                                                                                                                                                                                                                                         | Narrow panel                  |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| Header          | repository, number, title, PR state, link to the PR on GitHub                                                                                                                                                                                                                                | **[panel]** (compact)         |
+| Summary         | the latest analysis (Markdown), the head SHA it was made for, the time, the model and tokens used                                                                                                                                                                                            | **[panel]**                   |
+| Version history | the analyses by head SHA: SHA (short), time, status (done, running, waiting, failed, superseded). Selecting one only displays that summary; questions are answered at the latest analyzed head, and a question about another commit is answered by reading that commit, in the answer's text | **[panel]** (as a menu)       |
+| Conversation    | the full history in saved order: user questions and answers. Each answer is paired with its question and shows the SHA it was answered against, the model and the tokens used                                                                                                                | **[panel]**                   |
+| Composer        | text field and send. Disabled or marked while the connection is down                                                                                                                                                                                                                         | **[panel]**                   |
+| Job status      | for each job: target (head SHA or question), state (waiting, running, failed, done), and while running the agent ID working on it, or cloud, and since when                                                                                                                                  | **[panel]** (inline, compact) |
+| Job actions     | "Retry" on any claimed or failed job, at any time (the host may know the local session is gone before the stalled mark appears)                                                                                                                                                              | **[panel]**                   |
 
 States:
 
 - **Empty:** the PR is known but has no analysis yet. Shows that an analysis is queued or why it has not started.
 - **Loading:** history is loading; the summary area keeps its place.
-- **Streaming:** an answer or summary arrives in parts. Shows partial text and no duplicate send.
+- **Streaming:** an answer or summary arrives in parts. Shows partial text and no duplicate send. Streaming runs in
+  the cloud: its line says cloud and when the turn started, without Retry, since a running cloud job cannot be retried.
 - **Waiting for a local agent:** a question or analysis is saved but no local agent is present. Says it is waiting for
   an agent, since when, and that it continues when one returns; the composer still accepts questions.
 - **Running on an agent:** shows which agent ID and since when.
@@ -82,7 +83,11 @@ States:
   list.
 - **Disconnected:** the connection to the server dropped; shows reconnecting and keeps the last known content. When
   reconnecting keeps failing (for example, the sign-in expired), it offers Reload.
-- **Question about an earlier version:** the user names a SHA in the question; the answer shows that SHA.
+- **Question about an earlier version:** the user names a SHA in the question; the answer shows the SHA it was
+  answered at and addresses the named commit in its text.
+- **Send failed:** the server refused a question, or the connection dropped before it was saved. The question stays in
+  the conversation, marked "Not sent" (or "Couldn't confirm it was sent" when checking failed), with Try again and
+  Discard. Send stays off until it is saved or discarded, the draft stays editable, and reloading the page loses it.
 
 Layout:
 

@@ -8334,13 +8334,24 @@
                                   }
                                 }
                               ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "ZpyzX",
+                              "name": "retry-error",
+                              "fill": "$color-danger-fg",
+                              "content": "Couldn't retry. Try again.",
+                              "lineHeight": "$text-small-line-height",
+                              "fontFamily": "$text-small-font-family",
+                              "fontSize": "$text-small-font-size",
+                              "fontWeight": "$text-small-font-weight"
                             }
                           ]
                         }
                       ]
                     },
                     {
-                      "id": "r7OtN",
+                      "id": "pGxVe",
                       "type": "ref",
                       "ref": "eXxzZ",
                       "name": "notice",
@@ -8352,8 +8363,36 @@
                         "K6ewc": {
                           "content": "The provider refused the call: spend limit reached. The summary below is for e4f5a6b."
                         },
-                        "O7etnb/TrPON": {
-                          "content": "Retry"
+                        "ZE43w": {
+                          "type": "frame",
+                          "id": "F30WQO",
+                          "name": "actions",
+                          "gap": "$gap-related",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "id": "VXH66",
+                              "type": "ref",
+                              "ref": "dVG23",
+                              "name": "retry",
+                              "descendants": {
+                                "TrPON": {
+                                  "content": "Retry"
+                                }
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "id": "rgCuK",
+                              "name": "retry-error",
+                              "fill": "$color-danger-fg",
+                              "content": "Couldn't retry. Try again.",
+                              "lineHeight": "$text-small-line-height",
+                              "fontFamily": "$text-small-font-family",
+                              "fontSize": "$text-small-font-size",
+                              "fontWeight": "$text-small-font-weight"
+                            }
+                          ]
                         }
                       }
                     },
@@ -8562,6 +8601,17 @@
                                   "content": "Retry"
                                 }
                               }
+                            },
+                            {
+                              "type": "text",
+                              "id": "L3cEEN",
+                              "name": "retry-error",
+                              "fill": "$color-danger-fg",
+                              "content": "Couldn't retry. Try again.",
+                              "lineHeight": "$text-small-line-height",
+                              "fontFamily": "$text-small-font-family",
+                              "fontSize": "$text-small-font-size",
+                              "fontWeight": "$text-small-font-weight"
                             }
                           ]
                         }
@@ -9863,6 +9913,17 @@
                           "content": "Retry"
                         }
                       }
+                    },
+                    {
+                      "type": "text",
+                      "id": "KIoss",
+                      "name": "retry-error",
+                      "fill": "$color-danger-fg",
+                      "content": "Couldn't retry. Try again.",
+                      "lineHeight": "$text-small-line-height",
+                      "fontFamily": "$text-small-font-family",
+                      "fontSize": "$text-small-font-size",
+                      "fontWeight": "$text-small-font-weight"
                     }
                   ]
                 },
@@ -9944,6 +10005,17 @@
                           "content": "Retry"
                         }
                       }
+                    },
+                    {
+                      "type": "text",
+                      "id": "e6WcJ",
+                      "name": "retry-error",
+                      "fill": "$color-danger-fg",
+                      "content": "Couldn't retry. Try again.",
+                      "lineHeight": "$text-small-line-height",
+                      "fontFamily": "$text-small-font-family",
+                      "fontSize": "$text-small-font-size",
+                      "fontWeight": "$text-small-font-weight"
                     }
                   ]
                 },
@@ -10020,6 +10092,17 @@
                           "content": "Retry"
                         }
                       }
+                    },
+                    {
+                      "type": "text",
+                      "id": "uHWPW",
+                      "name": "retry-error",
+                      "fill": "$color-danger-fg",
+                      "content": "Couldn't retry. Try again.",
+                      "lineHeight": "$text-small-line-height",
+                      "fontFamily": "$text-small-font-family",
+                      "fontSize": "$text-small-font-size",
+                      "fontWeight": "$text-small-font-weight"
                     }
                   ]
                 },
@@ -10192,108 +10275,129 @@
                     "width": "size.panel"
                   },
                   "width": 360,
+                  "layout": "vertical",
                   "gap": "$gap-related",
                   "padding": [
                     0,
                     "$inset-control-md"
                   ],
-                  "alignItems": "center",
                   "children": [
                     {
                       "type": "frame",
-                      "id": "ySmJS",
-                      "name": "info",
+                      "id": "lmtMs",
+                      "name": "row",
                       "width": "fill_container",
-                      "layout": "vertical",
                       "gap": "$gap-related",
+                      "alignItems": "center",
                       "children": [
                         {
                           "type": "frame",
-                          "id": "bYoDG",
-                          "name": "line",
+                          "id": "ySmJS",
+                          "name": "info",
                           "width": "fill_container",
+                          "layout": "vertical",
                           "gap": "$gap-related",
-                          "alignItems": "center",
                           "children": [
                             {
                               "type": "frame",
-                              "id": "aFxlC",
-                              "name": "main",
+                              "id": "bYoDG",
+                              "name": "line",
                               "width": "fill_container",
                               "gap": "$gap-related",
                               "alignItems": "center",
                               "children": [
                                 {
                                   "type": "frame",
-                                  "id": "iPzoC",
-                                  "name": "target",
-                                  "gap": "$gap-tight",
+                                  "id": "aFxlC",
+                                  "name": "main",
+                                  "width": "fill_container",
+                                  "gap": "$gap-related",
                                   "alignItems": "center",
                                   "children": [
                                     {
-                                      "type": "text",
-                                      "id": "OIkGM",
-                                      "name": "target-label",
-                                      "fill": "$color-fg-muted",
-                                      "content": "Analysis of",
-                                      "lineHeight": "$text-small-line-height",
-                                      "fontFamily": "$text-small-font-family",
-                                      "fontSize": "$text-small-font-size",
-                                      "fontWeight": "$text-small-font-weight"
+                                      "type": "frame",
+                                      "id": "iPzoC",
+                                      "name": "target",
+                                      "gap": "$gap-tight",
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "OIkGM",
+                                          "name": "target-label",
+                                          "fill": "$color-fg-muted",
+                                          "content": "Analysis of",
+                                          "lineHeight": "$text-small-line-height",
+                                          "fontFamily": "$text-small-font-family",
+                                          "fontSize": "$text-small-font-size",
+                                          "fontWeight": "$text-small-font-weight"
+                                        },
+                                        {
+                                          "id": "i1Lrb",
+                                          "type": "ref",
+                                          "ref": "rSY60",
+                                          "name": "sha"
+                                        }
+                                      ]
                                     },
                                     {
-                                      "id": "i1Lrb",
+                                      "id": "Ywnjm",
                                       "type": "ref",
-                                      "ref": "rSY60",
-                                      "name": "sha"
+                                      "ref": "C8Kxyz",
+                                      "name": "status"
                                     }
                                   ]
-                                },
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "Idyt6",
+                              "name": "meta-row",
+                              "width": "fill_container",
+                              "gap": "$gap-related",
+                              "alignItems": "center",
+                              "children": [
                                 {
-                                  "id": "Ywnjm",
-                                  "type": "ref",
-                                  "ref": "C8Kxyz",
-                                  "name": "status"
+                                  "type": "text",
+                                  "id": "Sz52G",
+                                  "name": "meta",
+                                  "fill": "$color-fg-muted",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "agent-7f3a · running since 10:02 (12 min)",
+                                  "lineHeight": "$text-small-line-height",
+                                  "fontFamily": "$text-small-font-family",
+                                  "fontSize": "$text-small-font-size",
+                                  "fontWeight": "$text-small-font-weight"
                                 }
                               ]
                             }
                           ]
                         },
                         {
-                          "type": "frame",
-                          "id": "Idyt6",
-                          "name": "meta-row",
-                          "width": "fill_container",
-                          "gap": "$gap-related",
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "Sz52G",
-                              "name": "meta",
-                              "fill": "$color-fg-muted",
-                              "textGrowth": "fixed-width",
-                              "width": "fill_container",
-                              "content": "agent-7f3a · running since 10:02 (12 min)",
-                              "lineHeight": "$text-small-line-height",
-                              "fontFamily": "$text-small-font-family",
-                              "fontSize": "$text-small-font-size",
-                              "fontWeight": "$text-small-font-weight"
+                          "id": "n3ksi",
+                          "type": "ref",
+                          "ref": "dVG23",
+                          "name": "retry",
+                          "descendants": {
+                            "TrPON": {
+                              "content": "Retry"
                             }
-                          ]
+                          }
                         }
                       ]
                     },
                     {
-                      "id": "n3ksi",
-                      "type": "ref",
-                      "ref": "dVG23",
-                      "name": "retry",
-                      "descendants": {
-                        "TrPON": {
-                          "content": "Retry"
-                        }
-                      }
+                      "type": "text",
+                      "id": "qaOKv",
+                      "name": "retry-error",
+                      "fill": "$color-danger-fg",
+                      "content": "Couldn't retry. Try again.",
+                      "lineHeight": "$text-small-line-height",
+                      "fontFamily": "$text-small-font-family",
+                      "fontSize": "$text-small-font-size",
+                      "fontWeight": "$text-small-font-weight"
                     }
                   ]
                 },
@@ -10308,113 +10412,134 @@
                     "width": "size.panel"
                   },
                   "width": 360,
+                  "layout": "vertical",
                   "gap": "$gap-related",
                   "padding": [
                     0,
                     "$inset-control-md"
                   ],
-                  "alignItems": "center",
                   "children": [
                     {
                       "type": "frame",
-                      "id": "O1rCr",
-                      "name": "info",
+                      "id": "aUfb7",
+                      "name": "row",
                       "width": "fill_container",
-                      "layout": "vertical",
                       "gap": "$gap-related",
+                      "alignItems": "center",
                       "children": [
                         {
                           "type": "frame",
-                          "id": "Jsyuz",
-                          "name": "line",
+                          "id": "O1rCr",
+                          "name": "info",
                           "width": "fill_container",
+                          "layout": "vertical",
                           "gap": "$gap-related",
-                          "alignItems": "center",
                           "children": [
                             {
                               "type": "frame",
-                              "id": "REk61",
-                              "name": "main",
+                              "id": "Jsyuz",
+                              "name": "line",
                               "width": "fill_container",
                               "gap": "$gap-related",
                               "alignItems": "center",
                               "children": [
                                 {
                                   "type": "frame",
-                                  "id": "y63XJ",
-                                  "name": "target",
-                                  "gap": "$gap-tight",
+                                  "id": "REk61",
+                                  "name": "main",
+                                  "width": "fill_container",
+                                  "gap": "$gap-related",
                                   "alignItems": "center",
                                   "children": [
                                     {
-                                      "type": "text",
-                                      "id": "ewRMP",
-                                      "name": "target-label",
-                                      "fill": "$color-fg-muted",
-                                      "content": "Analysis of",
-                                      "lineHeight": "$text-small-line-height",
-                                      "fontFamily": "$text-small-font-family",
-                                      "fontSize": "$text-small-font-size",
-                                      "fontWeight": "$text-small-font-weight"
+                                      "type": "frame",
+                                      "id": "y63XJ",
+                                      "name": "target",
+                                      "gap": "$gap-tight",
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "ewRMP",
+                                          "name": "target-label",
+                                          "fill": "$color-fg-muted",
+                                          "content": "Analysis of",
+                                          "lineHeight": "$text-small-line-height",
+                                          "fontFamily": "$text-small-font-family",
+                                          "fontSize": "$text-small-font-size",
+                                          "fontWeight": "$text-small-font-weight"
+                                        },
+                                        {
+                                          "id": "wTPUE",
+                                          "type": "ref",
+                                          "ref": "rSY60",
+                                          "name": "sha"
+                                        }
+                                      ]
                                     },
                                     {
-                                      "id": "wTPUE",
+                                      "id": "QTL5f",
                                       "type": "ref",
-                                      "ref": "rSY60",
-                                      "name": "sha"
+                                      "ref": "rTc86",
+                                      "name": "status",
+                                      "descendants": {
+                                        "aAUMF": {
+                                          "content": "Possibly stalled"
+                                        }
+                                      }
                                     }
                                   ]
-                                },
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "FtRR4",
+                              "name": "meta-row",
+                              "width": "fill_container",
+                              "gap": "$gap-related",
+                              "alignItems": "center",
+                              "children": [
                                 {
-                                  "id": "QTL5f",
-                                  "type": "ref",
-                                  "ref": "rTc86",
-                                  "name": "status",
-                                  "descendants": {
-                                    "aAUMF": {
-                                      "content": "Possibly stalled"
-                                    }
-                                  }
+                                  "type": "text",
+                                  "id": "p6eRA",
+                                  "name": "meta",
+                                  "fill": "$color-fg-muted",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "agent-7f3a · no result after 64 min",
+                                  "lineHeight": "$text-small-line-height",
+                                  "fontFamily": "$text-small-font-family",
+                                  "fontSize": "$text-small-font-size",
+                                  "fontWeight": "$text-small-font-weight"
                                 }
                               ]
                             }
                           ]
                         },
                         {
-                          "type": "frame",
-                          "id": "FtRR4",
-                          "name": "meta-row",
-                          "width": "fill_container",
-                          "gap": "$gap-related",
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "p6eRA",
-                              "name": "meta",
-                              "fill": "$color-fg-muted",
-                              "textGrowth": "fixed-width",
-                              "width": "fill_container",
-                              "content": "agent-7f3a · no result after 64 min",
-                              "lineHeight": "$text-small-line-height",
-                              "fontFamily": "$text-small-font-family",
-                              "fontSize": "$text-small-font-size",
-                              "fontWeight": "$text-small-font-weight"
+                          "id": "vEaHj",
+                          "type": "ref",
+                          "ref": "dVG23",
+                          "name": "retry",
+                          "descendants": {
+                            "TrPON": {
+                              "content": "Retry"
                             }
-                          ]
+                          }
                         }
                       ]
                     },
                     {
-                      "id": "vEaHj",
-                      "type": "ref",
-                      "ref": "dVG23",
-                      "name": "retry",
-                      "descendants": {
-                        "TrPON": {
-                          "content": "Retry"
-                        }
-                      }
+                      "type": "text",
+                      "id": "atpXc",
+                      "name": "retry-error",
+                      "fill": "$color-danger-fg",
+                      "content": "Couldn't retry. Try again.",
+                      "lineHeight": "$text-small-line-height",
+                      "fontFamily": "$text-small-font-family",
+                      "fontSize": "$text-small-font-size",
+                      "fontWeight": "$text-small-font-weight"
                     }
                   ]
                 },
@@ -10429,108 +10554,129 @@
                     "width": "size.panel"
                   },
                   "width": 360,
+                  "layout": "vertical",
                   "gap": "$gap-related",
                   "padding": [
                     0,
                     "$inset-control-md"
                   ],
-                  "alignItems": "center",
                   "children": [
                     {
                       "type": "frame",
-                      "id": "owo8E",
-                      "name": "info",
+                      "id": "fdemD",
+                      "name": "row",
                       "width": "fill_container",
-                      "layout": "vertical",
                       "gap": "$gap-related",
+                      "alignItems": "center",
                       "children": [
                         {
                           "type": "frame",
-                          "id": "G8uYl3",
-                          "name": "line",
+                          "id": "owo8E",
+                          "name": "info",
                           "width": "fill_container",
+                          "layout": "vertical",
                           "gap": "$gap-related",
-                          "alignItems": "center",
                           "children": [
                             {
                               "type": "frame",
-                              "id": "RBEzx",
-                              "name": "main",
+                              "id": "G8uYl3",
+                              "name": "line",
                               "width": "fill_container",
                               "gap": "$gap-related",
                               "alignItems": "center",
                               "children": [
                                 {
                                   "type": "frame",
-                                  "id": "A54BV",
-                                  "name": "target",
-                                  "gap": "$gap-tight",
+                                  "id": "RBEzx",
+                                  "name": "main",
+                                  "width": "fill_container",
+                                  "gap": "$gap-related",
                                   "alignItems": "center",
                                   "children": [
                                     {
-                                      "type": "text",
-                                      "id": "V0qx1H",
-                                      "name": "target-label",
-                                      "fill": "$color-fg-muted",
-                                      "content": "Analysis of",
-                                      "lineHeight": "$text-small-line-height",
-                                      "fontFamily": "$text-small-font-family",
-                                      "fontSize": "$text-small-font-size",
-                                      "fontWeight": "$text-small-font-weight"
+                                      "type": "frame",
+                                      "id": "A54BV",
+                                      "name": "target",
+                                      "gap": "$gap-tight",
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "V0qx1H",
+                                          "name": "target-label",
+                                          "fill": "$color-fg-muted",
+                                          "content": "Analysis of",
+                                          "lineHeight": "$text-small-line-height",
+                                          "fontFamily": "$text-small-font-family",
+                                          "fontSize": "$text-small-font-size",
+                                          "fontWeight": "$text-small-font-weight"
+                                        },
+                                        {
+                                          "id": "IUndT",
+                                          "type": "ref",
+                                          "ref": "rSY60",
+                                          "name": "sha"
+                                        }
+                                      ]
                                     },
                                     {
-                                      "id": "IUndT",
+                                      "id": "klu8o",
                                       "type": "ref",
-                                      "ref": "rSY60",
-                                      "name": "sha"
+                                      "ref": "skTPQ",
+                                      "name": "status"
                                     }
                                   ]
-                                },
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "V2DPCJ",
+                              "name": "meta-row",
+                              "width": "fill_container",
+                              "gap": "$gap-related",
+                              "alignItems": "center",
+                              "children": [
                                 {
-                                  "id": "klu8o",
-                                  "type": "ref",
-                                  "ref": "skTPQ",
-                                  "name": "status"
+                                  "type": "text",
+                                  "id": "cSW5x",
+                                  "name": "meta",
+                                  "fill": "$color-fg-muted",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Step limit reached · agent-7f3a",
+                                  "lineHeight": "$text-small-line-height",
+                                  "fontFamily": "$text-small-font-family",
+                                  "fontSize": "$text-small-font-size",
+                                  "fontWeight": "$text-small-font-weight"
                                 }
                               ]
                             }
                           ]
                         },
                         {
-                          "type": "frame",
-                          "id": "V2DPCJ",
-                          "name": "meta-row",
-                          "width": "fill_container",
-                          "gap": "$gap-related",
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "cSW5x",
-                              "name": "meta",
-                              "fill": "$color-fg-muted",
-                              "textGrowth": "fixed-width",
-                              "width": "fill_container",
-                              "content": "Step limit reached · agent-7f3a",
-                              "lineHeight": "$text-small-line-height",
-                              "fontFamily": "$text-small-font-family",
-                              "fontSize": "$text-small-font-size",
-                              "fontWeight": "$text-small-font-weight"
+                          "id": "z2F8e",
+                          "type": "ref",
+                          "ref": "dVG23",
+                          "name": "retry",
+                          "descendants": {
+                            "TrPON": {
+                              "content": "Retry"
                             }
-                          ]
+                          }
                         }
                       ]
                     },
                     {
-                      "id": "z2F8e",
-                      "type": "ref",
-                      "ref": "dVG23",
-                      "name": "retry",
-                      "descendants": {
-                        "TrPON": {
-                          "content": "Retry"
-                        }
-                      }
+                      "type": "text",
+                      "id": "E1jJ3",
+                      "name": "retry-error",
+                      "fill": "$color-danger-fg",
+                      "content": "Couldn't retry. Try again.",
+                      "lineHeight": "$text-small-line-height",
+                      "fontFamily": "$text-small-font-family",
+                      "fontSize": "$text-small-font-size",
+                      "fontWeight": "$text-small-font-weight"
                     }
                   ]
                 },
@@ -10999,6 +11145,166 @@
                       ]
                     }
                   ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ZOYuY",
+                  "name": "Message/question/send-failed",
+                  "context": "tokens width=size.panel",
+                  "reusable": true,
+                  "metadata": {
+                    "type": "tokens",
+                    "width": "size.panel"
+                  },
+                  "width": 360,
+                  "gap": "$gap-tight",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Uub6c",
+                      "name": "lead",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "id": "GxTU3",
+                          "type": "ref",
+                          "ref": "D1fxi",
+                          "name": "icon",
+                          "descendants": {
+                            "ZK0ej": {
+                              "fill": "$color-fg-muted"
+                            }
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "iqwye",
+                          "name": "strut",
+                          "fill": "$color-fg-default",
+                          "content": "​",
+                          "lineHeight": "$text-small-line-height",
+                          "fontFamily": "$text-small-font-family",
+                          "fontSize": "$text-small-font-size",
+                          "fontWeight": "$text-small-font-weight"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "bMCl5",
+                      "name": "column",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": "$gap-tight",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "h8qNfd",
+                          "name": "header",
+                          "gap": "$gap-related",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "XB5Ku",
+                              "name": "author",
+                              "fill": "$color-fg-muted",
+                              "content": "You",
+                              "lineHeight": "$text-small-line-height",
+                              "fontFamily": "$text-small-font-family",
+                              "fontSize": "$text-small-font-size",
+                              "fontWeight": "$text-small-font-weight"
+                            },
+                            {
+                              "id": "n5Hc9f",
+                              "type": "ref",
+                              "ref": "I1uI2",
+                              "name": "time",
+                              "descendants": {
+                                "qnZ4a": {
+                                  "content": "just now"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "OTLGY",
+                          "name": "content",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": "$gap-related",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "u0vkkC",
+                              "name": "text",
+                              "fill": "$color-fg-default",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Why does a retry keep the original delivery ID?",
+                              "lineHeight": "$text-body-line-height",
+                              "fontFamily": "$text-body-font-family",
+                              "fontSize": "$text-body-font-size",
+                              "fontWeight": "$text-body-font-weight"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "GNFKi",
+                              "name": "failure",
+                              "gap": "$gap-related",
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "id": "bwWAP",
+                                  "type": "ref",
+                                  "ref": "skTPQ",
+                                  "name": "status",
+                                  "descendants": {
+                                    "gKOdj": {
+                                      "content": "Not sent"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "QyscD",
+                                  "name": "actions",
+                                  "gap": "$gap-related",
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "id": "u70g6K",
+                                      "type": "ref",
+                                      "ref": "dVG23",
+                                      "name": "retry",
+                                      "descendants": {
+                                        "TrPON": {
+                                          "content": "Try again"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "id": "rGQJS",
+                                      "type": "ref",
+                                      "ref": "tFF5G",
+                                      "name": "discard",
+                                      "descendants": {
+                                        "C8Bt2": {
+                                          "content": "Discard"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
                 }
               ]
             },
@@ -11155,6 +11461,17 @@
                               }
                             }
                           ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "a55xbK",
+                          "name": "retry-error",
+                          "fill": "$color-danger-fg",
+                          "content": "Couldn't retry. Try again.",
+                          "lineHeight": "$text-small-line-height",
+                          "fontFamily": "$text-small-font-family",
+                          "fontSize": "$text-small-font-size",
+                          "fontWeight": "$text-small-font-weight"
                         }
                       ]
                     }
@@ -11381,6 +11698,17 @@
                               }
                             }
                           ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "KbIKX",
+                          "name": "retry-error",
+                          "fill": "$color-danger-fg",
+                          "content": "Couldn't retry. Try again.",
+                          "lineHeight": "$text-small-line-height",
+                          "fontFamily": "$text-small-font-family",
+                          "fontSize": "$text-small-font-size",
+                          "fontWeight": "$text-small-font-weight"
                         }
                       ]
                     }
@@ -13498,6 +13826,24 @@
                       ]
                     },
                     {
+                      "id": "pf24V",
+                      "type": "ref",
+                      "ref": "eXxzZ",
+                      "name": "error",
+                      "width": "fill_container",
+                      "descendants": {
+                        "z1p5d": {
+                          "content": "Couldn't register the skill"
+                        },
+                        "K6ewc": {
+                          "content": "A skill named review is already registered. Remove it first, or cancel."
+                        },
+                        "ZE43w": {
+                          "enabled": false
+                        }
+                      }
+                    },
+                    {
                       "type": "frame",
                       "id": "ci2Rq",
                       "name": "actions",
@@ -13921,6 +14267,24 @@
                           ]
                         }
                       ]
+                    },
+                    {
+                      "id": "BFF6T",
+                      "type": "ref",
+                      "ref": "eXxzZ",
+                      "name": "error",
+                      "width": "fill_container",
+                      "descendants": {
+                        "z1p5d": {
+                          "content": "Couldn't apply the update"
+                        },
+                        "K6ewc": {
+                          "content": "The skill changed since this review. Review the update again."
+                        },
+                        "ZE43w": {
+                          "enabled": false
+                        }
+                      }
                     },
                     {
                       "type": "frame",
@@ -15070,6 +15434,24 @@
                       "fontWeight": "$text-body-font-weight"
                     }
                   ]
+                },
+                {
+                  "id": "IlUNG",
+                  "type": "ref",
+                  "ref": "eXxzZ",
+                  "name": "error",
+                  "width": "fill_container",
+                  "descendants": {
+                    "z1p5d": {
+                      "content": "Couldn't remove the skill"
+                    },
+                    "K6ewc": {
+                      "content": "Couldn't reach the server. Try again."
+                    },
+                    "ZE43w": {
+                      "enabled": false
+                    }
+                  }
                 },
                 {
                   "type": "frame",
@@ -17045,7 +17427,13 @@
                     "UC3z1": {
                       "enabled": false
                     },
-                    "r7OtN": {
+                    "ZpyzX": {
+                      "enabled": false
+                    },
+                    "pGxVe": {
+                      "enabled": false
+                    },
+                    "rgCuK": {
                       "enabled": false
                     },
                     "G5aTKs/y5inXt": {
@@ -17828,7 +18216,13 @@
                     "UC3z1": {
                       "enabled": false
                     },
-                    "r7OtN": {
+                    "ZpyzX": {
+                      "enabled": false
+                    },
+                    "pGxVe": {
+                      "enabled": false
+                    },
+                    "rgCuK": {
                       "enabled": false
                     },
                     "G5aTKs/y5inXt": {
@@ -17977,7 +18371,13 @@
                           "content": "The stalled mark only tells you that"
                         },
                         "f02Qa": {
-                          "content": "mbp-office · since 10:14"
+                          "content": "cloud · started 10:14"
+                        },
+                        "dXRrE": {
+                          "enabled": false
+                        },
+                        "a55xbK": {
+                          "enabled": false
                         }
                       }
                     }
@@ -18134,7 +18534,13 @@
                           "content": "e4f5a6b"
                         },
                         "Sz52G": {
-                          "content": "mbp-office · running since 10:14 (1 min)"
+                          "content": "cloud · started 10:14 (1 min)"
+                        },
+                        "n3ksi": {
+                          "enabled": false
+                        },
+                        "qaOKv": {
+                          "enabled": false
                         }
                       }
                     },
@@ -18286,7 +18692,13 @@
                     "lGSRm": {
                       "enabled": false
                     },
-                    "r7OtN": {
+                    "ZpyzX": {
+                      "enabled": false
+                    },
+                    "pGxVe": {
+                      "enabled": false
+                    },
+                    "rgCuK": {
                       "enabled": false
                     },
                     "G5aTKs/y5inXt": {
@@ -18560,6 +18972,9 @@
                         },
                         "Sz52G": {
                           "content": "mbp-office · running since 10:12 (2 min)"
+                        },
+                        "qaOKv": {
+                          "enabled": false
                         }
                       }
                     },
@@ -18670,7 +19085,13 @@
                     "UC3z1": {
                       "enabled": false
                     },
-                    "r7OtN": {
+                    "ZpyzX": {
+                      "enabled": false
+                    },
+                    "pGxVe": {
+                      "enabled": false
+                    },
+                    "rgCuK": {
                       "enabled": false
                     },
                     "G5aTKs/y5inXt": {
@@ -19074,7 +19495,13 @@
                     "lGSRm": {
                       "enabled": false
                     },
-                    "r7OtN": {
+                    "ZpyzX": {
+                      "enabled": false
+                    },
+                    "pGxVe": {
+                      "enabled": false
+                    },
+                    "rgCuK": {
                       "enabled": false
                     },
                     "G5aTKs/y5inXt": {
@@ -19348,6 +19775,9 @@
                         },
                         "Sz52G": {
                           "content": "mbp-office · running since 10:02 (12 min)"
+                        },
+                        "qaOKv": {
+                          "enabled": false
                         }
                       }
                     },
@@ -19490,7 +19920,13 @@
                     "UC3z1": {
                       "enabled": false
                     },
-                    "r7OtN": {
+                    "ZpyzX": {
+                      "enabled": false
+                    },
+                    "pGxVe": {
+                      "enabled": false
+                    },
+                    "rgCuK": {
                       "enabled": false
                     },
                     "G5aTKs/y5inXt": {
@@ -19603,7 +20039,13 @@
                           "content": "If the first agent submits after"
                         },
                         "f02Qa": {
-                          "content": "mbp-office · since 10:13"
+                          "content": "cloud · started 10:13"
+                        },
+                        "dXRrE": {
+                          "enabled": false
+                        },
+                        "a55xbK": {
+                          "enabled": false
                         }
                       }
                     },
@@ -19778,7 +20220,13 @@
                           "content": "e4f5a6b"
                         },
                         "Sz52G": {
-                          "content": "mbp-office · running since 10:13 (1 min)"
+                          "content": "cloud · started 10:13 (1 min)"
+                        },
+                        "n3ksi": {
+                          "enabled": false
+                        },
+                        "qaOKv": {
+                          "enabled": false
                         }
                       }
                     },
@@ -19929,7 +20377,13 @@
                     "F5H7vz": {
                       "fill": "$color-attention-fg"
                     },
-                    "r7OtN": {
+                    "ZpyzX": {
+                      "enabled": false
+                    },
+                    "pGxVe": {
+                      "enabled": false
+                    },
+                    "rgCuK": {
                       "enabled": false
                     },
                     "G5aTKs/y5inXt": {
@@ -20216,11 +20670,17 @@
                     "UC3z1": {
                       "enabled": false
                     },
-                    "r7OtN/z1p5d": {
+                    "ZpyzX": {
+                      "enabled": false
+                    },
+                    "pGxVe/z1p5d": {
                       "content": "Summary of d4e5f6a failed"
                     },
-                    "r7OtN/K6ewc": {
+                    "pGxVe/K6ewc": {
                       "content": "The provider refused the call: spend limit reached. The summary below is for 7a8b9c0."
+                    },
+                    "rgCuK": {
+                      "enabled": false
                     },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
@@ -20366,6 +20826,9 @@
                         },
                         "A7bjDK/gKOdj": {
                           "content": "Incomplete — the provider refused the call (spend limit)"
+                        },
+                        "KbIKX": {
+                          "enabled": false
                         }
                       }
                     }
@@ -20538,6 +21001,9 @@
                         },
                         "cSW5x": {
                           "content": "Spend limit reached · cloud"
+                        },
+                        "E1jJ3": {
+                          "enabled": false
                         }
                       }
                     },
@@ -20556,6 +21022,9 @@
                         },
                         "cSW5x": {
                           "content": "Spend limit reached · cloud"
+                        },
+                        "E1jJ3": {
+                          "enabled": false
                         }
                       }
                     },
@@ -20704,7 +21173,13 @@
                     "UC3z1": {
                       "enabled": false
                     },
-                    "r7OtN": {
+                    "ZpyzX": {
+                      "enabled": false
+                    },
+                    "pGxVe": {
+                      "enabled": false
+                    },
+                    "rgCuK": {
                       "enabled": false
                     },
                     "G5aTKs/y5inXt": {
@@ -21062,7 +21537,13 @@
                     "UC3z1": {
                       "enabled": false
                     },
-                    "r7OtN": {
+                    "ZpyzX": {
+                      "enabled": false
+                    },
+                    "pGxVe": {
+                      "enabled": false
+                    },
+                    "rgCuK": {
                       "enabled": false
                     },
                     "G5aTKs/y5inXt": {
@@ -21208,13 +21689,13 @@
                       "width": "fill_container",
                       "descendants": {
                         "cinzx/J91by": {
-                          "content": "Yes. At a1b2c3d the retry route only set the job back to pending and kept its claim ID, so a late result from the first agent was still accepted."
+                          "content": "Yes. I read a1b2c3d: there the retry route only set the job back to pending and kept its claim ID, so a late result from the first agent was still accepted. At e4f5a6b a retry issues a new claim ID."
                         },
                         "cinzx/TkEdw": {
                           "enabled": false
                         },
                         "IJ0eN/nVVeD": {
-                          "content": "a1b2c3d"
+                          "content": "e4f5a6b"
                         },
                         "j8jXQ3": {
                           "content": "deepseek-chat · 1,630 tokens"
@@ -24266,6 +24747,9 @@
                 "DjNTh": {
                   "content": "references/format.md"
                 },
+                "pf24V": {
+                  "enabled": false
+                },
                 "SNoKk/c3l83T": {
                   "content": "Register at c3d4e5f"
                 }
@@ -25359,6 +25843,9 @@
               "descendants": {
                 "Mgnv7": {
                   "content": "github.com/shuymn/kopje · skills/review"
+                },
+                "BFF6T": {
+                  "enabled": false
                 }
               }
             }
@@ -25668,7 +26155,12 @@
               "id": "K2o83I",
               "type": "ref",
               "ref": "KzJvw",
-              "name": "Dialog"
+              "name": "Dialog",
+              "descendants": {
+                "IlUNG": {
+                  "enabled": false
+                }
+              }
             }
           ]
         }
@@ -25754,7 +26246,13 @@
                 "RoaaS": {
                   "enabled": false
                 },
-                "r7OtN": {
+                "ZpyzX": {
+                  "enabled": false
+                },
+                "pGxVe": {
+                  "enabled": false
+                },
+                "rgCuK": {
                   "enabled": false
                 },
                 "G5aTKs/y5inXt": {
@@ -26007,7 +26505,13 @@
                 "RoaaS": {
                   "enabled": false
                 },
-                "r7OtN": {
+                "ZpyzX": {
+                  "enabled": false
+                },
+                "pGxVe": {
+                  "enabled": false
+                },
+                "rgCuK": {
                   "enabled": false
                 },
                 "G5aTKs/y5inXt": {
@@ -26310,7 +26814,13 @@
                 "RoaaS": {
                   "enabled": false
                 },
-                "r7OtN": {
+                "ZpyzX": {
+                  "enabled": false
+                },
+                "pGxVe": {
+                  "enabled": false
+                },
+                "rgCuK": {
                   "enabled": false
                 },
                 "G5aTKs/y5inXt": {
@@ -26494,7 +27004,13 @@
                   "content": "When you scroll up, it"
                 },
                 "f02Qa": {
-                  "content": "mbp-office · since 10:14"
+                  "content": "cloud · started 10:14"
+                },
+                "dXRrE": {
+                  "enabled": false
+                },
+                "a55xbK": {
+                  "enabled": false
                 }
               }
             }
@@ -26588,7 +27104,13 @@
                   "content": "just now"
                 },
                 "fcVXj": {
-                  "content": "mbp-office · since 10:14"
+                  "content": "cloud · started 10:14"
+                },
+                "cwIII": {
+                  "enabled": false
+                },
+                "L3cEEN": {
+                  "enabled": false
                 },
                 "RHHz1": {
                   "content": "What changed"
@@ -26792,7 +27314,13 @@
                 "RoaaS": {
                   "enabled": false
                 },
-                "r7OtN": {
+                "ZpyzX": {
+                  "enabled": false
+                },
+                "pGxVe": {
+                  "enabled": false
+                },
+                "rgCuK": {
                   "enabled": false
                 },
                 "G5aTKs/y5inXt": {
@@ -27053,7 +27581,13 @@
                 "RoaaS": {
                   "enabled": false
                 },
-                "r7OtN": {
+                "ZpyzX": {
+                  "enabled": false
+                },
+                "pGxVe": {
+                  "enabled": false
+                },
+                "rgCuK": {
                   "enabled": false
                 },
                 "G5aTKs/y5inXt": {
@@ -27169,6 +27703,9 @@
               "descendants": {
                 "ypxK3/J91by": {
                   "content": "The installation token is read in installation.ts when the app is installed, and in pull_request.ts before the checkout. The comment handler then"
+                },
+                "KbIKX": {
+                  "enabled": false
                 }
               }
             }
@@ -27262,7 +27799,13 @@
                 "RoaaS": {
                   "enabled": false
                 },
-                "r7OtN": {
+                "ZpyzX": {
+                  "enabled": false
+                },
+                "pGxVe": {
+                  "enabled": false
+                },
+                "rgCuK": {
                   "enabled": false
                 },
                 "G5aTKs/y5inXt": {
@@ -27507,7 +28050,13 @@
                 "RoaaS": {
                   "enabled": false
                 },
-                "r7OtN": {
+                "ZpyzX": {
+                  "enabled": false
+                },
+                "pGxVe": {
+                  "enabled": false
+                },
+                "rgCuK": {
                   "enabled": false
                 },
                 "G5aTKs/y5inXt": {
@@ -28016,7 +28565,13 @@
                     "UC3z1": {
                       "enabled": false
                     },
-                    "r7OtN": {
+                    "ZpyzX": {
+                      "enabled": false
+                    },
+                    "pGxVe": {
+                      "enabled": false
+                    },
+                    "rgCuK": {
                       "enabled": false
                     },
                     "G5aTKs/y5inXt": {
@@ -28388,7 +28943,13 @@
                 "RoaaS": {
                   "enabled": false
                 },
-                "r7OtN": {
+                "ZpyzX": {
+                  "enabled": false
+                },
+                "pGxVe": {
+                  "enabled": false
+                },
+                "rgCuK": {
                   "enabled": false
                 },
                 "G5aTKs/y5inXt": {
@@ -29125,7 +29686,13 @@
                 "RoaaS": {
                   "enabled": false
                 },
-                "r7OtN": {
+                "ZpyzX": {
+                  "enabled": false
+                },
+                "pGxVe": {
+                  "enabled": false
+                },
+                "rgCuK": {
                   "enabled": false
                 },
                 "G5aTKs/y5inXt": {
@@ -29306,6 +29873,749 @@
       "descendants": {
         "AhCkq": {
           "content": "States: panel.new-version. Guides: persistent-toast-notifications (inline rather than a toast; stays until the reload), accessibility (polite announcement), color, icons, responsive-design."
+        }
+      }
+    },
+    {
+      "type": "frame",
+      "id": "zer7V",
+      "x": 1968,
+      "y": 19097,
+      "name": "PR detail / Send failed",
+      "clip": true,
+      "width": 1440,
+      "fill": "$color-bg-canvas",
+      "layout": "vertical",
+      "alignItems": "center",
+      "children": [
+        {
+          "id": "jhzD1",
+          "type": "ref",
+          "ref": "dFd1K",
+          "name": "AppHeader",
+          "width": "fill_container",
+          "descendants": {
+            "U3fIg2/E4OPx": {
+              "content": "No jobs"
+            }
+          }
+        },
+        {
+          "type": "frame",
+          "id": "guiBG",
+          "name": "body",
+          "context": "tokens width=size.detail",
+          "width": 1232,
+          "gap": "$gap-page",
+          "padding": [
+            "$inset-page",
+            0
+          ],
+          "justifyContent": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "Vrd9f",
+              "name": "main",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": "$gap-section",
+              "children": [
+                {
+                  "id": "g6jez5",
+                  "type": "ref",
+                  "ref": "Lw9rR",
+                  "name": "Notice",
+                  "width": "fill_container",
+                  "descendants": {
+                    "l5hkTY": {
+                      "content": "A new version is available"
+                    },
+                    "hpv6m": {
+                      "content": "This tab still runs the previous version. Reload to update it. Reloading loses your unsent question."
+                    },
+                    "zXIna/TrPON": {
+                      "content": "Reload"
+                    }
+                  }
+                },
+                {
+                  "id": "gzte0",
+                  "type": "ref",
+                  "ref": "zuqAZ",
+                  "name": "PrHeader",
+                  "width": "fill_container",
+                  "descendants": {
+                    "AZMDZ": {
+                      "content": "shuymn/prq #42"
+                    },
+                    "z9c52": {
+                      "content": "Add retry to stalled jobs"
+                    }
+                  }
+                },
+                {
+                  "id": "W4QTMp",
+                  "type": "ref",
+                  "ref": "jTRJl",
+                  "name": "Summary",
+                  "width": "fill_container",
+                  "descendants": {
+                    "KAiOk/RkFfP/nVVeD": {
+                      "content": "e4f5a6b"
+                    },
+                    "KAiOk/v4sqeX/qnZ4a": {
+                      "content": "40 min ago"
+                    },
+                    "UC3z1": {
+                      "enabled": false
+                    },
+                    "ZpyzX": {
+                      "enabled": false
+                    },
+                    "pGxVe": {
+                      "enabled": false
+                    },
+                    "rgCuK": {
+                      "enabled": false
+                    },
+                    "G5aTKs/y5inXt": {
+                      "content": "What changed"
+                    },
+                    "G5aTKs/J91by": {
+                      "content": "Jobs that an agent claimed but never finished can now be retried from the UI. A retry puts the job back to pending and issues a new claim ID, so a late result from the old claim is dropped."
+                    },
+                    "G5aTKs/raSAP": {
+                      "content": "Retries go through"
+                    },
+                    "G5aTKs/RNlph": {
+                      "content": "resetClaim()"
+                    },
+                    "G5aTKs/U5zfrF": {
+                      "content": "as described in"
+                    },
+                    "G5aTKs/JmYFs": {
+                      "content": "the design doc"
+                    },
+                    "G5aTKs/T4nLw": {
+                      "enabled": false
+                    },
+                    "G5aTKs/xYv5a": {
+                      "enabled": false
+                    },
+                    "G5aTKs/X03nbO": {
+                      "content": "A retry while the first agent is still working costs one extra run."
+                    },
+                    "G5aTKs/KzZf6": {
+                      "content": "The stalled mark starts after 60 minutes; Retry is available before that."
+                    },
+                    "G5aTKs/TkEdw": {
+                      "enabled": false
+                    },
+                    "G5aTKs/TkEdw/gVPtp": {
+                      "content": "export function retry(job: Job) {\n  job.state = \"pending\";\n  job.claimId = crypto.randomUUID();\n}"
+                    },
+                    "G5aTKs/MBzHE": {
+                      "enabled": false
+                    },
+                    "G5aTKs/F8yT4R": {
+                      "content": "session.ts"
+                    },
+                    "G5aTKs/YPm4u": {
+                      "content": "Adds the retry transition"
+                    },
+                    "G5aTKs/z284ra": {
+                      "content": "JobRow.tsx"
+                    },
+                    "G5aTKs/Q4hyh": {
+                      "content": "Shows Retry on claimed jobs"
+                    },
+                    "G5aTKs/nYsib": {
+                      "enabled": false
+                    },
+                    "G5aTKs/sePyj": {
+                      "content": "A result submitted with an old claim ID is discarded."
+                    },
+                    "IIGC4": {
+                      "content": "deepseek-chat · 12,480 tokens"
+                    }
+                  }
+                },
+                {
+                  "type": "frame",
+                  "id": "kcNX7",
+                  "name": "conversation",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": "$gap-group",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "wFP7F",
+                      "name": "heading",
+                      "fill": "$color-fg-default",
+                      "content": "Conversation",
+                      "lineHeight": "$text-heading-line-height",
+                      "fontFamily": "$text-heading-font-family",
+                      "fontSize": "$text-heading-font-size",
+                      "fontWeight": "$text-heading-font-weight"
+                    },
+                    {
+                      "id": "o2FXGK",
+                      "type": "ref",
+                      "ref": "MqAcS",
+                      "name": "Question 1",
+                      "width": "fill_container",
+                      "descendants": {
+                        "TIsFd/qnZ4a": {
+                          "content": "35 min ago"
+                        },
+                        "KHrM8": {
+                          "content": "Why does a retry issue a new claim ID instead of reusing the old one?"
+                        }
+                      }
+                    },
+                    {
+                      "id": "pB55H",
+                      "type": "ref",
+                      "ref": "Ron4L",
+                      "name": "Answer 1",
+                      "width": "fill_container",
+                      "descendants": {
+                        "cinzx/J91by": {
+                          "content": "A new claim ID lets the session drop a late result from the old claim. If the first agent submits after the retry, its claim ID no longer matches and the result is discarded."
+                        },
+                        "cinzx/TkEdw/gVPtp": {
+                          "content": "if (submit.claimId !== job.claimId) {\n  return { status: \"discarded\" };\n}"
+                        },
+                        "IJ0eN/nVVeD": {
+                          "content": "e4f5a6b"
+                        },
+                        "j8jXQ3": {
+                          "content": "deepseek-chat · 2,310 tokens"
+                        }
+                      }
+                    },
+                    {
+                      "id": "J0hpNI",
+                      "type": "ref",
+                      "ref": "ZOYuY",
+                      "name": "Question 2",
+                      "width": "fill_container",
+                      "descendants": {
+                        "n5Hc9f/qnZ4a": {
+                          "content": "1 min ago"
+                        },
+                        "u0vkkC": {
+                          "content": "Does the retry route reset the attempt counter as well?"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "Byx3r",
+                  "type": "ref",
+                  "ref": "xuVGC",
+                  "name": "Composer",
+                  "width": "fill_container",
+                  "descendants": {
+                    "bwRU2": {
+                      "enabled": false
+                    },
+                    "KruoB": {
+                      "content": "And is the old claim's heartbeat ignored after that?",
+                      "fill": "$color-fg-default"
+                    },
+                    "ozO5r": {
+                      "content": "You can send once the question above is sent or discarded."
+                    },
+                    "psvYX": {
+                      "id": "fXrVj",
+                      "type": "ref",
+                      "ref": "j4j1Py",
+                      "name": "send",
+                      "descendants": {
+                        "cMeuW": {
+                          "content": "Send"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "S5RWiA",
+              "name": "rail",
+              "context": "tokens width=size.rail",
+              "width": 320,
+              "layout": "vertical",
+              "gap": "$gap-section",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "csIyM",
+                  "name": "rail-head",
+                  "width": "fill_container",
+                  "justifyContent": "end",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "j1QIIB",
+                      "type": "ref",
+                      "ref": "Zg2Mq",
+                      "name": "collapse-rail",
+                      "descendants": {
+                        "kDnaD": {
+                          "id": "KFerD",
+                          "type": "ref",
+                          "ref": "ZIY9K",
+                          "name": "icon",
+                          "descendants": {
+                            "Dx917": {
+                              "fill": "$color-fg-muted"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "z7p2GY",
+                  "name": "versions",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": "$gap-group",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "wFbf1",
+                      "name": "heading",
+                      "fill": "$color-fg-default",
+                      "content": "Versions",
+                      "lineHeight": "$text-heading-line-height",
+                      "fontFamily": "$text-heading-font-family",
+                      "fontSize": "$text-heading-font-size",
+                      "fontWeight": "$text-heading-font-weight"
+                    },
+                    {
+                      "id": "xVqWw",
+                      "type": "ref",
+                      "ref": "fassU",
+                      "name": "Version e4f5a6b",
+                      "width": "fill_container",
+                      "descendants": {
+                        "pWVR1/nVVeD": {
+                          "content": "e4f5a6b"
+                        },
+                        "O7EFV/qnZ4a": {
+                          "content": "40 min ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "f4gqhi",
+                      "type": "ref",
+                      "ref": "i9ZwJ",
+                      "name": "Version 9f8e7d6",
+                      "width": "fill_container",
+                      "descendants": {
+                        "v5U62O/nVVeD": {
+                          "content": "9f8e7d6"
+                        },
+                        "ZoMkb/qnZ4a": {
+                          "content": "1 hr ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "a0PNvW",
+                      "type": "ref",
+                      "ref": "x3TYGx",
+                      "name": "Version a1b2c3d",
+                      "width": "fill_container",
+                      "descendants": {
+                        "ydSAf/nVVeD": {
+                          "content": "a1b2c3d"
+                        },
+                        "z2Kld/qnZ4a": {
+                          "content": "yesterday"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "gh27K",
+                  "name": "jobs",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": "$gap-group",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "vwfwq",
+                      "name": "heading",
+                      "fill": "$color-fg-default",
+                      "content": "Jobs",
+                      "lineHeight": "$text-heading-line-height",
+                      "fontFamily": "$text-heading-font-family",
+                      "fontSize": "$text-heading-font-size",
+                      "fontWeight": "$text-heading-font-weight"
+                    },
+                    {
+                      "id": "U4dFDd",
+                      "type": "ref",
+                      "ref": "pfSwa",
+                      "name": "done-jobs",
+                      "width": "fill_container",
+                      "descendants": {
+                        "I96MZ": {
+                          "content": "2 done"
+                        },
+                        "Sz2HD": {
+                          "enabled": false
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "ckxJU",
+      "x": 7872,
+      "y": 16321,
+      "name": "Panel / Send failed",
+      "context": "tokens width=size.panel",
+      "clip": true,
+      "width": 360,
+      "fill": "$color-bg-canvas",
+      "layout": "vertical",
+      "gap": "$gap-section",
+      "padding": "$inset-panel",
+      "children": [
+        {
+          "id": "mIukx",
+          "type": "ref",
+          "ref": "Lw9rR",
+          "name": "Notice",
+          "width": "fill_container",
+          "descendants": {
+            "l5hkTY": {
+              "content": "A new version is available"
+            },
+            "hpv6m": {
+              "content": "This tab still runs the previous version. Reload to update it. Reloading loses your unsent question."
+            },
+            "zXIna/TrPON": {
+              "content": "Reload"
+            }
+          }
+        },
+        {
+          "id": "eeqST",
+          "type": "ref",
+          "ref": "jYlX0",
+          "name": "PrHeader",
+          "width": "fill_container",
+          "descendants": {
+            "RGBFf": {
+              "content": "shuymn/zenith #87"
+            },
+            "q0oezR": {
+              "content": "Stream tokens to the summary view and keep the previous version listed"
+            }
+          }
+        },
+        {
+          "id": "qoudM",
+          "type": "ref",
+          "ref": "ToHWS",
+          "name": "Disclosure summary",
+          "width": "fill_container",
+          "descendants": {
+            "D7Tj5": {
+              "fontFamily": "$text-heading-font-family",
+              "fontSize": "$text-heading-font-size",
+              "fontWeight": "$text-heading-font-weight",
+              "lineHeight": "$text-heading-line-height",
+              "content": "Summary"
+            },
+            "P1jLHT": {
+              "id": "uN1xo",
+              "type": "ref",
+              "ref": "bcvNX",
+              "name": "version",
+              "descendants": {
+                "RkFfP/nVVeD": {
+                  "content": "9f8e7d6"
+                },
+                "v4sqeX/qnZ4a": {
+                  "content": "12 min ago"
+                }
+              }
+            },
+            "AXugr": {
+              "id": "tRdYC",
+              "type": "ref",
+              "ref": "jTRJl",
+              "name": "content",
+              "width": "fill_container",
+              "descendants": {
+                "RoaaS": {
+                  "enabled": false
+                },
+                "ZpyzX": {
+                  "enabled": false
+                },
+                "pGxVe": {
+                  "enabled": false
+                },
+                "rgCuK": {
+                  "enabled": false
+                },
+                "G5aTKs/y5inXt": {
+                  "content": "What changed"
+                },
+                "G5aTKs/J91by": {
+                  "content": "The summary view renders tokens as they arrive over the WebSocket instead of waiting for the finished analysis. The previous version stays listed until the new one is done."
+                },
+                "G5aTKs/zBERA": {
+                  "type": "frame",
+                  "id": "p9EIb",
+                  "name": "inline",
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "CO8wu",
+                      "name": "line-1",
+                      "gap": "$gap-tight",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "ygNiB",
+                          "name": "inline-text",
+                          "fill": "$color-fg-default",
+                          "content": "Streaming uses",
+                          "lineHeight": "$text-body-line-height",
+                          "fontFamily": "$text-body-font-family",
+                          "fontSize": "$text-body-font-size",
+                          "fontWeight": "$text-body-font-weight"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "fPK1F",
+                          "name": "inline-code",
+                          "fill": "$color-bg-muted",
+                          "cornerRadius": "$radius-sm",
+                          "padding": [
+                            0,
+                            "$inset-inline"
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "s0hO8E",
+                              "name": "inline-code-text",
+                              "fill": "$color-fg-default",
+                              "content": "onToken()",
+                              "lineHeight": "$text-code-small-line-height",
+                              "fontFamily": "$text-code-small-font-family",
+                              "fontSize": "$text-code-small-font-size",
+                              "fontWeight": "$text-code-small-font-weight"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "SgwFH",
+                          "name": "inline-text-2",
+                          "fill": "$color-fg-default",
+                          "content": "from",
+                          "lineHeight": "$text-body-line-height",
+                          "fontFamily": "$text-body-font-family",
+                          "fontSize": "$text-body-font-size",
+                          "fontWeight": "$text-body-font-weight"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "SqZtM",
+                      "name": "link",
+                      "fill": "$color-accent-fg",
+                      "content": "the UI brief",
+                      "lineHeight": "$text-body-line-height",
+                      "fontFamily": "$text-body-font-family",
+                      "fontSize": "$text-body-font-size",
+                      "fontWeight": "$text-body-font-weight"
+                    }
+                  ]
+                },
+                "G5aTKs/T4nLw": {
+                  "enabled": false
+                },
+                "G5aTKs/xYv5a": {
+                  "enabled": false
+                },
+                "G5aTKs/TkEdw": {
+                  "enabled": false
+                },
+                "G5aTKs/MBzHE": {
+                  "enabled": false
+                },
+                "G5aTKs/nYsib": {
+                  "enabled": false
+                },
+                "IIGC4": {
+                  "content": "deepseek-chat · 9,876 tokens"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "frame",
+          "id": "UdfWJ",
+          "name": "conversation",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": "$gap-group",
+          "children": [
+            {
+              "id": "QQMiE",
+              "type": "ref",
+              "ref": "MqAcS",
+              "name": "Question 1",
+              "width": "fill_container",
+              "descendants": {
+                "TIsFd/qnZ4a": {
+                  "content": "8 min ago"
+                },
+                "KHrM8": {
+                  "content": "What happens to the tokens if the connection drops mid-stream?"
+                }
+              }
+            },
+            {
+              "id": "vykPL",
+              "type": "ref",
+              "ref": "Ron4L",
+              "name": "Answer 1",
+              "width": "fill_container",
+              "descendants": {
+                "cinzx/J91by": {
+                  "content": "The panel keeps the tokens it already has. After reconnecting it asks for the rest from the last offset:"
+                },
+                "cinzx/TkEdw/gVPtp": {
+                  "content": "socket.send({\n  type: \"resume\",\n  from: offset,\n});"
+                },
+                "io0Ud": {
+                  "layout": "vertical",
+                  "gap": "$gap-related",
+                  "alignItems": "start"
+                },
+                "IJ0eN/nVVeD": {
+                  "content": "9f8e7d6"
+                },
+                "j8jXQ3": {
+                  "content": "deepseek-chat · 1,920 tokens"
+                }
+              }
+            },
+            {
+              "id": "tonXe",
+              "type": "ref",
+              "ref": "ZOYuY",
+              "name": "Question 2",
+              "width": "fill_container",
+              "descendants": {
+                "n5Hc9f/qnZ4a": {
+                  "content": "2 min ago"
+                },
+                "u0vkkC": {
+                  "content": "Does the resume request repeat tokens the panel already has?"
+                },
+                "GNFKi": {
+                  "layout": "vertical",
+                  "alignItems": "start"
+                },
+                "bwWAP/gKOdj": {
+                  "content": "Couldn't confirm it was sent"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "c8QLXz",
+          "type": "ref",
+          "ref": "m6ZLw",
+          "name": "Composer",
+          "width": "fill_container",
+          "descendants": {
+            "OQjbx": {
+              "enabled": false
+            },
+            "V0rqcU": {
+              "content": "And what if the offset is gone?",
+              "fill": "$color-fg-default"
+            },
+            "C5xFD4": {
+              "content": "You can send once the question above is sent or discarded."
+            },
+            "pdNu1": {
+              "id": "dKX71",
+              "type": "ref",
+              "ref": "j4j1Py",
+              "name": "send",
+              "descendants": {
+                "cMeuW": {
+                  "content": "Send"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "y4mhVR",
+      "type": "ref",
+      "ref": "p75xR",
+      "name": "Note / PR detail / Send failed",
+      "x": 3456,
+      "y": 19097,
+      "descendants": {
+        "AhCkq": {
+          "content": "States: detail.send-failed. Guides: accessibility (the failure announced in the assertive region; Discard returns focus to the field; Send aria-disabled, described by the hint), persistent-toast-notifications (the failure stays inline until Try again or Discard), forms, color, icons."
+        }
+      }
+    },
+    {
+      "id": "kC06r",
+      "type": "ref",
+      "ref": "p75xR",
+      "name": "Note / Panel / Send failed",
+      "x": 8280,
+      "y": 16321,
+      "descendants": {
+        "AhCkq": {
+          "content": "States: panel.send-failed. Guides: accessibility (the failure announced in the assertive region; Discard returns focus to the field; Send aria-disabled, described by the hint), persistent-toast-notifications (the failure stays inline until Try again or Discard), forms, color, icons, responsive-design (the actions wrap under the status)."
         }
       }
     }
