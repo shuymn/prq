@@ -5,6 +5,7 @@
 import {
   APICallError,
   jsonSchema,
+  type ModelMessage,
   RetryError,
   StreamProviderError,
   streamText,
@@ -32,15 +33,35 @@ const tools: ToolSet = {
 type Part = TextStreamPart<ToolSet>;
 type Run = { parts: Part[]; errors: unknown[] };
 
+// A lookup the model made, and its result: a turn's history when the tools are withdrawn.
+const LOOKED_UP: ModelMessage[] = [
+  { role: "user", content: "Use the lookup tool to read README.md, then say in one sentence what it is about." },
+  {
+    role: "assistant",
+    content: [{ type: "tool-call", toolCallId: "call-1", toolName: "lookup", input: { path: "README.md" } }],
+  },
+  {
+    role: "tool",
+    content: [
+      {
+        type: "tool-result",
+        toolCallId: "call-1",
+        toolName: "lookup",
+        output: { type: "text", value: "# prq\n\nSummarizes pull requests and answers questions about them." },
+      },
+    ],
+  },
+];
+
 async function stream(
   model: CloudModel,
-  prompt: string,
-  options: { tools?: ToolSet; toolChoice?: "none"; maxOutputTokens?: number } = {},
+  input: string | ModelMessage[],
+  options: { tools?: ToolSet; activeTools?: string[]; maxOutputTokens?: number } = {},
 ): Promise<Run> {
   const errors: unknown[] = [];
   const result = streamText({
     model,
-    prompt,
+    ...(typeof input === "string" ? { prompt: input } : { messages: input }),
     timeout: STREAM_TIMEOUT,
     ...options,
     onError: ({ error }) => {
@@ -206,9 +227,10 @@ function checks(config: ModelConfig): Check[] {
       },
     },
     {
-      title: 'toolChoice "none" with tools offered',
+      // As a turn whose room ran out sends it: the history holds a tool call and its result, and no tool is offered.
+      title: "No tools offered after a tool call (a turn's withdrawn tools)",
       run: async (model, say) => {
-        const run = await stream(model, "Use the lookup tool to read README.md.", { tools, toolChoice: "none" });
+        const run = await stream(model, LOOKED_UP, { tools, activeTools: [] });
         const calls = run.parts.filter((part) => part.type === "tool-call").length;
         const done = answered(run.parts);
         say(`stream parts: ${shape(run.parts)}`);

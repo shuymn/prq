@@ -34,6 +34,25 @@ import {
   TURN_INTERRUPTED,
   WORKSPACE_NOT_AVAILABLE,
 } from "./cloud.ts";
+import {
+  type Cut,
+  contextCount,
+  findCut,
+  keptPart,
+  measuredCount,
+  nextBatch,
+  notesBody,
+  notesText,
+  partsChars,
+  type Projected,
+  readFiles,
+  assembleNotes,
+  type Step,
+  type SummaryKind,
+  type SummaryRequest,
+  summarize,
+} from "./compaction.ts";
+import { contextBudget, contextLimit } from "./context-budget.ts";
 import { type ContextMessage, type Cursor, cursorText, jsonBytes, messageRoom, parseCursor, take } from "./context.ts";
 import { addedMessages, isChatList, questionsOnly, refusedChatResponse, refusedFrame } from "./history.ts";
 import {
@@ -76,6 +95,7 @@ import {
   recordAttempt,
   recordEvent,
   removeIntake,
+  rerunTurn,
   reserve,
   restartTurn,
   resultMessageId,
@@ -92,9 +112,18 @@ import {
   writeNotify,
 } from "./jobs.ts";
 import { classifyModelError, modelFor, OUTPUT_STALLED, reasonText } from "./model.ts";
+import {
+  adoptNotes,
+  markCompactionFailed,
+  readContextState,
+  readNotes,
+  recordContext,
+  recordOverflow,
+} from "./notes.ts";
 import { projection } from "./projection.ts";
 import { analysisTask, systemPrompt } from "./prompt.ts";
 import { adoptAnswer, clearMark, failTry, isLagging, notePush, readReconcile } from "./reconcile.ts";
+import { measuredTokens } from "./room.ts";
 import { toolLoop, TURN_LOOP } from "./tools.ts";
 import {
   type Binding,
@@ -149,6 +178,28 @@ type ClaimRef = { jobId: string; claimId: string };
 // which would run a check before its deadline.
 function wholeSecondFrom(ms: number): Date {
   return new Date(Math.ceil(ms / 1000) * 1000);
+}
+
+// A committed turn's context measurement, and the model a compaction runs on when the context is over the limit.
+type ContextMeasure = { tokens: number | null; through: string; notesRev: number };
+type AfterTurn = { measure: ContextMeasure; compact: CloudModel | null };
+
+// What a compaction's summary calls used, for its log.
+type SummaryCalls = { calls: number; inputTokens: number; outputTokens: number; cachedInputTokens: number };
+
+// How many times one summary is tried: once, and once more after a failed attempt (docs/design.md, Model context).
+const SUMMARY_ATTEMPTS = 2;
+
+// The notes' history when nothing before a split turn was summarized and there are no notes yet (Pi's).
+const NO_PRIOR_HISTORY = "No prior history.";
+
+function cutFields({ cut, toSummarize, turnPrefix }: Cut): Record<string, unknown> {
+  return {
+    cutMessageId: cut.messageId,
+    cutStep: cut.step,
+    summarizedSteps: toSummarize.length,
+    turnPrefixSteps: turnPrefix.length,
+  };
 }
 
 // What one step that can make jobs waiting did beyond its own change: cloud jobs failed or handed over.
@@ -241,6 +292,9 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   // Whether a read of GitHub's head is in flight: one at a time, so every answer is judged against the pushes taken in
   // since it was requested.
   #reading = false;
+  // Whether a compaction is in flight. The cloud seam starts no job meanwhile, and its end opens the gate and runs the
+  // seam (docs/design.md, Model context).
+  #compacting = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -520,8 +574,15 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // The cloud seam: with no agent, every waiting job fails; with one, the next waiting job becomes running under a new
-  // turn unless one is running already.
+  // turn unless one is running already. While a compaction is in flight it does nothing: the next job waits for the
+  // context the compaction makes. Every hand-over of a waiting job comes through here. Recovery and the re-run after a
+  // context-length refusal call #handOver themselves, but each gives the job already running a new turn and starts no
+  // waiting one: a compaction after a commit runs only while no job is running, and the re-run compacts at its own
+  // start.
   #cloudSeam(now: number): CloudOutcome {
+    if (this.#compacting) {
+      return NO_CLOUD_OUTCOME;
+    }
     const agent = this.cloudAgent();
     if (agent === undefined) {
       return { failed: failPending(this.#sql, this.#noCloudAgent(), now), started: null };
@@ -1196,8 +1257,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
         return [...messages];
       });
       // An ending the turn's own callbacks did not see (the SDK failed or aborted the reply around them).
-      if (outcome.reached && result.status === "error") {
-        outcome.error ??= classifyModelError(result.error ?? "the turn failed", this.#modelSecret()).reason;
+      if (outcome.reached && result.status === "error" && outcome.error === undefined) {
+        const failure = classifyModelError(result.error ?? "the turn failed", this.#modelSecret());
+        outcome.error = failure.reason;
+        outcome.contextLength = failure.contextLength;
       } else if (outcome.reached && result.status === "aborted") {
         outcome.aborted = true;
       }
@@ -1255,6 +1318,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     // The turn's own abort, besides the SDK's: a workspace that cannot go on ends the turn with its reason.
     const lost = new AbortController();
     const signal = abortSignal === undefined ? lost.signal : AbortSignal.any([abortSignal, lost.signal]);
+    await this.#compactAtStart(row, model, signal);
+    if (signal.aborted) {
+      outcome.aborted = true;
+      return undefined;
+    }
     const details = readDetails(this.#sql);
     let code: { workspace: WorkspaceClient; target: WorkspaceTarget; prepared: PreparedWorkspace } | null = null;
     if (client !== null && job.workspaceSha !== null) {
@@ -1283,18 +1351,27 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       });
       code = { workspace, target, prepared };
     }
-    const messages = await this.#turnMessages(row);
-    if (messages === null) {
+    const context = await this.#turnContext(row);
+    if (context === null) {
       outcome.failure = "the question is not stored";
       return undefined;
     }
+    const { messages } = context;
+    binding.notesRev = context.notesRev;
     const system = systemPrompt({ pr: this.#pr(), details, job, tools: code !== null });
     const modelMessages = await convertToModelMessages(messages);
-    const loop = code === null ? null : await toolLoop(code, this.contextTokens(), { system, messages: modelMessages });
+    const loop =
+      code === null
+        ? null
+        : await toolLoop(code, this.contextTokens(), { system, messages: modelMessages }, context.measured);
     const secret = this.#modelSecret();
     // The turn's first error, classified with the key redacted, is its reason; what the client is shown is that reason.
     const failWith = (error: unknown): string => {
-      outcome.error ??= classifyModelError(error, secret).reason;
+      if (outcome.error === undefined) {
+        const failure = classifyModelError(error, secret);
+        outcome.error = failure.reason;
+        outcome.contextLength = failure.contextLength;
+      }
       return outcome.error;
     };
     const result = streamText({
@@ -1322,6 +1399,8 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       },
       onStepFinish: ({ usage }) => {
         addStep(this.#sql, row, stepTokens(usage));
+        // The context as the provider measured it: the step's request and its output.
+        outcome.contextTokens = measuredTokens(usage) ?? undefined;
       },
     });
     const metadata = this.#resultMetadata(row, { kind: "cloud", model: model.modelId });
@@ -1364,16 +1443,40 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     }
   }
 
-  // What the job's model reads after the system prompt: the projection, then its own question (by the job's target)
-  // or an analysis's task. Null when the question is not stored.
-  async #turnMessages(row: JobRow): Promise<UIMessage[] | null> {
-    const session = this.sessions.session();
-    const projected = (await projection(session.history())).filter(isUIMessage);
-    if (row.kind === "analysis") {
-      return [...projected, { id: "task", role: "user", parts: [{ type: "text", text: analysisTask(row.target) }] }];
+  // What the job's model reads after the system prompt: the notes, when a compaction made them, and the projection's
+  // part after their cut (all of it without notes); then its own question (by the job's target) or an analysis's task.
+  // With the notes revision it was built on, and the context count when a measurement on these notes gives one (null
+  // otherwise), which a turn's room starts from. Null when the question is not stored.
+  async #turnContext(
+    row: JobRow,
+  ): Promise<{ messages: UIMessage[]; notesRev: number; measured: number | null } | null> {
+    const own = await this.#ownMessage(row);
+    if (own === null) {
+      return null;
     }
-    const question = await session.getMessage(row.target);
-    return question === null || !isUIMessage(question) ? null : [...projected, question];
+    const projected = await this.#projection();
+    const notes = readNotes(this.#sql);
+    const measured = measuredCount(readContextState(this.#sql), notes, projected, partsChars(own.parts));
+    if (notes.text === null) {
+      return { messages: [...projected, own], notesRev: notes.rev, measured };
+    }
+    const summary: UIMessage = { id: "notes", role: "user", parts: [{ type: "text", text: notesText(notes.text) }] };
+    return { messages: [summary, ...keptPart(projected, notes.cut), own], notesRev: notes.rev, measured };
+  }
+
+  // A job's own message: its question, read by the job's target, or an analysis's task, which is not stored. Null when
+  // the question is not stored.
+  async #ownMessage(row: JobRow): Promise<UIMessage | null> {
+    if (row.kind === "analysis") {
+      return { id: "task", role: "user", parts: [{ type: "text", text: analysisTask(row.target) }] };
+    }
+    const question = await this.sessions.session().getMessage(row.target);
+    return question === null || !isUIMessage(question) ? null : question;
+  }
+
+  // The projection (docs/design.md, Model context), read from storage.
+  async #projection(): Promise<Projected[]> {
+    return (await projection(this.sessions.session().history())).filter(isUIMessage);
   }
 
   #resultMetadata(row: JobRow, by: MessageMetadata["by"], usage?: JobUsage): MessageMetadata {
@@ -1386,7 +1489,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   // Inside the history queue, once the SDK's turn has ended. A turn whose job has moved on (another turn, a retry)
   // changes nothing. A turn that ended normally appends its result and marks the job done; any other ending keeps the
   // text it produced as incomplete and fails the job. A turn that never reached its model call is an interruption.
-  async #commitTurn({ jobId, turnId, model, outcome }: Binding): Promise<void> {
+  async #commitTurn({ jobId, turnId, model, outcome, notesRev }: Binding): Promise<void> {
     const row = jobById(this.#sql, jobId);
     if (row?.state !== "running" || row.turn_id !== turnId) {
       log("prq.turn.stale", { pr: this.name, jobId, state: row?.state ?? null });
@@ -1402,7 +1505,16 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     if (failure === null) {
       const id = resultMessageId(row);
       await this.insertMessages([{ id, role: "assistant", metadata, parts }], "results");
-      this.#endRun(row, { done: id }, model.modelId);
+      const measure = {
+        tokens: outcome.contextTokens ?? null,
+        through: id,
+        notesRev: notesRev ?? readNotes(this.#sql).rev,
+      };
+      const compact = (await this.#countAfter(measure)) > contextLimit(this.contextTokens());
+      this.#endRun(row, { done: id }, model.modelId, { measure, compact: compact ? model : null });
+      return;
+    }
+    if (outcome.contextLength && jobUsage(this.#sql, row)?.overflow_rerun === 0 && (await this.#rerun(row))) {
       return;
     }
     if (hasText(parts)) {
@@ -1449,8 +1561,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // Ends a running job's run in one step: its guarded statement, its event and ledger entry, and the seam's hand-over
-  // of the next job. Logs the run's usage.
-  #endRun(row: JobRow, end: TurnEnd, model: string | null): void {
+  // of the next job. A completed cloud turn records its context measurement there too; when the context is over the
+  // limit, the seam waits and a compaction starts instead, in the same synchronous step, so no job is handed over
+  // before it. Logs the run's usage.
+  #endRun(row: JobRow, end: TurnEnd, model: string | null, after?: AfterTurn): void {
     const now = Date.now();
     const change = this.ctx.storage.transactionSync(() => {
       const ended = endTurn(this.#sql, row, end, now);
@@ -1459,13 +1573,25 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       }
       if ("done" in end) {
         recordEvent(this.#sql, ended.kind === "analysis" ? "summary" : "answer", now);
+        if (after !== undefined) {
+          recordContext(this.#sql, after.measure);
+        }
       }
       writeLedger(this.#sql);
-      return { ended, usage: jobUsage(this.#sql, ended), cloud: this.#cloudSeam(now) };
+      const compact = "done" in end ? (after?.compact ?? null) : null;
+      return {
+        ended,
+        usage: jobUsage(this.#sql, ended),
+        compact,
+        cloud: compact === null ? this.#cloudSeam(now) : NO_CLOUD_OUTCOME,
+      };
     });
     if (change === null) {
       log("prq.turn.stale", { pr: this.name, jobId: row.job_id, state: jobById(this.#sql, row.job_id)?.state ?? null });
       return;
+    }
+    if (change.compact !== null) {
+      this.#startCompaction(change.compact, row.job_id);
     }
     const { ended, usage } = change;
     if ("done" in end) {
@@ -1484,8 +1610,217 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       cachedInputTokens: usage?.cached_input_tokens ?? 0,
       wallMs: usage === undefined ? 0 : Math.max(0, now - usage.started_at),
       starts: usage?.starts ?? 0,
+      overflowRerun: usage?.overflow_rerun === 1,
     });
     this.#afterNewWork(change.cloud);
+  }
+
+  // --- Compaction ---
+
+  // The context count after a commit, with the turn's measurement (docs/design.md, Model context).
+  async #countAfter(measure: ContextMeasure): Promise<number> {
+    return contextCount(measure, readNotes(this.#sql), await this.#projection());
+  }
+
+  // The context count now, with the job's own message at a turn's start, and the projection's last message (spied on
+  // and read in tests).
+  protected async measureContext(own: UIMessage | null): Promise<{ tokens: number; end: string | null }> {
+    const projected = await this.#projection();
+    const tokens = contextCount(
+      readContextState(this.#sql),
+      readNotes(this.#sql),
+      projected,
+      own === null ? 0 : partsChars(own.parts),
+    );
+    return { tokens, end: projected.at(-1)?.id ?? null };
+  }
+
+  // At a turn's start, a context already over the limit is compacted first (one a reset lost after a commit, or one a
+  // context-length refusal asked for), unless a compaction failed at the same projection end: that one is not repeated
+  // until a new result is committed. The turn runs on the full context when the compaction fails.
+  async #compactAtStart(row: JobRow, model: CloudModel, signal: AbortSignal): Promise<void> {
+    const window = this.contextTokens();
+    const { tokens, end } = await this.measureContext(await this.#ownMessage(row));
+    if (tokens <= contextLimit(window) || readContextState(this.#sql).failedThrough === end) {
+      return;
+    }
+    this.#compacting = true;
+    try {
+      await this.compactContext(model, window, { jobId: row.job_id, signal });
+    } finally {
+      this.#compacting = false;
+    }
+  }
+
+  // After a commit whose context is over the limit: the compaction runs while the gate holds every waiting job, and
+  // its end, whatever it was, opens the gate and runs the seam. Set in the commit's synchronous step.
+  #startCompaction(model: CloudModel, jobId: string): void {
+    this.#compacting = true;
+    void this.keepAliveWhile(async () => {
+      try {
+        await this.compactContext(model, this.contextTokens(), { jobId });
+      } catch (error) {
+        log("prq.compaction.failed", { pr: this.name, jobId, error: errorName(error) }, "error");
+      } finally {
+        this.#compacting = false;
+      }
+      await this.#attempt("cloud", () => this.#runSeam());
+      await this.#deliverOutbox();
+    });
+  }
+
+  // One compaction (spied on in tests): the projection from the notes' cut to a new cut summarized into the notes,
+  // adopted only while the notes are still at the revision it was built from. Each summary call is tried once more when
+  // it fails; a compaction that fails leaves the notes as they were and marks the projection's end. The history is
+  // never changed.
+  protected async compactContext(
+    model: CloudModel,
+    window: number,
+    { jobId, signal }: { jobId: string; signal?: AbortSignal },
+  ): Promise<"adopted" | "discarded" | "failed" | "skipped"> {
+    const { keptTail, notesOutput } = contextBudget(window);
+    const notes = readNotes(this.#sql);
+    const projected = await this.#projection();
+    const end = projected.at(-1)?.id ?? null;
+    const cut = findCut(projected, notes.cut, keptTail);
+    const fields = { pr: this.name, jobId, notesRev: notes.rev };
+    if (cut === null) {
+      log("prq.compaction.skipped", fields);
+      return "skipped";
+    }
+    log("prq.compaction.started", { ...fields, ...cutFields(cut) });
+    const calls: SummaryCalls = { calls: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
+    const started = Date.now();
+    const files = readFiles([...cut.toSummarize, ...cut.turnPrefix], notes.readFiles);
+    let summaries: { history: string; turnContext: string | null };
+    try {
+      // Steps summarized in requests that each fit the window, oldest first, each updating the summary before it (the
+      // first updates `previous`, or makes a new one without): one call per batch. The last batch's summary, or
+      // `previous` when the steps held nothing to summarize.
+      const inBatches = async (kind: SummaryKind, steps: readonly Step[], previous: string | null) => {
+        let summary = previous;
+        let from = 0;
+        for (;;) {
+          const batch = nextBatch(kind, steps, from, summary, window, notesOutput);
+          if (batch === null) {
+            return summary;
+          }
+          summary = await this.#summary(model, batch.request, notesOutput, signal, calls);
+          from = batch.end;
+        }
+      };
+      // The history: updated with the steps the cut removed before its turn (the previous summaries fold into it, with
+      // the checkpoint of a turn the previous cut fell inside), or left as it was; "No prior history." (Pi's) before any.
+      // The summarizer reads the stored summaries only, never the list of files read.
+      let history = notes.history ?? NO_PRIOR_HISTORY;
+      if (cut.toSummarize.length > 0) {
+        const previous = notes.history === null ? null : notesBody(notes.history, notes.turnContext);
+        history = (await inBatches("notes", cut.toSummarize, previous)) ?? NO_PRIOR_HISTORY;
+      }
+      // The checkpoint of the turn the cut falls inside, updated when the previous cut fell inside it too.
+      const turnContext =
+        cut.turnPrefix.length === 0
+          ? null
+          : await inBatches("turn-prefix", cut.turnPrefix, cut.turnContinues ? notes.turnContext : null);
+      summaries = { history, turnContext };
+    } catch (error) {
+      // A compaction its turn's abort ended did not fail: the next start may run it.
+      if (signal?.aborted !== true) {
+        this.ctx.storage.transactionSync(() => markCompactionFailed(this.#sql, end));
+      }
+      const reason = classifyModelError(error, this.#modelSecret()).reason;
+      log("prq.compaction.failed", { ...fields, reason, ...calls, ms: Date.now() - started }, "warn");
+      return "failed";
+    }
+    const text = assembleNotes(summaries.history, summaries.turnContext, files);
+    const adopted = this.ctx.storage.transactionSync(() =>
+      adoptNotes(
+        this.#sql,
+        { text, ...summaries, cut: cut.cut, readFiles: files, targetSha: readHead(this.#sql).headSha },
+        notes.rev,
+        Date.now(),
+      ),
+    );
+    log(adopted === null ? "prq.compaction.discarded" : "prq.compaction.done", {
+      ...fields,
+      ...(adopted === null ? {} : { rev: adopted }),
+      ...cutFields(cut),
+      notesChars: text.length,
+      readFiles: files.length,
+      ...calls,
+      ms: Date.now() - started,
+    });
+    return adopted === null ? "discarded" : "adopted";
+  }
+
+  // One summary, tried once more when it fails, unless the caller's signal ended it.
+  async #summary(
+    model: CloudModel,
+    request: SummaryRequest,
+    maxOutputTokens: number,
+    signal: AbortSignal | undefined,
+    calls: SummaryCalls,
+  ): Promise<string> {
+    for (let attempt = 1; ; attempt += 1) {
+      calls.calls += 1;
+      try {
+        return await summarize(model, request, maxOutputTokens, signal, (usage) => {
+          const tokens = stepTokens(usage);
+          calls.inputTokens += tokens.input;
+          calls.outputTokens += tokens.output;
+          calls.cachedInputTokens += tokens.cachedInput;
+        });
+      } catch (error) {
+        if (attempt >= SUMMARY_ATTEMPTS || signal?.aborted === true) {
+          throw error;
+        }
+        const reason = classifyModelError(error, this.#modelSecret()).reason;
+        log("prq.compaction.retry", { pr: this.name, kind: request.kind, reason }, "warn");
+      }
+    }
+  }
+
+  // A turn the provider refused for the context's length, the first time in its run: the refusal counts the context as
+  // the whole window, so the re-run's start compacts first, and the job runs again under a new turn. Its text so far is
+  // not kept: the run goes on. False when the job has moved on.
+  async #rerun(row: JobRow): Promise<boolean> {
+    const agent = this.cloudAgent();
+    if (agent === undefined) {
+      return false;
+    }
+    const end = (await this.#projection()).at(-1)?.id ?? null;
+    const window = this.contextTokens();
+    const now = Date.now();
+    const rerun = this.ctx.storage.transactionSync(() => {
+      const restarted = rerunTurn(this.#sql, row, crypto.randomUUID(), now);
+      if (restarted !== undefined) {
+        recordOverflow(this.#sql, { tokens: window, through: end, notesRev: readNotes(this.#sql).rev });
+      }
+      return restarted;
+    });
+    if (rerun === undefined) {
+      return false;
+    }
+    log("prq.job.rerun", {
+      ...this.#jobFields(rerun),
+      run: rerun.run,
+      reason: "the provider refused the context's length",
+    });
+    this.#handOver(rerun, agent);
+    this.#publishView();
+    return true;
+  }
+
+  // The seam on its own step: a job waiting is handed over (or every waiting job failed, with no agent).
+  #runSeam(): void {
+    const cloud = this.ctx.storage.transactionSync(() => {
+      const outcome = this.#cloudSeam(Date.now());
+      if (outcome.failed.length > 0 || outcome.started !== null) {
+        writeLedger(this.#sql);
+      }
+      return outcome;
+    });
+    this.#afterNewWork(cloud);
   }
 
   // --- The wake, settle and the outbox ---
@@ -1550,14 +1885,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
           await this.#recoverTurn(row);
         }
       }
-      const cloud = this.ctx.storage.transactionSync(() => {
-        const outcome = this.#cloudSeam(Date.now());
-        if (outcome.failed.length > 0 || outcome.started !== null) {
-          writeLedger(this.#sql);
-        }
-        return outcome;
-      });
-      this.#afterNewWork(cloud);
+      this.#runSeam();
     });
   }
 

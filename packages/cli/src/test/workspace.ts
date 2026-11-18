@@ -13,10 +13,10 @@ import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
-import { type PrRef, PrSessionView, sessionName } from "@prq/protocol";
+import { type PrRef, type PrSessionView, sessionName } from "@prq/protocol";
 import * as v from "valibot";
 
-import { ask, deliver } from "./pr.ts";
+import { ask, deliver, getMessages, sessionView } from "./pr.ts";
 import type { GithubApp } from "./reconcile.ts";
 import { type ModelSettings, startWorker, type Worker } from "./worker.ts";
 
@@ -59,7 +59,7 @@ type Job = PrSessionView["jobs"][number];
 type Container = { id: string; image: string; session: string; state: string };
 
 // The pull request's head, base and update time, from GitHub's API without credentials (a public repository).
-async function readPull(pr: PrRef): Promise<v.InferOutput<typeof Pull>> {
+export async function readPull(pr: PrRef): Promise<v.InferOutput<typeof Pull>> {
   const res = await fetch(`https://api.github.com/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}`, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": "prq-workspace-check" },
   });
@@ -104,6 +104,34 @@ function watchGithub(): { requests: string[]; stop: () => void } {
     requests,
     stop: () => {
       globalThis.fetch = passThrough;
+    },
+  };
+}
+
+// The containers a check's Worker starts, noted as they appear: the new Workspace containers, and any container of the
+// same runtime session (the egress sidecar). remove() removes them, after the Worker has closed.
+export async function workspaceContainers() {
+  const before = new Set((await containers()).map((container) => container.id));
+  const ours = new Set<string>();
+  const workspaces = async (): Promise<Container[]> => {
+    const fresh = (await containers()).filter((container) => !before.has(container.id));
+    const sessions = new Set(fresh.filter((c) => c.image.startsWith(IMAGE_PREFIX)).map((c) => c.session));
+    for (const container of fresh) {
+      if (container.session !== "" && sessions.has(container.session)) {
+        ours.add(checked(container.id));
+      }
+    }
+    return fresh.filter((container) => container.image.startsWith(IMAGE_PREFIX));
+  };
+  return {
+    workspaces,
+    async remove(): Promise<{ seen: number; removed: number }> {
+      await workspaces();
+      const left = (await containers()).filter((container) => ours.has(container.id));
+      for (const container of left) {
+        await removeContainer(container.id);
+      }
+      return { seen: ours.size, removed: left.length };
     },
   };
 }
@@ -168,30 +196,19 @@ async function removeContainer(id: string): Promise<void> {
 
 // --- The session ---
 
-async function view(worker: Worker, pr: PrRef): Promise<PrSessionView> {
-  const session = await worker.durableObject("PrSession", sessionName(pr));
-  return v.parse(PrSessionView, await session["view"]?.());
-}
-
 // The job the predicate picks, once it has ended or JOB_MS passed.
-async function untilEnded(worker: Worker, pr: PrRef, pick: (job: Job) => boolean): Promise<Job | undefined> {
+export async function untilEnded(worker: Worker, pr: PrRef, pick: (job: Job) => boolean): Promise<Job | undefined> {
   const started = Date.now();
-  let job = (await view(worker, pr)).jobs.find(pick);
+  let job = (await sessionView(worker, pr)).jobs.find(pick);
   while (job?.state !== "done" && job?.state !== "failed" && Date.now() - started < JOB_MS) {
     await sleep(POLL_MS);
-    job = (await view(worker, pr)).jobs.find(pick);
+    job = (await sessionView(worker, pr)).jobs.find(pick);
   }
   return job;
 }
 
 async function stored(worker: Worker, pr: PrRef): Promise<v.InferOutput<typeof Stored>> {
-  const res = await fetch(new URL(`/agents/pr-session/${sessionName(pr)}/get-messages`, worker.url()), {
-    headers: { "Cf-Access-Jwt-Assertion": await worker.token() },
-  });
-  if (res.status !== 200) {
-    throw new Error(`get-messages answered ${res.status}`);
-  }
-  return v.parse(Stored, await res.json());
+  return v.parse(Stored, await getMessages(worker, pr));
 }
 
 // The Worker's log events of the workspace and the egress since the given count of lines.
@@ -261,19 +278,8 @@ export async function checkWorkspace(
       `App ${settings.app.settings.GITHUB_APP_ID}, installation ${settings.app.installationId}, ` +
       `model ${settings.model.MODEL_ID}; the Worker in a local runtime with containers on`,
   );
-  const before = new Set((await containers()).map((container) => container.id));
-  const ours = new Set<string>();
-  // The new Workspace containers, and any container of the same runtime session (the egress sidecar), noted as ours.
-  const workspaces = async (): Promise<Container[]> => {
-    const fresh = (await containers()).filter((container) => !before.has(container.id));
-    const sessions = new Set(fresh.filter((c) => c.image.startsWith(IMAGE_PREFIX)).map((c) => c.session));
-    for (const container of fresh) {
-      if (container.session !== "" && sessions.has(container.session)) {
-        ours.add(checked(container.id));
-      }
-    }
-    return fresh.filter((container) => container.image.startsWith(IMAGE_PREFIX));
-  };
+  const tracked = await workspaceContainers();
+  const { workspaces } = tracked;
   const results = { prepared: false, rebuilt: false, contained: false };
   // Installed before the Worker starts, so the Worker's own fetch wrapper passes GitHub's requests through it.
   const github = watchGithub();
@@ -422,12 +428,8 @@ export async function checkWorkspace(
   } finally {
     await worker.close();
     github.stop();
-    await workspaces();
-    const left = (await containers()).filter((container) => ours.has(container.id));
-    for (const container of left) {
-      await removeContainer(container.id);
-    }
-    print(`containers of this check: ${ours.size}, removed after the Worker closed: ${left.length}`);
+    const { seen, removed } = await tracked.remove();
+    print(`containers of this check: ${seen}, removed after the Worker closed: ${removed}`);
   }
   const ok = results.prepared && results.rebuilt && results.contained;
   print(ok ? "as expected" : "NOT as expected");

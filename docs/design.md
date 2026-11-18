@@ -734,15 +734,31 @@ or an analysis's task.
   summarizes, or the commit an answer is about, or that no push has been seen yet).
 
 Compaction follows the approach of Pi (`pi-coding-agent`, MIT license). The prompts and procedure that are copied keep
-Pi's copyright notice.
+Pi's copyright notice (`pr-session/compaction.ts`). Its input is the projection: a question still waiting for its job is
+never summarized, and once answered it enters the kept part with its answer, wherever it was stored.
 
-- **Trigger.** When the context exceeds the model's context length minus a reserve (Pi's default: 16,384 tokens), the
-  system shall compact. It checks after an answer has been returned (after the turn) and compacts then, so the next
-  question does not wait; one compaction took 14 to 23 seconds in the prototype. If a request fails because the context
-  length was exceeded, it compacts and retries once.
+- **Trigger.** When the context exceeds the model's context length minus a reserve, the system shall compact. It checks
+  after an answer has been committed (after the turn) and compacts then, before the next job is handed over; one
+  compaction took 14 to 23 seconds in the prototype. While it runs, the cloud seam, which every hand-over of a waiting
+  job goes through (a question, a push, a retry, settle, a commit), starts no job, so a job that arrives meanwhile waits
+  and reads the compacted context (recovery and a refusal's re-run give the running job a new turn and start no other);
+  the compaction's end, however it ended, opens the seam. At a turn's start, a context already over is compacted first
+  (a compaction a restart lost, or one a refusal asked for), unless a compaction failed at the same end of the
+  projection: that one is not repeated until a new result is committed. A request the provider refuses for the context's
+  length (the `context_length_exceeded` code, or a message about a request over the window, also after a retry) counts
+  the context as the whole window: the job is compacted and run again once per run, and a second refusal fails it with
+  the provider's reason.
+- **Parameters.** At windows of 131,072 tokens or more, the reserve, the kept part and the notes' output limit are Pi's
+  defaults (16,384, 20,000 and 8,192 tokens); below, they are shares of the window (one eighth, three tenths, one
+  fifth), so none exceeds it. That does not make a summary request fit the window: the count that triggers compaction
+  is the provider's, the kept part is an estimate, and a window can be made smaller. Each summary request is sized
+  instead (see Failure below).
 - **Token count.** The usage that the provider returned for the previous response is the main source, and only messages
   added since then are estimated. The estimate is characters ÷ 3, or a ratio measured in the session. Characters ÷ 4
-  under-counted Japanese text and diffs by 1.3 to 1.7 times.
+  under-counted Japanese text and diffs by 1.3 to 1.7 times. The measurement is the last committed turn's last model
+  call (its input and output), kept with the result it ended with and the notes revision its context was built on; it
+  counts only while the notes are at that revision, so after a compaction the count is the estimate of the new context
+  (the notes, the kept part and what came after) until a model call measures it.
 - **Tools.** A job with a workspace commit reads the code through four tools, each a git command at that commit, so a
   path resolves in the commit's tree only and a symlink is its link text, never followed: `list_files` (the paths, all
   or under a path), `read_file` (a file with line numbers), `grep` (an extended regular expression, each match as
@@ -757,21 +773,34 @@ Pi's copyright notice.
   kept.
 - **Overrun inside one turn.** Compaction between turns cannot prevent it, so a turn measures the room it has left: the
   model's window, less the reserve, less the newest request the provider measured (its input and output tokens), less
-  characters ÷ 3 of what was added after it (the tool results taken since). Before the first response, the whole
-  request is estimated. The newest measurement already holds every earlier step, so a long turn is never charged twice
-  for what it read. Each tool result, an `error: …` text included, is cut to the room left, in the order results
-  complete; when less room is left than one result needs, the next model call gets `toolChoice: "none"` (the tool
-  definitions stay, so the cached prefix does too) and the agent answers from what it has read. A turn has no step limit: it goes on while the model calls
-  tools (see [Billing limits](#billing-limits)).
+  characters ÷ 3 of what was added after it (the tool results taken since). Before the turn's first response, its
+  request is the context count (see Token count below): the same measure compaction is triggered by, so a turn under
+  the limit is offered its tools. Only without a measurement is the whole request estimated; its characters ÷ 3 ran
+  well above the provider's count of the same context. The newest measurement already holds every earlier step, so a
+  long turn is never charged twice for what it read. Each tool result, an `error: …` text included, is cut to the room
+  left, in the order results complete; when less room is left than one result needs, the next model call is offered no
+  tools and the agent answers from what it has read. Under `toolChoice: "none"`, which would have kept the tool
+  definitions in the cached prefix, DeepSeek wrote its tool call as the answer's text. Offered no tools, it still did
+  after a dozen tool calls in one analysis at a 20,000-token window; a system line saying the tools were gone did not
+  stop it, and its answers then told later turns so, which stopped calling the tools they were offered. At the
+  production window tools are withdrawn only after about a million tokens in one turn, so this is a known limit of
+  small windows, not a failure path. A measurement taken on a call offered no
+  tools lacks the tool definitions (about 850 tokens for the four), so the next turn's first request can run that much
+  over the count; the reserve holds it. A turn has no step limit: it goes on while the model calls tools (see
+  [Billing limits](#billing-limits)).
 - **Cut point.** Going back from the newest message, the system keeps the most recent part (Pi's default: 20,000
-  tokens). A tool call and its result are never separated. If the cut falls inside a turn, the first half of that turn is
-  summarized separately; this step is required, because it happens every time when the amount kept is smaller than one
-  turn.
-- **Analysis notes.** Everything before the cut point is summarized into fixed sections. If notes already exist, they are
-  updated, not rewritten: keep, add, and drop what became stale. Pi's Goal / Constraints / Progress / Key Decisions /
-  Next Steps / Critical Context become, for PRs: purpose, overview of the change, decisions, the user's interests and
-  preferences, open questions, key facts. Six sections were enough in the prototype. File paths and function names stay
-  verbatim, and a list of the files that were read is appended.
+  tokens). The cut falls at a question, at an analysis's first step (an analysis stores no request), or at a step
+  boundary inside a result; a tool call and its result are one part of a step, so they are never separated. If the cut
+  falls inside a turn, the first half of that turn is summarized separately; this step is required, because it happens
+  every time when the amount kept is smaller than one turn. While later cuts stay inside the same turn, the steps each
+  one removes update that turn's summary, not the history's; it folds into the history's summary once a cut leaves the
+  turn. The cut never moves back: the next one starts from it, and the projection only grows at its end.
+- **Analysis notes.** Everything before the cut point is summarized into fixed sections. If notes already exist, they
+  are updated, not rewritten: keep, add, and drop what became stale. Pi's Goal / Constraints / Progress / Key
+  Decisions / Next Steps / Critical Context become, for PRs: purpose, overview of the change, decisions, the user's
+  interests and preferences, open questions, key facts. Six sections were enough in the prototype. File paths and
+  function names stay verbatim. prq appends a list of the files the tools read, rendered from what they read: the
+  summarizer never sees it, and it is never read back from a reply.
 - **How to write the notes.** "Decisions" uses the user's own words and gives a reason only if the user gave one. "The
   user's interests and preferences" lists only what the user said; left alone, the model adds guesses.
 - **Size.** The notes have no size limit. In the prototype they grew from 3,560 to 13,406 characters, but that was with a
@@ -781,15 +810,41 @@ Pi's copyright notice.
   holds for the expected use (a conversation about one PR, a few compactions at real window sizes), and it is checked on
   real PRs after deployment, looking at answer quality after compaction.
 - **Reasoning.** When a turn ends, the model's reasoning is removed from the context.
-- **Storage and insertion.** PrSession stores the notes with the target SHA, a revision and the message ID at the cut
-  point. The model receives them as a message that says the conversation before this point was compressed into the
-  following summary. The full history is not changed.
-- **Failure.** A summary that hit the output limit is not adopted. When compaction fails, the stored notes and history
-  stay as they were. The retry after a compaction failure happens once.
+- **Storage and insertion.** PrSession stores the notes apart from the history (`prq_notes`): the history's summary,
+  the summary of a turn the cut falls inside, the notes assembled from them, the target SHA, a revision, the cut (the
+  message and the step within it) and the files read. Notes are adopted only at the revision they
+  were built from, so a compaction that another one overtook is discarded. The model receives them, after the system
+  prompt, as a message that says the conversation before this point was compacted into the following summary (Pi's
+  notice), then the projection's kept part (a split turn's kept steps as a partial assistant message), then the job's
+  own question or task. The full history is not changed: no Sessions overlay is stored (see
+  [decisions.md](decisions.md)).
+- **Failure.** A summary that stalled, errored, ended other than `stop` (its output limit included) or has no Markdown
+  heading with text under it is not adopted. The heading may be at any level and in any language (the prompts name no
+  language, so a summary may title its sections in the conversation's), but it is a `#` heading, as the prompts write
+  them: DeepSeek wrote such headings in all four real compactions, in English and Japanese conversations. A reply in
+  another layout (bold or `Label:` lines) fails the compaction with the notes unchanged, and an unfilled outline inside
+  a code fence or split by `---` is not recognised as empty. Before that check, a tag prq wraps the notes or a request's
+  parts in (`summary`, `previous-summary`, `conversation`) is peeled where it encloses the whole reply, until none is
+  left; everything else, a file list included, is the reply's own. An update reads the stored summaries only, and the
+  notes are assembled from them as stored. Each summary request, estimated as a turn's are (characters ÷ 3) with the
+  notes' output limit added, fits the window: a part too large for one request is summarized in batches, oldest first,
+  each updating the summary of the ones before, and a step that does not fit one request alone, with the summary it
+  updates, the prompt and the output allowance, fails the compaction rather than being cut, which would leave its end in
+  neither the notes nor the kept part. A window lowered below one of a session's steps reaches this, and so does a step
+  near a request's room after long notes (at a 20,000-token window, a step of about 42,000 characters after 9,000
+  characters of notes). The session then cannot compact past that step, and its next job over the provider's window
+  fails with the provider's reason. The notes and the cut are adopted only once every batch has succeeded. Each batch is
+  one streamed call under the same bounds as a turn's model requests (see [Billing limits](#billing-limits)) and the
+  notes' output limit, and it is tried once more, so the gate's longest hold grows with the batches: when the provider
+  stops sending, each attempt ends within 120 s of its last output, at most two attempts per batch, and a provider still
+  streaming is not cut, as for a turn. A provider that counts the request higher than the estimate may still refuse it;
+  that attempt fails like any other. When compaction fails, the stored notes and history stay as they were, and the next
+  job runs on the full context.
 - Everything before the cut point is in the notes, so no message leaves the context without being reflected in them.
 - The notes are language-neutral: the compaction prompt does not ask for a particular language, and the prompts for
   analysis and answers decide how the final text reads.
-- Local agents get the same notes from `prq context`, together with the prompts and skills.
+- Notes come from compaction, which runs on the cloud model inside cloud turns, so a local session has none: a local
+  agent reads the whole conversation through `prq context` and manages its own window.
 
 Adoption test: for the largest PR the system is meant to handle (a large diff plus search results), the model still
 answers what was decided earlier after compaction. See [spikes.md](spikes.md) for how the prototype met it.
@@ -943,8 +998,16 @@ Server:
   get (`prq.egress.token_failed`).
 - When a cloud job's run ends (`done` or `failed`), `prq.job.usage` logs the PR key, `jobId`, kind, run, outcome, the
   model, the steps (model calls), the input, output and cached input tokens, the time from the run's first start to its
-  end (`wallMs`, on the session's clock) and its starts. Each finished step is added to the run's row as it ends, so
-  the numbers are summed over every start and a reset loses none.
+  end (`wallMs`, on the session's clock), its starts, and whether it was run again after a context-length refusal
+  (`overflowRerun`). Each finished step is added to the run's row as it ends, so the numbers are summed over every
+  start and a reset loses none.
+- A compaction logs its start with the job it followed or preceded (`prq.compaction.started`, with the notes revision
+  and the cut, before any summary call) and its end: adopted (`done`, with the notes revision, the cut, the summary
+  calls and their tokens), failed (`failed`, with the reason), overtaken (`discarded`), or with nothing to cut
+  (`skipped`, with no start); a summary tried again (`retry`, with the reason), and a job run again after a refusal
+  (`prq.job.rerun`). The start, end and re-run events carry identifiers, positions and counts, never notes, question or
+  answer text; a failure or retry reason is a job failure's reason (the provider's message, redacted and cut to 500
+  characters), which can echo part of a request.
 - The UI shows, per PR, the job state (waiting, which agent ID is working on it, failed with its reason) and, per answer,
   the target SHA, the model and the tokens used. The job state reaches it as the session's Agent state
   (`PrSessionView` in `@prq/protocol`), which only the server sets. Presence, the job counts and the ledger's version
@@ -990,7 +1053,9 @@ Apart from these, bounds that keep a job from waiting forever (liveness, not spe
   the failure as text. The checkout a job's first model call needs is waited for the same way, and a job whose
   checkout cannot be made fails `workspace: <reason>`.
 - A cloud job's run is started at most 3 times across restarts, and the SDK's own recovery is declined (see
-  [Owner and jobs](#owner-and-jobs)). A compaction is retried once.
+  [Owner and jobs](#owner-and-jobs)). Each summary call of a compaction (one per batch) is tried once more, and its
+  requests have the bounds above; a job whose request the provider refused for the context's length is run again once,
+  after a compaction.
 
 ## Directory layout
 
@@ -1037,6 +1102,8 @@ prq/
 │  │   │   │   ├─ turn.ts        a cloud turn: its binding, how it ended, what its commit stores
 │  │   │   │   ├─ model.ts       the model provider, its response bound, a provider error as a failure reason
 │  │   │   │   ├─ context-budget.ts  the context parameters scaled to the model's window
+│  │   │   │   ├─ compaction.ts  compaction: the cut, the summary prompts (Pi's) and calls
+│  │   │   │   ├─ notes.ts       the analysis notes and the context count as stored
 │  │   │   │   ├─ projection.ts  what a job's model reads of the conversation
 │  │   │   │   ├─ tools.ts       the cloud agent's tools and the turn's loop
 │  │   │   │   ├─ room.ts        how much a turn may still read: the window less the newest measured request
@@ -1111,8 +1178,9 @@ Only a deployment can show these.
 - **Billing.** The Durable Object duration of the `wait` long-poll with one waiter, and the real cost of cloud turns.
 - **Providers other than the one tried.** Tool calling and streaming through the AI SDK were tried against one
   OpenAI-compatible provider; each provider to be used needs the same check.
-- **Compaction at real context lengths.** Compaction was exercised with a deliberately small window; its behavior with a
-  real context length, and how often it runs, are not measured.
+- **Compaction at real context lengths.** Compaction was exercised with a deliberately small window (20,000 tokens, also
+  through the Worker against the real provider: `check:compaction`); its behavior with a real context length, how often
+  it runs, and the answers' quality after it on real pull requests are not measured.
 - **Skills.** Not built in the prototype: fetching a skill at a pinned commit and storing it in the Hub (and its size
   against Durable Object storage limits), whether models choose to activate a skill from its description alone, running
   a script under `allowed-tools` in the workspace container, and materializing skills into a local job directory.

@@ -467,7 +467,7 @@ export function failPending(sql: SqlStorage, failure: string, now: number): JobR
     .toSorted((a, b) => a.seq - b.seq);
 }
 
-// The sequence number of a turn being started: one more than the session's count, which addStart advances to it.
+// The sequence number of a turn being started: one more than the session's count, which countTurn advances to it.
 const NEXT_TURN_SEQ = "(SELECT turn_seq + 1 FROM prq_session WHERE id = 1)";
 
 // The next pending job → running under a new turn, unless a job is running. Its workspace is fixed as a claim fixes
@@ -485,15 +485,19 @@ export function startNext(sql: SqlStorage, turnId: string, now: number): JobRow 
     )
     .toArray()[0];
   if (row !== undefined) {
-    addStart(sql, row, now);
+    countTurn(sql, row);
+    countStart(sql, row, now);
   }
   return row;
 }
 
-// A start of the job's current run under its new turn: the session counts the turn (its sequence is the job's
-// turn_seq), and the run's usage counts the start; the first one also dates the run.
-function addStart(sql: SqlStorage, row: JobRow, now: number): void {
+// The session counts the job's new turn: its sequence is the job's turn_seq.
+function countTurn(sql: SqlStorage, row: JobRow): void {
   sql.exec("UPDATE prq_session SET turn_seq = ? WHERE id = 1", row.turn_seq);
+}
+
+// The run's usage counts a start of the job under its new turn; the first one also dates the run.
+function countStart(sql: SqlStorage, row: JobRow, now: number): void {
   sql.exec(
     `INSERT INTO prq_job_usage (job_id, run, starts, started_at) VALUES (?, ?, 1, ?)
      ON CONFLICT (job_id, run) DO UPDATE SET starts = starts + 1`,
@@ -508,10 +512,9 @@ export function runningJobs(sql: SqlStorage): JobRow[] {
   return sql.exec<JobRow>("SELECT * FROM prq_jobs WHERE state = 'running' ORDER BY seq").toArray();
 }
 
-// A running job whose turn ended without a result → running under a new turn (a restart), counting a start. Only while
-// the job is still the ended turn's.
-export function restartTurn(sql: SqlStorage, row: JobRow, turnId: string, now: number): JobRow | undefined {
-  const restarted = sql
+// A running job → running under a new turn, which the session counts. Only while the job is still the old turn's.
+function nextTurn(sql: SqlStorage, row: JobRow, turnId: string, now: number): JobRow | undefined {
+  const next = sql
     .exec<JobRow>(
       `UPDATE prq_jobs SET rev = rev + 1, turn_id = ?, turn_seq = ${NEXT_TURN_SEQ}, updated_at = ?
        WHERE job_id = ? AND state = 'running' AND turn_id IS ? RETURNING *`,
@@ -521,10 +524,31 @@ export function restartTurn(sql: SqlStorage, row: JobRow, turnId: string, now: n
       row.turn_id,
     )
     .toArray()[0];
+  if (next !== undefined) {
+    countTurn(sql, next);
+  }
+  return next;
+}
+
+// A running job whose turn ended without a result → running under a new turn (a restart), counting a start. Only while
+// the job is still the ended turn's.
+export function restartTurn(sql: SqlStorage, row: JobRow, turnId: string, now: number): JobRow | undefined {
+  const restarted = nextTurn(sql, row, turnId, now);
   if (restarted !== undefined) {
-    addStart(sql, restarted, now);
+    countStart(sql, restarted, now);
   }
   return restarted;
+}
+
+// A running job whose turn the provider refused for the context's length → running under a new turn (the re-run after
+// a compaction), its run marked as re-run. Not a start: a run's starts count the interruptions only. Only while the job
+// is still the refused turn's.
+export function rerunTurn(sql: SqlStorage, row: JobRow, turnId: string, now: number): JobRow | undefined {
+  const rerun = nextTurn(sql, row, turnId, now);
+  if (rerun !== undefined) {
+    sql.exec("UPDATE prq_job_usage SET overflow_rerun = 1 WHERE job_id = ? AND run = ?", rerun.job_id, rerun.run);
+  }
+  return rerun;
 }
 
 // How a running job's turn ended: its result stored as the message, or a failure with the reason.
@@ -550,13 +574,14 @@ export type JobUsage = {
   output_tokens: number;
   cached_input_tokens: number;
   started_at: number;
+  overflow_rerun: number;
 };
 
 export function jobUsage(sql: SqlStorage, row: Pick<JobRow, "job_id" | "run">): JobUsage | undefined {
   return sql
     .exec<JobUsage>(
-      `SELECT starts, steps, input_tokens, output_tokens, cached_input_tokens, started_at FROM prq_job_usage
-       WHERE job_id = ? AND run = ?`,
+      `SELECT starts, steps, input_tokens, output_tokens, cached_input_tokens, started_at, overflow_rerun
+       FROM prq_job_usage WHERE job_id = ? AND run = ?`,
       row.job_id,
       row.run,
     )

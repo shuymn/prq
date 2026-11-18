@@ -120,6 +120,7 @@ describe("schema", () => {
         "prq_inbox",
         "prq_stalls",
         "prq_job_usage",
+        "prq_notes",
       ];
       for (const table of tables) {
         sql.exec(`DROP TABLE ${table}`);
@@ -161,6 +162,7 @@ describe("schema", () => {
         "prq_inbox",
         "prq_stalls",
         "prq_job_usage",
+        "prq_notes",
       ];
       for (const table of tables) {
         sql.exec(`DROP TABLE ${table}`);

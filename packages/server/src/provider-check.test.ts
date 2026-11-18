@@ -37,8 +37,8 @@ function toolCall(index: number, fields: Record<string, unknown>): Record<string
 
 const USAGE = { prompt_tokens: 2400, completion_tokens: 1 };
 
-// Replies that pass every check, in the checks' order: streaming, the two cache runs, the tool call, toolChoice
-// "none", the context-length prompt.
+// Replies that pass every check, in the checks' order: streaming, the two cache runs, the tool call, no tools offered
+// after one, the context-length prompt.
 function passing(): Reply[] {
   return [
     answerStream("1\n2\n3"),
@@ -51,7 +51,7 @@ function passing(): Reply[] {
       finishChunk("tool_calls"),
       usageChunk(USAGE),
     ]),
-    answerStream("I cannot read files here."),
+    answerStream("README.md introduces prq, which summarizes pull requests."),
     errorBody(400, {
       error: {
         message: "This model's maximum context length is 131072 tokens. However, you requested 163856 tokens.",
@@ -88,12 +88,21 @@ describe("provider check", () => {
     expect(report).toContain("tool calls: 0; finish reason: stop (raw: stop); answered (text, then a stop): yes");
     expect(report).toContain('"status":400,"code":"context_length_exceeded"');
     expect(report).toContain("recognised as a context-length refusal: yes");
-    // The context-length prompt was over the window, and toolChoice "none" was sent with the tools.
+    // The context-length prompt was over the window, and the withdrawn tools' request sent the lookup and its result
+    // with no tool offered.
     const sent = provider.requests.map((request) => request.body);
     expect(JSON.stringify(sent[5]).length).toBeGreaterThan(Number(MODEL_ENV.MODEL_CONTEXT_TOKENS) * 2);
-    expect(v.parse(v.object({ tool_choice: v.string(), tools: v.array(v.unknown()) }), sent[4])).toMatchObject({
-      tool_choice: "none",
-    });
+    const withdrawn = v.parse(
+      v.looseObject({
+        messages: v.array(v.looseObject({ role: v.string() })),
+        tools: v.optional(v.array(v.unknown())),
+        tool_choice: v.optional(v.unknown()),
+      }),
+      sent[4],
+    );
+    expect(withdrawn.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"]);
+    expect(withdrawn.tools ?? []).toEqual([]);
+    expect(withdrawn.tool_choice).toBeUndefined();
   });
 
   it.for<{ name: string; check: number; replace: Record<number, Reply> }>([
@@ -103,17 +112,17 @@ describe("provider check", () => {
       replace: { 1: sse([delta("OK"), finishChunk("stop")]), 2: sse([delta("OK"), finishChunk("stop")]) },
     },
     {
-      name: 'no text for toolChoice "none"',
+      name: "no text with no tools offered",
       check: 4,
       replace: { 4: sse([finishChunk("stop"), usageChunk(USAGE)]) },
     },
     {
-      name: 'blank text for toolChoice "none"',
+      name: "blank text with no tools offered",
       check: 4,
       replace: { 4: sse([delta(" \n"), finishChunk("stop"), usageChunk(USAGE)]) },
     },
     {
-      name: 'an answer to toolChoice "none" cut at the output limit',
+      name: "an answer with no tools offered cut at the output limit",
       check: 4,
       replace: { 4: sse([delta("I cannot"), finishChunk("length"), usageChunk(USAGE)]) },
     },

@@ -843,7 +843,7 @@ describe("room", () => {
     await push(ref, "a");
 
     const ended = await untilEnded(stub, sha("a"));
-    expect(model.calls.map((call) => call.toolChoice)).toEqual(Array.from({ length: 9 }, () => ({ type: "auto" })));
+    expect(model.calls.map((call) => toolNames(call).length)).toEqual(Array.from({ length: 9 }, () => 4));
     expect(ended).toEqual({ state: "done", failure: null });
     expect(model.calls).toHaveLength(9);
     const results = toolResults(model.calls[8]);
@@ -884,8 +884,7 @@ describe("room", () => {
     expect(results.reduce((sum, result) => sum + result.length, 0)).toBeLessThanOrEqual(left);
     expect(results.filter((result) => result.split("\n").length === 100)).toHaveLength(1);
     expect(results.filter((result) => /\[cut at line \d+ .*no room for more/.test(result))).toHaveLength(1);
-    // The answer's step keeps the tool definitions (a cached prefix) but may call none.
-    expect(model.calls.map((call) => call.toolChoice)).toEqual([{ type: "auto" }, { type: "none" }]);
-    expect(toolNames(model.calls[1])).toEqual(["diff", "grep", "list_files", "read_file"]);
+    // The answer's step is offered no tools.
+    expect(model.calls.map((call) => toolNames(call))).toEqual([["diff", "grep", "list_files", "read_file"], []]);
   });
 });
