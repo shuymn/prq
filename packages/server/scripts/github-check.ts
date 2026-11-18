@@ -1,10 +1,9 @@
 // A manual check of the GitHub App (`pnpm run check:github <owner>/<repo>#<number>` in packages/server): reads
 // GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY and GITHUB_INSTALLATION_ID from the environment (the package script loads
-// packages/server/.dev.vars; a variable already set wins, so the key can come from its file:
-// GITHUB_APP_PRIVATE_KEY="$(cat <path>)"), mints an installation token and reads the pull request twice through the
-// production client. It never prints the key or a token. Exits 1 with the reason when the configuration is missing or
-// invalid, or when a check did not behave as reconciliation needs. Not part of the Worker: wrangler bundles only what
-// src/index.ts imports.
+// packages/server/.dev.vars, which `pnpm run dev-vars write` in packages/cli writes; a variable already set wins),
+// mints an installation token and reads the pull request twice through the production client. It never prints the key
+// or a token. Exits 1 with the reason when the configuration is missing or invalid, or when a check did not behave as
+// reconciliation needs. Not part of the Worker: wrangler bundles only what src/index.ts imports.
 
 import { canonicalPrRef } from "@prq/protocol";
 

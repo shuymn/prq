@@ -1,13 +1,13 @@
 // A manual check of context compaction with Docker (`pnpm run check:compaction [options] <owner>/<repo>#<number>` in
 // packages/cli; src/test/compaction.ts), on a pull request of a public repository the GitHub App is installed on, with
-// the settings of packages/server/.dev.vars (src/test/app-check.ts) and a small window there (MODEL_CONTEXT_TOKENS, such
-// as 20000), so a few questions pass it. `--japanese` asks its questions in Japanese, so the summaries are written for a
-// Japanese conversation; English otherwise. `--analysis-prompt <text>` and `--answer-prompt <text>` save the host's
-// prompts before the analysis (two different texts, so each request can be told to hold only its own).
-// `--analysis-language ja|en` names the language the analysis prompt asks for: the analysis's prose is then held to it
-// in the verdict. `--analysis-only` runs the push's analysis alone and reports its stored text (its length, its
-// Japanese share, any tool call written as text, its start), at whatever window .dev.vars sets: done, with text, no
-// tool call and in the expected language is as expected.
+// the settings of packages/server/.dev.vars (src/test/app-check.ts) and a small window there (MODEL_CONTEXT_TOKENS:
+// `pnpm run dev-vars write --window 20000`), so a few questions pass it. `--japanese` asks its questions in Japanese,
+// so the summaries are written for a Japanese conversation; English otherwise. `--analysis-prompt <text>` and
+// `--answer-prompt <text>` save the host's prompts before the analysis (two different texts, so each request can be
+// told to hold only its own). `--analysis-language ja|en` names the language the analysis prompt asks for: the
+// analysis's prose is then held to it in the verdict. `--analysis-only` runs the push's analysis alone and reports its
+// stored text (its length, its Japanese share, any tool call written as text, its start), at whatever window .dev.vars
+// sets: done, with text, no tool call and in the expected language is as expected.
 
 import { runAppCheck } from "./app-check.ts";
 import { analysisLanguage, checkCompaction, ENGLISH, JAPANESE } from "./compaction.ts";

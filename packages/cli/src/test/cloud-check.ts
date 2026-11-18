@@ -1,7 +1,8 @@
 // A manual end-to-end check of the cloud agent (`pnpm run check:cloud` in packages/cli; src/test/cloud.ts): the model
-// settings come from packages/server/.dev.vars, and nothing else configures one. With --invalid-model, the model ID is
-// replaced by one no provider has, and the check passes when the job fails with the provider's refusal. It never prints
-// the API key. Exits 1 with the reason when the settings are missing or the job did not end as expected.
+// settings come from packages/server/.dev.vars (`pnpm run dev-vars write`; src/test/dev-vars.ts), and nothing else
+// configures one. With --invalid-model, the model ID is replaced by one no provider has, and the check passes when the
+// job fails with the provider's refusal. It never prints the API key. Exits 1 with the reason when the settings are
+// missing or the job did not end as expected.
 
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
