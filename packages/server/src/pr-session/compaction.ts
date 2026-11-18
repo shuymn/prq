@@ -301,17 +301,14 @@ export function findCut(projection: readonly Projected[], previous: CutPosition 
       }
     }
   }
-  if (turnStart < 0) {
-    return { cut: position, toSummarize: steps.slice(start, cut), turnPrefix: [], turnContinues: false };
-  }
-  if (turnStart < start) {
-    return { cut: position, toSummarize: [], turnPrefix: steps.slice(start, cut), turnContinues: true };
-  }
+  // Where the removed steps split between the history and the turn's checkpoint: the cut when it is at a turn's start,
+  // else the turn's start, or the previous cut when the turn started before it.
+  const boundary = turnStart < 0 ? cut : Math.max(start, turnStart);
   return {
     cut: position,
-    toSummarize: steps.slice(start, turnStart),
-    turnPrefix: steps.slice(turnStart, cut),
-    turnContinues: false,
+    toSummarize: steps.slice(start, boundary),
+    turnPrefix: steps.slice(boundary, cut),
+    turnContinues: turnStart >= 0 && turnStart < start,
   };
 }
 
