@@ -13,7 +13,7 @@ import * as v from "valibot";
 import { toolArgv } from "../workspace-git.ts";
 import { STREAM_TIMEOUT } from "./model.ts";
 import { cutAt, fitPage, MIN_PAGE_CHARS, type Page, type PageRequest } from "./pages.ts";
-import { ContextRoom } from "./room.ts";
+import { CHARS_PER_TOKEN, ContextRoom } from "./room.ts";
 import {
   type CommandResult,
   type PreparedWorkspace,
@@ -320,7 +320,7 @@ export async function toolLoop(
 ): Promise<ToolLoop> {
   const room = new ContextRoom(window);
   const tools = workspaceTools({ ...context, room });
-  room.start(measured === null ? { chars: await requestChars(request, tools) } : { tokens: measured });
+  room.start(measured ?? Math.ceil((await requestChars(request, tools)) / CHARS_PER_TOKEN));
   let withdrawn: number | null = null;
   return {
     tools,

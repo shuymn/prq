@@ -123,6 +123,7 @@ import {
 import { projection } from "./projection.ts";
 import { analysisTask, systemPrompt } from "./prompt.ts";
 import { adoptAnswer, clearMark, failTry, isLagging, notePush, readReconcile } from "./reconcile.ts";
+import { measuredTokens } from "./room.ts";
 import { toolLoop, TURN_LOOP } from "./tools.ts";
 import {
   type Binding,
@@ -1411,10 +1412,7 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       onStepFinish: ({ usage }) => {
         addStep(this.#sql, row, stepTokens(usage));
         // The context as the provider measured it: the step's request and its output.
-        outcome.contextTokens =
-          usage.inputTokens === undefined || usage.outputTokens === undefined
-            ? undefined
-            : usage.inputTokens + usage.outputTokens;
+        outcome.contextTokens = measuredTokens(usage) ?? undefined;
       },
     });
     const metadata = this.#resultMetadata(row, { kind: "cloud", model: model.modelId });
