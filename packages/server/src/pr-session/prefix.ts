@@ -1,6 +1,6 @@
 import type { Job, PrDetails, PrRef } from "@prq/protocol";
 
-import { instructionPart, systemPrompt } from "./prompt.ts";
+import { instructionPart, withFacts } from "./prompt.ts";
 import type { TurnSkill } from "./skill-tools.ts";
 import { toolDefinitionsJson } from "./turn-tools.ts";
 
@@ -25,12 +25,12 @@ export type Prefix = {
 };
 
 // What of a turn's prefix holds for the whole turn, built once at its start: whether it has the workspace's tools, the
-// skills it lists, the host's prompt, whether any tool is offered, the offered tools' definitions as JSON and the
-// fingerprints, which leave the pull request's facts out.
+// skills it lists, the system message's instruction part as rendered, whether any tool is offered, the offered tools'
+// definitions as JSON and the fingerprints, which leave the pull request's facts out.
 export type TurnInstructions = {
   workspace: boolean;
   skills: readonly TurnSkill[];
-  hostPrompt: string;
+  instructions: string;
   tools: boolean;
   definitions: string;
   fingerprint: string;
@@ -46,12 +46,12 @@ export async function turnInstructions(
   const tools = definitions !== "";
   const fingerprint = await fingerprintOf(instructions, definitions);
   const bare = tools ? await fingerprintOf(instructions, "") : fingerprint;
-  return { workspace, skills, hostPrompt, tools, definitions, fingerprint, bare };
+  return { workspace, skills, instructions, tools, definitions, fingerprint, bare };
 }
 
 // The turn's prefix with the pull request's facts as `details` holds them.
 export function prefixWith(turn: TurnInstructions, input: { pr: PrRef; details: PrDetails | null; job: Job }): Prefix {
-  const { text } = systemPrompt({ ...input, tools: turn.workspace, skills: turn.skills, hostPrompt: turn.hostPrompt });
+  const text = withFacts(turn.instructions, { ...input, tools: turn.workspace });
   const { fingerprint, bare, definitions } = turn;
   return { system: text, chars: text.length + definitions.length, fingerprint, bare, toolChars: definitions.length };
 }

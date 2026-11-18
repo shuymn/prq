@@ -33,6 +33,15 @@ export function systemPrompt({
   hostPrompt: string;
 }): SystemPrompt {
   const instructions = instructionPart({ kind: job.target.kind, tools, skills, hostPrompt });
+  return { text: withFacts(instructions, { pr, details, job, tools }), instructions };
+}
+
+// The system prompt from its instruction part on: the pull request's facts as `details` holds them, then the job's
+// own lines, the workspace's tools named with `tools`.
+export function withFacts(
+  instructions: string,
+  { pr, details, job, tools }: { pr: PrRef; details: PrDetails | null; job: Job; tools: boolean },
+): string {
   const lines = [instructions, `Pull request: ${pr.owner}/${pr.repo}#${pr.number}`];
   if (details === null) {
     lines.push("Its details are not known yet: no webhook has arrived.");
@@ -58,7 +67,7 @@ export function systemPrompt({
         "read that commit, and diff shows the pull request's change against its base.",
     );
   }
-  return { text: lines.join("\n"), instructions };
+  return lines.join("\n");
 }
 
 // The skill mechanism, the core's only line about skills: what the list below it is and how its tools load a skill.
