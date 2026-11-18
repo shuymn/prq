@@ -429,6 +429,9 @@ function withoutWrappers(text: string): string {
 // its sections in the conversation's.
 const HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 
+// A code fence's opening or closing line, or a thematic break: markup around an outline, not text in a section.
+const NOT_TEXT = /^ {0,3}(?:`{3,}[^`]*|~{3,}.*|([-*_])(?:[ \t]*\1){2,}[ \t]*)$/;
+
 // Whether a reply has a section with text under it, up to the next heading.
 function hasSectionText(text: string): boolean {
   const lines = text.split("\n");
@@ -438,7 +441,7 @@ function hasSectionText(text: string): boolean {
     }
     const after = lines.slice(index + 1);
     const end = after.findIndex((next) => HEADING.test(next));
-    return (end < 0 ? after : after.slice(0, end)).some((next) => next.trim() !== "");
+    return (end < 0 ? after : after.slice(0, end)).some((next) => next.trim() !== "" && !NOT_TEXT.test(next));
   });
 }
 

@@ -782,12 +782,13 @@ never summarized, and once answered it enters the kept part with its answer, whe
   tools and the agent answers from what it has read. Under `toolChoice: "none"`, which would have kept the tool
   definitions in the cached prefix, DeepSeek wrote its tool call as the answer's text. Offered no tools, it still did
   after a dozen tool calls in one analysis at a 20,000-token window; a system line saying the tools were gone did not
-  stop it, and its answers then told later turns so, which stopped calling the tools they were offered. At the
-  production window tools are withdrawn only after about a million tokens in one turn, so this is a known limit of
-  small windows, not a failure path. A measurement taken on a call offered no
-  tools lacks the tool definitions (about 850 tokens for the four), so the next turn's first request can run that much
-  over the count; the reserve holds it. A turn has no step limit: it goes on while the model calls tools (see
-  [Billing limits](#billing-limits)).
+  stop it, and its answers then told later turns so, which stopped calling the tools they were offered. Such an answer
+  ends normally: nothing detects the markup, so the job is done and the answer, markup included, stays in the history,
+  where later turns can imitate it. How soon a turn reaches this depends on the window (`MODEL_CONTEXT_TOKENS`): at a
+  window of about a million tokens, tools are withdrawn only after about that much in one turn; at a small window, a
+  dozen tool calls reach it. A measurement taken on a call offered no tools lacks the tool definitions (about 850
+  tokens for the four), so the next turn's first request can run that much over the count; the reserve holds it. A
+  turn has no step limit: it goes on while the model calls tools (see [Billing limits](#billing-limits)).
 - **Cut point.** Going back from the newest message, the system keeps the most recent part (Pi's default: 20,000
   tokens). The cut falls at a question, at an analysis's first step (an analysis stores no request), or at a step
   boundary inside a result; a tool call and its result are one part of a step, so they are never separated. If the cut
@@ -822,8 +823,8 @@ never summarized, and once answered it enters the kept part with its answer, whe
   heading with text under it is not adopted. The heading may be at any level and in any language (the prompts name no
   language, so a summary may title its sections in the conversation's), but it is a `#` heading, as the prompts write
   them: DeepSeek wrote such headings in all four real compactions, in English and Japanese conversations. A reply in
-  another layout (bold or `Label:` lines) fails the compaction with the notes unchanged, and an unfilled outline inside
-  a code fence or split by `---` is not recognised as empty. Before that check, a tag prq wraps the notes or a request's
+  another layout (bold or `Label:` lines) or an unfilled outline in a code fence or split by `---` fails the compaction
+  with the notes unchanged; a fence or a break is not text. Before that check, a tag prq wraps the notes or a request's
   parts in (`summary`, `previous-summary`, `conversation`) is peeled where it encloses the whole reply, until none is
   left; everything else, a file list included, is the reply's own. An update reads the stored summaries only, and the
   notes are assembled from them as stored. Each summary request, estimated as a turn's are (characters ÷ 3) with the
