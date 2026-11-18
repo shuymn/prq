@@ -183,7 +183,7 @@ function lastToolResult(request: ChatRequest): string | null {
 
 // Answer 1: yomiyasu's pages as their notes give them, internal-comms, then one of its files, then a text.
 function answerOne(example: string): Script {
-  let stage: "yomiyasu" | "internal-comms" | "resource" | "text" = "yomiyasu";
+  let stage: "yomiyasu" | "internal-comms" | "resource" = "yomiyasu";
   let pages = 0;
   return (request): Scripted => {
     const result = lastToolResult(request);
@@ -205,7 +205,6 @@ function answerOne(example: string): Script {
       stage = "resource";
       return { tool: "read_skill_resource", input: { name: INTERNAL_COMMS_NAME, path: example } };
     }
-    stage = "text";
     return { text: "Answer 1, written after the skills were read." };
   };
 }
