@@ -819,24 +819,27 @@ never summarized, and once answered it enters the kept part with its answer, whe
   own question or task. The full history is not changed: no Sessions overlay is stored (see
   [decisions.md](decisions.md)).
 - **Failure.** A summary that stalled, errored, ended other than `stop` (its output limit included) or has no Markdown
-  heading with text under it is not adopted; the heading may be at any level and in any language, as the prompts ask for
-  none and a summary may name its sections in the conversation's language. Before that check, a tag prq wraps the notes
-  or a request's parts in (`summary`, `previous-summary`, `conversation`) is peeled where it encloses the whole reply,
-  until none is left; everything else, a file list included, is the reply's own. An update reads the stored summaries
-  only, and the notes are assembled from them as stored. Each summary request, estimated as a turn's are (characters
-  ÷ 3) with the notes' output limit added, fits the window: a part too large for one request is summarized in batches,
-  oldest first, each updating the summary of the ones before, and a step that does not fit one request alone, with the
-  summary it updates, the prompt and the output allowance, fails the compaction rather than being cut, which would leave
-  its end in neither the notes nor the kept part. A window lowered below one of a session's steps reaches this, and so
-  does a step near a request's room after long notes (at a 20,000-token window, a step of about 42,000 characters after
-  9,000 characters of notes). The session then cannot compact past that step, and its next job over the provider's
-  window fails with the provider's reason. The notes and the cut are adopted only once every batch has succeeded. Each
-  batch is one streamed call under the same bounds as a turn's model requests (see [Billing limits](#billing-limits))
-  and the notes' output limit, and it is tried once more, so the gate's longest hold grows with the batches: when the
-  provider stops sending, each attempt ends within 120 s of its last output, at most two attempts per batch, and a
-  provider still streaming is not cut, as for a turn. A provider that counts the request higher than the estimate may
-  still refuse it; that attempt fails like any other. When compaction fails, the stored notes and history stay as they
-  were, and the next job runs on the full context.
+  heading with text under it is not adopted. The heading may be at any level and in any language (the prompts name no
+  language, so a summary may title its sections in the conversation's), but it is a `#` heading, as the prompts write
+  them: DeepSeek wrote such headings in all four real compactions, in English and Japanese conversations. A reply in
+  another layout (bold or `Label:` lines) fails the compaction with the notes unchanged, and an unfilled outline inside
+  a code fence or split by `---` is not recognised as empty. Before that check, a tag prq wraps the notes or a request's
+  parts in (`summary`, `previous-summary`, `conversation`) is peeled where it encloses the whole reply, until none is
+  left; everything else, a file list included, is the reply's own. An update reads the stored summaries only, and the
+  notes are assembled from them as stored. Each summary request, estimated as a turn's are (characters ÷ 3) with the
+  notes' output limit added, fits the window: a part too large for one request is summarized in batches, oldest first,
+  each updating the summary of the ones before, and a step that does not fit one request alone, with the summary it
+  updates, the prompt and the output allowance, fails the compaction rather than being cut, which would leave its end in
+  neither the notes nor the kept part. A window lowered below one of a session's steps reaches this, and so does a step
+  near a request's room after long notes (at a 20,000-token window, a step of about 42,000 characters after 9,000
+  characters of notes). The session then cannot compact past that step, and its next job over the provider's window
+  fails with the provider's reason. The notes and the cut are adopted only once every batch has succeeded. Each batch is
+  one streamed call under the same bounds as a turn's model requests (see [Billing limits](#billing-limits)) and the
+  notes' output limit, and it is tried once more, so the gate's longest hold grows with the batches: when the provider
+  stops sending, each attempt ends within 120 s of its last output, at most two attempts per batch, and a provider still
+  streaming is not cut, as for a turn. A provider that counts the request higher than the estimate may still refuse it;
+  that attempt fails like any other. When compaction fails, the stored notes and history stay as they were, and the next
+  job runs on the full context.
 - Everything before the cut point is in the notes, so no message leaves the context without being reflected in them.
 - The notes are language-neutral: the compaction prompt does not ask for a particular language, and the prompts for
   analysis and answers decide how the final text reads.
