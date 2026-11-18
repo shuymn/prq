@@ -149,6 +149,22 @@ function notes(summary: string): Script {
   return answerScript(summary, { input: 100, output: 50 });
 }
 
+// Q1 and Q2 with their answers of 3,000 estimated tokens, as their commits stored them: the projection before the third
+// of threeTurns, which then runs alone and compacts after its commit.
+async function twoExchanges(stub: DurableObjectStub<PrSession>): Promise<void> {
+  await seedHistory(stub, [
+    Q1,
+    cloudAnswer("q1", [{ type: "text", text: sized("answer one", 3000) }]),
+    Q2,
+    cloudAnswer("q2", [{ type: "text", text: sized("answer two", 3000) }]),
+  ]);
+}
+
+// The third of threeTurns: its answer, measured over the limit.
+function thirdTurn(): Script {
+  return answerScript(sized("answer three", 3000), { input: 15_000, output: 3000 });
+}
+
 describe("failed summaries", () => {
   it.for([
     ["ends at its output limit", [...text("cut notes"), finish("length")]],
@@ -164,19 +180,21 @@ describe("failed summaries", () => {
       const logs = captureLogs();
       const session = await cloudSession("compaction", sockets);
       const { stub, client } = session;
-      const model = new ScriptedModel().add(...threeTurns(), failed, failed, answerScript("answer four"));
+      await twoExchanges(stub);
+      const model = new ScriptedModel().add(thirdTurn(), failed, failed, answerScript("answer four"));
       model.contextTokens = WINDOW;
       useCloudModel(model);
-      for (const asked of [[Q1], [Q1, Q2], [Q1, Q2, Q3]]) {
-        await client.chat(asked);
-        await untilState(stub, asked.at(-1)?.id ?? "", "done");
-      }
+      await client.chat([Q1, Q2, Q3]);
+      await untilState(stub, "q3", "done");
       await client.chat([Q1, Q2, Q3, Q4]);
       await untilState(stub, "q4", "done");
 
+      // The compaction ran after Q3's commit, not at Q4's start.
+      const q3 = (await jobOf(stub, "q3")).job_id;
+      expect(events(logs, "prq.compaction.started")).toMatchObject([{ jobId: q3 }]);
       expect(model.calls.filter(isSummaryCall)).toHaveLength(2);
       expect(await notesRow(stub)).toMatchObject({ text: null, rev: 0, cut_message_id: null });
-      const a3 = `answer-${(await jobOf(stub, "q3")).job_id}`;
+      const a3 = `answer-${q3}`;
       expect(await contextRow(stub)).toMatchObject({ compaction_failed_through: a3 });
       expect(
         turnPrompts(model)
@@ -205,17 +223,16 @@ describe("failed summaries", () => {
       "- Keep the `<summary>` element.",
       "- List the files between `<read-files>` and `</read-files>`, as `<conversation>` does its messages.",
     ].join("\n");
+    await twoExchanges(stub);
     const model = new ScriptedModel().add(
-      ...threeTurns(),
+      thirdTurn(),
       notes(`<summary>\n${body}\n</summary>`),
       notes("the turn's start"),
     );
     model.contextTokens = WINDOW;
     useCloudModel(model);
-    for (const asked of [[Q1], [Q1, Q2], [Q1, Q2, Q3]]) {
-      await client.chat(asked);
-      await untilState(stub, asked.at(-1)?.id ?? "", "done");
-    }
+    await client.chat([Q1, Q2, Q3]);
+    await untilState(stub, "q3", "done");
     await vi.waitFor(async () => expect((await notesRow(stub)).rev).toBe(1));
 
     expect(await notesRow(stub)).toMatchObject({
@@ -225,11 +242,12 @@ describe("failed summaries", () => {
   });
 
   it("adopts the summary its second attempt makes", async () => {
-    captureLogs();
+    const logs = captureLogs();
     const session = await cloudSession("compaction", sockets);
     const { stub, client } = session;
+    await twoExchanges(stub);
     const model = new ScriptedModel().add(
-      ...threeTurns(),
+      thirdTurn(),
       [...text("cut notes"), finish("length")],
       notes("the notes"),
       notes("the turn's start"),
@@ -237,11 +255,15 @@ describe("failed summaries", () => {
     );
     model.contextTokens = WINDOW;
     useCloudModel(model);
-    for (const asked of [[Q1], [Q1, Q2], [Q1, Q2, Q3], [Q1, Q2, Q3, Q4]]) {
+    for (const asked of [
+      [Q1, Q2, Q3],
+      [Q1, Q2, Q3, Q4],
+    ]) {
       await client.chat(asked);
       await untilState(stub, asked.at(-1)?.id ?? "", "done");
     }
 
+    expect(events(logs, "prq.compaction.started")).toMatchObject([{ jobId: (await jobOf(stub, "q3")).job_id }]);
     expect(model.calls.filter(isSummaryCall)).toHaveLength(3);
     expect(await notesRow(stub)).toMatchObject({
       text: "the notes\n\n---\n\n**Turn Context (split turn):**\n\nthe turn's start",
