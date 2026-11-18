@@ -41,6 +41,9 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
   (`--window` sets `MODEL_CONTEXT_TOKENS`), and deleted only by `pnpm run dev-vars remove`; `pnpm run dev-vars status`
   names the variables it sets. No command prints a value but the window `write` reports
   (`packages/cli/src/test/dev-vars.ts`).
+- `pnpm run check:skills` in `packages/cli` needs only the GitHub App in `packages/server/.dev.vars` (no model, no
+  Docker): it previews, registers, updates and removes the public skill `skills/yomiyasu` of `nanaism/yomiyasu` through
+  the Worker against real GitHub, and compares the stored copy with what it reads from GitHub itself.
 - lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows, a
   `fileToken` check on `design/prq.pen`, and commitlint on the message.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
