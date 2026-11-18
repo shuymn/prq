@@ -15,6 +15,7 @@ import * as v from "valibot";
 
 import { GITHUB_API_VERSION, type GithubClient, githubExchange, githubRequest, githubStatus } from "../github.ts";
 import { log } from "../log.ts";
+import { WaitTimeout, withTimeout } from "../wait.ts";
 import type { SkillLink } from "./link.ts";
 import { readSkillMd, type SkillFrontmatter } from "./skill.ts";
 import type { SkillFileContent, SkillVersion } from "./skills.ts";
@@ -117,17 +118,19 @@ function encodedPath(path: string): string {
 // it is, aborts its signal, which every request of the unit carries.
 async function unit<T>(ms: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new SkillFailure("unavailable", `GitHub did not answer within ${ms / 1000} s; try again`)),
-      ms,
-    );
-  });
   try {
-    return await Promise.race([run(controller.signal), expired]);
+    // The bound is armed before the work starts, a microtask later.
+    return await withTimeout(
+      Promise.resolve().then(() => run(controller.signal)),
+      ms,
+      "a skill's reads from GitHub",
+    );
+  } catch (error) {
+    if (error instanceof WaitTimeout) {
+      throw new SkillFailure("unavailable", `GitHub did not answer within ${ms / 1000} s; try again`);
+    }
+    throw error;
   } finally {
-    clearTimeout(timer);
     controller.abort();
   }
 }
