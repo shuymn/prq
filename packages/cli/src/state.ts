@@ -159,14 +159,29 @@ export class State {
   }
 }
 
-// Writes a file through a temporary file and a rename, so a reader sees the old file or the new one, never a part.
-export async function writeAtomically(path: string, content: string): Promise<void> {
-  const temporary = `${path}.${randomUUID()}.tmp`;
+// A temporary file beside path for writeAtomically, named so that no other write picks it.
+export function temporaryFor(path: string): string {
+  return `${path}.${randomUUID()}.tmp`;
+}
+
+// How writeAtomically writes: the temporary file it renames, and what runs just before the rename is issued.
+export type Staging = { temporary: string; renaming: () => void };
+
+// Writes a file through a temporary file and a rename, so a reader sees the old file or the new one, never a part. A
+// failure removes the temporary file; once the rename is done nothing is left that can fail, so an error means the file
+// was not replaced.
+export async function writeAtomically(
+  path: string,
+  content: string,
+  { temporary, renaming }: Staging = { temporary: temporaryFor(path), renaming: () => {} },
+): Promise<void> {
   try {
     await writeFile(temporary, content, { mode: 0o600, flush: true });
+    renaming();
     await rename(temporary, path);
-  } finally {
+  } catch (error) {
     await rm(temporary, { force: true });
+    throw error;
   }
 }
 

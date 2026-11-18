@@ -5,7 +5,7 @@ import type { Config } from "./config.ts";
 import { CliError, EXIT } from "./errors.ts";
 import { CALL_TIMEOUT_MS, type Clock, Retryable, RetryWindow, withRetry } from "./retry.ts";
 
-export type Route = "/cli/wait" | "/cli/claim" | "/cli/context" | "/cli/submit";
+export type Route = "/cli/wait" | "/cli/claim" | "/cli/context" | "/cli/skill" | "/cli/submit";
 
 // A route's refusal: a status other than 2xx, 503 or an authentication failure. It ends the command with exit 1 unless
 // the command handles its code (a claim mismatch).

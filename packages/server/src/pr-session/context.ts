@@ -50,6 +50,18 @@ export function jsonBytes(value: unknown): number {
   return encoder.encode(JSON.stringify(value)).length;
 }
 
+// The text whose JSON is longest, the first of them on a tie; "" when there is none.
+export function longestJson(texts: readonly string[]): string {
+  let longest = { text: "", bytes: 0 };
+  for (const text of texts) {
+    const bytes = jsonBytes(text);
+    if (bytes > longest.bytes) {
+      longest = { text, bytes };
+    }
+  }
+  return longest.text;
+}
+
 // What a page leaves for its messages: the budget less the rest of the response, with the details at their largest and
 // a cursor naming the conversation's longest message ID at the largest offset. The pull request, the job and the first
 // page's instructions are the response's own: while the claim holds, the job does not change, and the instructions are
@@ -58,14 +70,7 @@ export function messageRoom(
   around: Pick<ContextResponse, "pr" | "job" | "instructions">,
   ids: readonly string[],
 ): number {
-  let longest = { id: "", bytes: 0 };
-  for (const id of ids) {
-    const bytes = jsonBytes(id);
-    if (bytes > longest.bytes) {
-      longest = { id, bytes };
-    }
-  }
-  const nextCursor = cursorText({ id: longest.id, offset: Number.MAX_SAFE_INTEGER });
+  const nextCursor = cursorText({ id: longestJson(ids), offset: Number.MAX_SAFE_INTEGER });
   return CONTEXT_PAGE_BYTES - jsonBytes({ ...around, details: LARGEST_DETAILS, messages: [], nextCursor });
 }
 

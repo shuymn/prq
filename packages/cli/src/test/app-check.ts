@@ -94,16 +94,23 @@ function redactingPrint(privateKey: string, apiKey: string | null): (line: strin
   };
 }
 
-// Runs a check named `name` that needs the GitHub App alone and takes no argument, with the App of
-// packages/server/.dev.vars, and sets the exit code.
+// A pull request as a check's argument names it, <owner>/<repo>#<number>; null for anything else.
+export function prArgument(arg: string | undefined): PrRef | null {
+  const target = /^([^/\s]+)\/([^#\s]+)#([1-9][0-9]*)$/.exec(arg ?? "");
+  if (target === null) {
+    return null;
+  }
+  const [, owner = "", repo = "", number = ""] = target;
+  return canonicalPrRef({ owner, repo, number: Number(number) });
+}
+
+// Runs a check named `name` that needs the GitHub App alone, with the App of packages/server/.dev.vars, and sets the
+// exit code. The check reads its own arguments, before it calls this.
 export async function runGithubAppCheck(
   name: string,
   check: (app: GithubAppSettings, print: (line: string) => void) => Promise<boolean>,
 ): Promise<void> {
   const fail: (reason: string) => never = failer(name);
-  if (process.argv.slice(2).some((arg) => arg !== "--")) {
-    fail(`usage: check:${name}`);
-  }
   const value = await readSettings(APP_NAMES, fail);
   const app = { GITHUB_APP_ID: value("GITHUB_APP_ID"), GITHUB_APP_PRIVATE_KEY: value("GITHUB_APP_PRIVATE_KEY") };
   const print = redactingPrint(app.GITHUB_APP_PRIVATE_KEY, null);
@@ -138,11 +145,10 @@ export async function runAppCheck<const O extends ParseArgsOptionsConfig>(
     );
   }
   const { values, positionals } = parsed;
-  const target = positionals.length === 1 ? /^([^/\s]+)\/([^#\s]+)#([1-9][0-9]*)$/.exec(positionals[0] ?? "") : null;
-  if (target === null) {
+  const pr = positionals.length === 1 ? prArgument(positionals[0]) : null;
+  if (pr === null) {
     fail(`usage: check:${name} ${usage}<owner>/<repo>#<number>`);
   }
-  const [, owner = "", repo = "", number = ""] = target;
 
   const value = await readSettings(NAMES, fail);
   if (!/^[1-9][0-9]*$/.test(value("GITHUB_INSTALLATION_ID"))) {
@@ -166,7 +172,7 @@ export async function runAppCheck<const O extends ParseArgsOptionsConfig>(
           MODEL_CONTEXT_TOKENS: value("MODEL_CONTEXT_TOKENS"),
         },
       },
-      canonicalPrRef({ owner, repo, number: Number(number) }),
+      pr,
       print,
       values,
     );

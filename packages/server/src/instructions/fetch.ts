@@ -4,8 +4,7 @@ import {
   SKILL_FILE_BYTES,
   SKILL_FILES,
   skillDirectoryIssue,
-  skillManifestIssue,
-  skillPathIssue,
+  skillPathsIssue,
   type SkillPreview,
   SkillRef,
   SkillSource,
@@ -358,15 +357,9 @@ async function readTree(
     }
     files.push({ path: entry.path, mode: entry.mode, size: entry.size, blob: entry.sha });
   }
-  for (const file of files) {
-    const issue = skillPathIssue(file.path);
-    if (issue !== null) {
-      throw invalid(issue);
-    }
-  }
-  const collision = skillManifestIssue(files.map((file) => file.path));
-  if (collision !== null) {
-    throw invalid(collision);
+  const issue = skillPathsIssue(files.map((file) => file.path));
+  if (issue !== null) {
+    throw invalid(issue);
   }
   if (files.length > SKILL_FILES) {
     throw invalid(`${at} has ${files.length} files, more than ${SKILL_FILES}`);

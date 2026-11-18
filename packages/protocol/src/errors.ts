@@ -22,7 +22,8 @@ export const ErrorCode = v.picklist([
   "stale_job",
   // A skill of that name is registered already.
   "skill_exists",
-  // The skill's registration is not at the expected revision: it was updated, or removed, since the preview.
+  // The skill's registration is not at the expected revision: it was updated, or removed, since the preview, or since
+  // the context a local agent reads its files for listed it.
   "skill_changed",
   // GitHub's skill is not one prq stores: its frontmatter, a cap, a symlink or submodule, a truncated tree, paths
   // differing only in case, a name other than the expected one, or a blob that does not match its tree.

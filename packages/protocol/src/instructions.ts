@@ -4,7 +4,7 @@ import { MAX_URL_CHARS, PrRef, Sha } from "./pr.ts";
 
 // The host's instructions (docs/design.md, Instructions and skills): a free-form prompt for the summaries and one for
 // the answers, read by every cloud turn of that kind and carried to local agents by /cli/context; and the skills the
-// host registered, each pinned to a commit and stored by the Hub.
+// host registered, each pinned to a commit and stored by the Hub, whose files local agents read through /cli/skill.
 
 // The longest prompt, in UTF-16 code units. A style prompt is a few lines; the cap bounds the system prompt, the first
 // context page and the Hub's row.
@@ -26,10 +26,6 @@ export type Prompts = v.InferOutput<typeof Prompts>;
 // PUT /api/prompts/:kind: the prompt's new text, which replaces the stored one. The answer is the stored Prompt.
 export const SavePromptRequest = v.object({ text: PromptText });
 export type SavePromptRequest = v.InferOutput<typeof SavePromptRequest>;
-
-// What the first /cli/context page carries for a local agent: both prompts, as the settings hold them.
-export const ContextInstructions = v.object({ prompts: Prompts });
-export type ContextInstructions = v.InferOutput<typeof ContextInstructions>;
 
 // --- Skills ---
 
@@ -122,6 +118,18 @@ export function skillManifestIssue(paths: readonly string[]): string | null {
     }
   }
   return null;
+}
+
+// Why a skill's paths are refused, or null: the first that skillPathIssue refuses, in their order, else
+// skillManifestIssue of them all.
+export function skillPathsIssue(paths: readonly string[]): string | null {
+  for (const path of paths) {
+    const issue = skillPathIssue(path);
+    if (issue !== null) {
+      return issue;
+    }
+  }
+  return skillManifestIssue(paths);
 }
 
 // A skill's name, as the Agent Skills specification writes it: lowercase letters, digits and single hyphens between
@@ -254,3 +262,21 @@ export type UpdateSkillRequest = v.InferOutput<typeof UpdateSkillRequest>;
 // GET /api/instructions: both prompts, and the registered skills sorted by name.
 export const Instructions = v.object({ prompts: Prompts, skills: v.array(Skill) });
 export type Instructions = v.InferOutput<typeof Instructions>;
+
+// A registered skill as a local agent's context lists it: what tells the agent when to use it, and the revision and
+// commit its files are read at (/cli/skill).
+export const ContextSkill = v.object({
+  name: SkillName,
+  description: SkillFields.description,
+  rev: Skill.entries.rev,
+  sha: Sha,
+});
+export type ContextSkill = v.InferOutput<typeof ContextSkill>;
+
+// What the first /cli/context page carries for a local agent: both prompts, as the settings hold them, and the
+// registered skills sorted by name.
+export const ContextInstructions = v.object({
+  prompts: Prompts,
+  skills: v.pipe(v.array(ContextSkill), v.maxLength(SKILL_COUNT)),
+});
+export type ContextInstructions = v.InferOutput<typeof ContextInstructions>;

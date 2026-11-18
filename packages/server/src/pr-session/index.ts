@@ -1042,9 +1042,9 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
   }
 
   // What a local agent works on its claimed job from (/cli/context): the pull request, its details, the job as its claim
-  // fixed it, on the first page the host's instructions (read from the Hub; 503 when it does not answer), and a page of
-  // the conversation from the cursor (the start when there is none), the whole response within CONTEXT_PAGE_BYTES. Only
-  // the job's current claim, held by the agent, gets it. The claim is checked before the instructions and the
+  // fixed it, on the first page the host's instructions (both prompts and the skill list, read from the Hub; 503 when it
+  // does not answer), and a page of the conversation from the cursor (the start when there is none), the whole response
+  // within CONTEXT_PAGE_BYTES. Only the job's current claim, held by the agent, gets it. The claim is checked before the instructions and the
   // conversation are read, to size the page around the job, and again after them, in the step that answers, so the
   // answer never carries a claim that had already ended.
   async context(
@@ -1064,7 +1064,11 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     let instructions: ContextInstructions | undefined;
     if (cursor === undefined) {
       try {
-        instructions = { prompts: (await this.readInstructions()).prompts };
+        const { prompts, skills } = await this.readInstructions();
+        instructions = {
+          prompts,
+          skills: skills.map(({ name, description, rev, sha }) => ({ name, description, rev, sha })),
+        };
       } catch (error) {
         log("prq.context.instructions_failed", { pr: this.name, jobId, error: errorName(error) }, "warn");
         // A claim that ended during the read is stale, whatever the read gave: asking again cannot help.

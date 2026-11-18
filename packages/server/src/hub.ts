@@ -26,6 +26,7 @@ import {
   SavePromptRequest,
   type Skill,
   SKILL_COUNT,
+  type SkillFilesResponse,
   WaitRequest,
   waitBoundMs,
   type WaitResponse,
@@ -42,6 +43,7 @@ import {
   readSkill,
   readSkillFiles,
   readSkillFilesAt,
+  readSkillPage,
   readSkillPath,
   readSkills,
   skillChanged,
@@ -520,6 +522,25 @@ export class Hub extends Agent<Env, HubView> {
   // registration is at the revision the turn listed, so a command read in one version never runs against another.
   async skillFilesAt(name: string, rev: number): Promise<SkillFilesRead> {
     return readSkillFilesAt(this.#sql, name, rev);
+  }
+
+  // A page of a registered skill's files, as a local agent reads them (/cli/skill): only while the registration is at
+  // the revision the agent's context listed, so every page of one read is of one version.
+  async skillPage(name: string, rev: number, cursor?: string): Promise<SkillFilesResponse | ErrorResponse> {
+    const read = readSkillPage(this.#sql, name, rev, cursor);
+    if (read.kind === "page") {
+      return read.page;
+    }
+    if (read.kind === "missing") {
+      return { error: "not_found", detail: `no skill named ${name} is registered` };
+    }
+    if (read.kind === "changed") {
+      return {
+        error: "skill_changed",
+        detail: `the skill ${name} was updated or removed since the context listed it; read the context again`,
+      };
+    }
+    return { error: "bad_request", detail: "the cursor names no file of the skill" };
   }
 
   // Registers a skill read and checked by a confirm, in one transaction with its checks: the name is free, and fewer
