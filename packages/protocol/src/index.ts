@@ -47,6 +47,7 @@ export {
   skillManifestIssue,
   SkillName,
   skillPathIssue,
+  skillPathsIssue,
   SkillPreview,
   SkillRef,
   SkillSource,

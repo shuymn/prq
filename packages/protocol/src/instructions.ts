@@ -120,6 +120,18 @@ export function skillManifestIssue(paths: readonly string[]): string | null {
   return null;
 }
 
+// Why a skill's paths are refused, or null: the first that skillPathIssue refuses, in their order, else
+// skillManifestIssue of them all.
+export function skillPathsIssue(paths: readonly string[]): string | null {
+  for (const path of paths) {
+    const issue = skillPathIssue(path);
+    if (issue !== null) {
+      return issue;
+    }
+  }
+  return skillManifestIssue(paths);
+}
+
 // A skill's name, as the Agent Skills specification writes it: lowercase letters, digits and single hyphens between
 // them, at most SKILL_NAME_CHARS.
 export const SkillName = v.pipe(

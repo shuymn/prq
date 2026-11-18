@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, open } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { SKILL_BYTES, SKILL_FILES, type SkillFilesResponse, skillManifestIssue, skillPathIssue } from "@prq/protocol";
+import { SKILL_BYTES, SKILL_FILES, type SkillFilesResponse, skillPathsIssue } from "@prq/protocol";
 
 import { CliError, EXIT } from "./errors.ts";
 
@@ -64,7 +64,7 @@ export async function readSkillFiles(
     cursors.add(response.nextCursor);
     cursor = response.nextCursor;
   }
-  const issue = [...paths].map(skillPathIssue).find((found) => found !== null) ?? skillManifestIssue([...paths]);
+  const issue = skillPathsIssue([...paths]);
   if (issue !== null) {
     throw refused(issue);
   }
