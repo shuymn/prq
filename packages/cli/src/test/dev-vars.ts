@@ -12,8 +12,8 @@
 //
 // In packages/cli, `pnpm run dev-vars write [--window <tokens>]` writes the file (--window sets MODEL_CONTEXT_TOKENS),
 // `status` names the expected variables it sets, and `remove` deletes it. No command line names the file or the
-// secrets directory, and nothing printed holds a value, the window aside, or a line of a secret file, an error
-// included: an error names the file or the variable.
+// secrets directory, and nothing printed holds a value or a line of a secret file, an error included: an error names
+// the file or the variable. The one value printed is the window `write` reports, a number of tokens and no secret.
 //
 // Each value is written between single quotes, which both parsers that read the file take as they are, newlines
 // included, with no escape or expansion: wrangler's (dotenv 16.3.1's parse, bundled in wrangler-dist/cli.js) and
@@ -190,6 +190,7 @@ async function write(window: string | undefined): Promise<void> {
   }
   print(`wrote ${TARGET} (mode 0600)`);
   print(`variables: ${[...vars.keys()].join(", ")}`);
+  // The one value printed: a number of tokens, no secret.
   print(
     `window: ${vars.get("MODEL_CONTEXT_TOKENS") ?? ""} tokens (${window === undefined ? "model.env" : "--window"})`,
   );
