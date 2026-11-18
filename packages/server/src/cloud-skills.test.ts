@@ -814,26 +814,22 @@ async function measuredActivation({
 }
 
 describe("a turn whose result holds a skill call", () => {
-  it("keeps no measurement: the next question starts from the estimate on the markers, with its tools offered", async () => {
-    captureLogs();
-    const { stub, client, model, committed } = await measuredActivation({ last: 14_280 });
-
-    await client.chat([question("q2", "q2?")]);
-    await untilState(stub, "q2", "done");
-
-    expect(model.calls.filter(isSummaryCall)).toEqual([]);
-    expect((model.calls[2]?.tools ?? []).map((entry) => entry.name)).toEqual(["activate_skill", "read_skill_resource"]);
-    expect(committed.context_tokens).toBeNull();
-  });
-
-  it("keeps no measurement taken after the tools were withdrawn either", async () => {
-    captureLogs();
-    // The activation's step leaves less room than a result: the answer's step is offered no tools.
-    const { stub, client, model, committed } = await measuredActivation({
-      last: 14_280,
+  it.each([
+    {
+      title: "keeps no measurement: the next question starts from the estimate on the markers, with its tools offered",
+      before: {},
+      answerTools: ["activate_skill", "read_skill_resource"],
+    },
+    {
+      // The activation's step leaves less room than a result: the answer's step is offered no tools.
+      title: "keeps no measurement taken after the tools were withdrawn either",
       before: { input: 10_659, output: 10 },
-    });
-    expect(model.calls[1]?.tools ?? []).toEqual([]);
+      answerTools: [],
+    },
+  ])("$title", async ({ before, answerTools }) => {
+    captureLogs();
+    const { stub, client, model, committed } = await measuredActivation({ last: 14_280, before });
+    expect((model.calls[1]?.tools ?? []).map((entry) => entry.name)).toEqual(answerTools);
 
     await client.chat([question("q2", "q2?")]);
     await untilState(stub, "q2", "done");
