@@ -372,6 +372,11 @@ export function field(line: string, name: string): string {
   return new RegExp(`\\b${name}: '?([^',}\\s]*)`).exec(line)?.[1] ?? "";
 }
 
+// A field of a log line whose quoted value may hold spaces (`name: 'exit 0'`).
+export function textField(line: string, name: string): string {
+  return new RegExp(`\\b${name}: '([^']*)'`).exec(line)?.[1] ?? field(line, name);
+}
+
 // The message a compaction's start names as its cut, from its log line.
 function cutOf(line: string): string {
   return field(line, "cutMessageId");

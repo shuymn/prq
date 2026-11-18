@@ -10,7 +10,8 @@
 // 3. G2: cloud turns with yomiyasu and a second skill registered, the Worker's model scripted (skill-context.ts).
 // 4. G7: updates by a new link, by a ref and by a permalink each pin exactly the previewed SHA with a new revision, an
 //    apply with an old revision gets 409, a remove leaves no skill, and the next turn lists none and offers no tool.
-// 5. G3, with a pull request argument: the smoke with the model of packages/server/.dev.vars (skill-smoke.ts).
+// 5. G3, with a pull request argument: the scripts step with containers on and the scripted model (skill-scripts.ts),
+//    then the smoke with the model of packages/server/.dev.vars (skill-smoke.ts).
 // It prints what each step saw (never a token or the key) and passes when every step held.
 
 import { Instructions, type PrRef, Skill, SkillPreview, SkillUpdatePreview } from "@prq/protocol";
@@ -20,6 +21,7 @@ import type { GithubApp } from "./reconcile.ts";
 import { SCRIPTED_MODEL, serveScripted } from "./scripted.ts";
 import { checkAfterRemoval, checkContext, type Verdict } from "./skill-context.ts";
 import { api, appGithub, type Github, type Manifest, sha1Blob, skillLink, YOMIYASU } from "./skill-github.ts";
+import { checkScripts } from "./skill-scripts.ts";
 import { checkSmoke } from "./skill-smoke.ts";
 import { type GithubAppSettings, type ModelSettings, startWorker, type Worker } from "./worker.ts";
 
@@ -320,6 +322,7 @@ export async function checkSkills(
     scripted.stop();
   }
   if (smoke !== null) {
+    await checkScripts(smoke.app, smoke.pr, print, verdict);
     await checkSmoke(smoke, smoke.pr, print, verdict);
   }
   return ok;
