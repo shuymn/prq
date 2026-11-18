@@ -59,6 +59,14 @@ export async function clearPrompts(): Promise<void> {
   });
 }
 
+// Removes the host's skills, which outlive a test within its file as the prompts do.
+export async function clearSkills(): Promise<void> {
+  await runInDurableObject(await hub(), (_, state) => {
+    state.storage.sql.exec("DELETE FROM prq_skill_files");
+    state.storage.sql.exec("DELETE FROM prq_skills");
+  });
+}
+
 export function hub(): Promise<DurableObjectStub<Hub>> {
   return hubStub(env);
 }

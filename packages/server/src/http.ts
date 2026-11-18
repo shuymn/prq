@@ -1,10 +1,11 @@
-import { type ErrorCode, type ErrorResponse, PRQ_VERSION_HEADER } from "@prq/protocol";
+import { type ErrorCode, type ErrorResponse, PRQ_VERSION_HEADER, ROUTE_CALL_MS } from "@prq/protocol";
 import type { Context, ErrorHandler, MiddlewareHandler, NotFoundHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import * as v from "valibot";
 
 import { log } from "./log.ts";
+import { hubStub } from "./names.ts";
 import { SERVER_VERSION } from "./version.ts";
 import { WaitTimeout } from "./wait.ts";
 
@@ -15,6 +16,17 @@ export class Unavailable extends Error {
 
 // How a route bounds a call: the call's outcome, or a WaitTimeout once ms has passed (withTimeout in production).
 export type CallBound = <T>(call: PromiseLike<T>, ms: number, what: string) => Promise<T>;
+
+// A route's call to the Hub, the stub's lookup included, bounded as each route's call: when the bound passes, the
+// route answers 503 and the call keeps running.
+export function hubCall<T>(
+  bound: CallBound,
+  env: Env,
+  what: string,
+  call: (hub: Awaited<ReturnType<typeof hubStub>>) => Promise<T>,
+): Promise<T> {
+  return bound((async () => call(await hubStub(env)))(), ROUTE_CALL_MS, what);
+}
 
 const STATUS = {
   bad_request: 400,
@@ -27,6 +39,9 @@ const STATUS = {
   target_mismatch: 409,
   not_retryable: 409,
   stale_job: 409,
+  skill_exists: 409,
+  skill_changed: 409,
+  invalid_skill: 422,
 } as const satisfies Record<ErrorCode, ContentfulStatusCode>;
 
 export function errorResponse(c: Context, error: ErrorCode, detail?: string): Response {

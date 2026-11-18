@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { readGithubAppConfig } from "./config.ts";
 import { GITHUB_CALL_MS, githubFor, githubStatus } from "./github.ts";
-import { appEnv, failure, hanging, pull, serveGithub, TEST_TOKEN } from "./test/github.ts";
+import { appEnv, failure, hanging, pull, serveGithub, tokenFor } from "./test/github.ts";
 import { until } from "./test/provider.ts";
 import { tracked } from "./test/session.ts";
 import { sha } from "./test/webhook.ts";
@@ -53,9 +53,9 @@ describe("installation tokens", () => {
     expect(token?.authorization).toMatch(/^bearer /);
     expect(decodeJwt(token?.authorization?.slice("bearer ".length) ?? "")).toMatchObject({ iss: 4242 });
     expect(api.reads().map((read) => [read.path, read.authorization])).toEqual([
-      ["/repos/octo/widgets/pulls/7", `token ${TEST_TOKEN}`],
-      ["/repos/octo/widgets/pulls/7", `token ${TEST_TOKEN}`],
-      ["/repos/octo/widgets/pulls/7", `token ${TEST_TOKEN}`],
+      ["/repos/octo/widgets/pulls/7", `token ${tokenFor(5)}`],
+      ["/repos/octo/widgets/pulls/7", `token ${tokenFor(5)}`],
+      ["/repos/octo/widgets/pulls/7", `token ${tokenFor(6)}`],
     ]);
   });
 

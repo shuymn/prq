@@ -701,13 +701,57 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
   `description`) and optional `references/` and `scripts/`. The host registers a skill by the GitHub link to its
   `SKILL.md` (`/blob/<ref>/<path>/SKILL.md`), which names the repository, ref and path. The ref is a commit SHA (a
   permalink) or a branch or tag, which may contain `/`: the segments after `blob/` are split at the longest prefix that
-  names a branch or tag, or at the first segment when it is a commit SHA (as GitHub does). The preview shows the
-  resolved ref and path, so a wrong split is seen before confirming. The system resolves the ref to a commit SHA and
-  pins the skill to it; a permalink is already pinned, and updating it means pasting a new link.
+  names a branch or tag (a branch before a tag of the same name; two `matching-refs` reads of the first segment,
+  whatever the depth), or else at the first segment when it is a commit SHA in either case, kept in lowercase (as GitHub
+  does). A SHA, in a link or in what a confirm pins, must name a commit: it is checked by the Git database's commits
+  endpoint, which takes no ref, since the trees endpoint takes a tree's SHA as readily and would list that directory as
+  a commit's root. The preview shows the resolved ref and path, so a wrong split is seen before confirming. The system
+  resolves the ref to a commit SHA and pins the skill to it; a permalink is already pinned. Only
+  `https://github.com/<owner>/<repo>/blob/…/SKILL.md` is taken (the query and fragment ignored); an empty, `.` or `..`
+  segment, or an encoded `/`, is refused, and before reading the tree the preview checks the directory and the ref as
+  the confirm does (a directory of at most 1,024 UTF-8 bytes without a NUL or a backslash), so it never shows a pin the
+  confirm refuses. GitHub answers `409` both for an empty repository and for one it cannot serve now: a `409` whose message says the repository is empty is refused as such (`404`), and any other stays a retryable `503`.
   Registering and updating take two steps: a preview resolves the ref and fetches the skill without saving it, so the
   host sees what would be pinned (see [ui.md](ui.md#4-settings)), and confirming pins the previewed SHA without
-  resolving the ref again. The Hub stores the registration and the pinned contents. A skill is only re-read from GitHub
-  when the host updates it to a new ref. An example is `skills/yomiyasu` of `nanaism/yomiyasu` (MIT).
+  resolving the ref again. Everything after the resolve is read by that SHA (the skill's subtree in one recursive tree
+  read), so a ref that moves meanwhile changes nothing. The Hub stores the registration and the pinned contents. A
+  skill is only re-read from GitHub when the host updates it, by a ref of the registered repository and path (a branch,
+  a tag or a full SHA, in that order) or by a new link, which may name another directory or repository; either way the
+  new `SKILL.md` must carry the registered name. An example is `skills/yomiyasu` of `nanaism/yomiyasu` (MIT).
+- **Registration reads GitHub in the Worker and stores in the Hub.** The GitHub part runs in the route, so the Hub is
+  never held by a fetch: each GitHub call ends within 10 s, a preview within 30 s and a confirm within 60 s, and every
+  ending aborts the requests still in flight. The one exception is the installation token's minting: auth-app shares
+  one mint of an installation's token among the isolate's concurrent callers, so a preview or confirm that ends stops
+  waiting for it and leaves it to its own bounds (the App's JWT signed within 10 s, the token request answered within
+  10 s). A preview reads only `SKILL.md`'s blob. A confirm reads `SKILL.md` first
+  and requires its `name` to be the previewed one, then every other file, at most six at a time (the Workers limit on
+  simultaneous outgoing connections); the first failure aborts the reads in flight and the queued ones never start.
+  Blobs are read as bytes (the raw media type, never decoded as text, so a BOM or a byte that is not UTF-8 stays), the
+  count checked while the body streams and the read cut as soon as it passes the tree's size, then the size and the
+  git blob SHA-1 checked against the tree. The token is the GitHub App installation's: the App's own on the skill's
+  repository (a private repository needs it), else the first installation without `suspended_at` on one page of the
+  App's list, whose token reads any public repository; registration needs the App, as every GitHub call of prq does.
+  The Hub stores the checked skill in one transaction (`prq_skills`, and `prq_skill_files` with each regular file
+  whole): a register while the name is free and fewer than 32 skills are registered, an update while the registration
+  is at the revision it was previewed against (`409 skill_changed` otherwise, a remove and a register again
+  included), each with a new revision from the Hub's counter. The update's route checks that revision before reading
+  GitHub too, and again when the read fails, so a registration changed meanwhile answers `409 skill_changed`, never
+  GitHub's failure. A remove deletes the row and the files.
+- **What a skill may hold**, checked from the tree before any blob but `SKILL.md` is read: regular files only (a
+  symlink or a submodule anywhere refuses the skill), a complete tree (GitHub's `truncated` refuses it), at most 200
+  files, 1 MiB each and 8 MiB in all, each path relative and at most 100 UTF-8 bytes (one validator in
+  `@prq/protocol`, which a local copy uses too), and no two paths that, where they first differ, have components equal
+  but for case or Unicode normalization (`Docs/a.md` beside `docs/b.md`): a case-insensitive disk would merge them. The
+  frontmatter is YAML with aliases refused; `name` in the specification's form, `description` 1–1,024 characters,
+  `license` up to 200 and `allowed-tools` up to 2,000 (a string, split at spaces outside parentheses, or a list), kept
+  as its entries as written. Two deviations from the specification: a `name` other than its directory's is not refused,
+  since prq keys a skill by its name alone and the preview shows both; and the rules are narrower than the reference
+  validator's, which takes Unicode lowercase letters in a `name` and counts `description` in characters, where prq takes
+  ASCII lowercase letters, digits and hyphens and counts UTF-16 code units (an emoji counts two). The routes, all under Access: `POST
+  /api/skills/preview` (`409 skill_exists` when the name is registered), `POST /api/skills`, `POST
+  /api/skills/:name/preview` (the new version beside the current one), `PUT /api/skills/:name` (with `expectedRev`),
+  `DELETE /api/skills/:name`; `GET /api/instructions` lists the skills sorted by name. A refusal answers 400, 404, 409,
+  422 (`invalid_skill`) or 503 with the reason the settings show. A turn does not use skills yet.
 - **Context budget.** Only each skill's `name` and `description` stay in the model context. The body and the files it
   refers to are loaded on demand through two tools: `activate_skill(name)` returns the `SKILL.md` body, and
   `read_skill_resource(name, path)` returns a file inside that skill's directory (path-checked, so it cannot leave it).
@@ -1071,6 +1115,10 @@ Server:
   (`prq.job.rerun`). The start, end and re-run events carry identifiers, positions and counts, never notes, question or
   answer text; a failure or retry reason is a job failure's reason (the provider's message, redacted and cut to 500
   characters), which can echo part of a request.
+- Skill registration logs each GitHub read of a skill with its phase (preview or confirm), the installation whose
+  token read it, the repository, the commit, and the files and bytes (`prq.skill.fetched`), a refused read with its
+  error code (`fetch_failed`), and each stored change with the name, revision and commit (`registered`, `updated`,
+  `removed`); never the link's text or a file's.
 - The UI shows, per PR, the job state (waiting, which agent ID is working on it, failed with its reason) and, per answer,
   the target SHA, the model and the tokens used. The job state reaches it as the session's Agent state
   (`PrSessionView` in `@prq/protocol`), which only the server sets. Presence, the job counts and the ledger's version
@@ -1152,7 +1200,8 @@ prq/
 │  │   │   ├─ wait.ts            bounded waits: timeouts and the one-at-a-time queue
 │  │   │   ├─ webhook.ts         GitHub webhook (signature, own PRs only)
 │  │   │   ├─ cli-routes.ts      /cli/* (wait / claim / context / submit)
-│  │   │   ├─ api-routes.ts      /api/* (job retry, the Hub's pages)
+│  │   │   ├─ api-routes.ts      /api/* (job retry, the Hub's pages, the host's instructions)
+│  │   │   ├─ skill-routes.ts    /api/skills/* (preview, register, update, remove)
 │  │   │   ├─ hub.ts             Hub (ledger, pool, notifications, wait, its view)
 │  │   │   ├─ ledger.ts          the ledger's rules: problem labels and presence
 │  │   │   ├─ pr-session/        PrSession (intake, jobs, context assembly, tools)
@@ -1174,8 +1223,9 @@ prq/
 │  │   │   │   ├─ pages.ts       a page of a command's output, from any line or character
 │  │   │   │   ├─ workspace.ts   what the tools call: the workspace's client and its bounds
 │  │   │   │   └─ prompt.ts      the system prompt and an analysis's task
-│  │   │   ├─ github.ts          the GitHub App: installation tokens and pull request reads, each bounded
-│  │   │   ├─ instructions/      the host's prompts as the Hub stores them; later the skill registry and its tools
+│  │   │   ├─ github.ts          the GitHub App: installation tokens, the App's JWT and bounded API exchanges
+│  │   │   ├─ instructions/      the host's prompts and skills as the Hub stores them; a skill's link, frontmatter
+│  │   │   │                     and its reads from GitHub
 │  │   │   ├─ workspace.ts       Workspace: the container, the gate on turns, prepares and paged commands
 │  │   │   ├─ workspace-git.ts   the checkout's git procedure as data, and whether a checkout is reused
 │  │   │   ├─ egress.ts          GitEgress: the container's only way out
@@ -1198,7 +1248,7 @@ prq/
 │          ├─ answer.ts          the answer prq submit sends: answer.md, checked before any request
 │          ├─ commands/          one module per command
 │          ├─ e2e/               the compiled binary against the real Worker
-│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`), manual checks of a cloud question, of head reconciliation, of the workspace container and of compaction (`pnpm run check:cloud`, `check:reconcile`, `check:workspace`, `check:compaction`)
+│          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access, the binary as a child process, the local stack (`pnpm run stack`), manual checks of a cloud question, of head reconciliation, of the workspace container, of compaction and of skill registration (`pnpm run check:cloud`, `check:reconcile`, `check:workspace`, `check:compaction`, `check:skills`)
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
 ├─ .claude/skills/verify-prq/  running the local stack with scripted jobs for a local agent, and reading its request log
 ├─ docs/                   design.md, decisions.md, ui.md, spikes.md
@@ -1246,8 +1296,10 @@ Only a deployment can show these.
 - **Compaction at real context lengths.** Compaction was exercised with a deliberately small window (20,000 tokens, also
   through the Worker against the real provider: `check:compaction`); its behavior with a real context length, how often
   it runs, and the answers' quality after it on real pull requests are not measured.
-- **Skills.** Not built in the prototype: fetching a skill at a pinned commit and storing it in the Hub (and its size
-  against Durable Object storage limits), whether models choose to activate a skill from its description alone, running
-  a script under `allowed-tools` in the workspace container, and materializing skills into a local job directory.
+- **Skills.** Fetching a skill at a pinned commit and storing it in the Hub has run against real GitHub only through the
+  Worker in wrangler's local runtime (`check:skills`, a public skill of about 2 MB through an installation on another
+  account), not on a deployment. Not built yet: whether models choose to activate a skill from its description alone,
+  running a script under `allowed-tools` in the workspace container, and materializing skills into a local job
+  directory.
 - **Browser client.** `useAgentChat` with a local owner (an appended answer, reconnection) was exercised through a Node
   client speaking the same WebSocket protocol, not in a browser.

@@ -18,13 +18,37 @@ export {
 } from "./cli.ts";
 export { ErrorCode, ErrorResponse } from "./errors.ts";
 export {
+  AllowedTool,
   ContextInstructions,
   Instructions,
+  PreviewSkillRequest,
+  PreviewUpdateRequest,
   Prompt,
   PROMPT_CHARS,
   PromptKind,
   Prompts,
+  RegisterSkillRequest,
   SavePromptRequest,
+  Skill,
+  SKILL_ALLOWED_TOOLS_CHARS,
+  SKILL_BYTES,
+  SKILL_COUNT,
+  SKILL_DESCRIPTION_CHARS,
+  SKILL_FILE_BYTES,
+  SKILL_FILES,
+  SKILL_LICENSE_CHARS,
+  SKILL_NAME_CHARS,
+  SKILL_PATH_BYTES,
+  SkillFile,
+  skillDirectoryIssue,
+  skillManifestIssue,
+  SkillName,
+  skillPathIssue,
+  SkillPreview,
+  SkillRef,
+  SkillSource,
+  SkillUpdatePreview,
+  UpdateSkillRequest,
 } from "./instructions.ts";
 export { MessageMetadata } from "./messages.ts";
 export {

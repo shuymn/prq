@@ -63,6 +63,20 @@ export const HUB_SCHEMA: SchemaSteps = [
   // A kind without a row has never been saved and reads as the empty prompt.
   `CREATE TABLE prq_prompts (
     kind TEXT PRIMARY KEY CHECK (kind IN ('analysis', 'answer')), text TEXT NOT NULL, saved_at INTEGER NOT NULL)`,
+  // The host's skills (docs/design.md, Instructions and skills): per name, the registration's revision (from the Hub's
+  // counter, on every register and update), where it came from (repository, the directory's path, the ref as named and
+  // its kind), the pinned commit, the frontmatter the settings show (allowed-tools as a JSON array of its entries as
+  // written, NULL when absent), and when it was registered and last updated (epoch ms).
+  `CREATE TABLE prq_skills (
+    name TEXT PRIMARY KEY, rev INTEGER NOT NULL, owner TEXT NOT NULL, repo TEXT NOT NULL, path TEXT NOT NULL,
+    ref TEXT NOT NULL, ref_kind TEXT NOT NULL CHECK (ref_kind IN ('branch', 'tag', 'commit')), sha TEXT NOT NULL,
+    description TEXT NOT NULL, allowed_tools TEXT, license TEXT,
+    registered_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+  // Each registered skill's regular files at its pinned commit: path in the skill, git mode, size, git blob SHA-1, and
+  // the whole file.
+  `CREATE TABLE prq_skill_files (
+    name TEXT NOT NULL, path TEXT NOT NULL, mode TEXT NOT NULL CHECK (mode IN ('100644', '100755')),
+    size INTEGER NOT NULL, blob TEXT NOT NULL, content BLOB NOT NULL, PRIMARY KEY (name, path))`,
 ];
 
 export const PR_SESSION_SCHEMA: SchemaSteps = [

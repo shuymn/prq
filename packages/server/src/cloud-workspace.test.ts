@@ -41,6 +41,7 @@ beforeEach(() => {
   // not reach.
   const github: GithubClient = {
     pullRequest: () => Promise.reject(new Error("not served")),
+    appToken: () => Promise.reject(new Error("not served")),
     installationToken: () => Promise.reject(new Error("not served")),
   };
   vi.spyOn(prSessionSeams(PrSession.prototype), "github").mockReturnValue(github);

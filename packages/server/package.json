@@ -24,8 +24,10 @@
     "ai": "catalog:",
     "hono": "catalog:",
     "jose": "catalog:",
+    "p-limit": "catalog:",
     "universal-github-app-jwt": "catalog:",
-    "valibot": "catalog:"
+    "valibot": "catalog:",
+    "yaml": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "catalog:",
