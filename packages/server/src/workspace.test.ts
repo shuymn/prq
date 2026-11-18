@@ -7,12 +7,12 @@ import { captureLogs } from "./test/access.ts";
 import { type FakeContainer, newWorkspace, untilHeld, useFakeContainers, workspaceSeams } from "./test/container.ts";
 import { tracked, within } from "./test/session.ts";
 import { BASE, sha } from "./test/webhook.ts";
-import { toolArgv } from "./workspace-git.ts";
+import { prepareArgv, toolArgv } from "./workspace-git.ts";
 import {
   COMMAND_MS,
   IDLE_STOP_MS,
   OUTPUT_CAP_BYTES,
-  PKILL_MS,
+  CLEANUP_MS,
   PREPARE_MS,
   STOP_MS,
   type Workspace,
@@ -47,6 +47,7 @@ function readFile(path: string, startLine = 1, commit = "a"): WorkspaceCommand {
 // The commands of a prepare from empty, after the container has started.
 function rebuildLog(commit: string, token: string): string[] {
   return [
+    `rm -f -- ${DIR}/.git/prq-ready`,
     `rm -rf -- ${DIR}`,
     `git init --quiet -- ${DIR}`,
     `git -C ${DIR} remote add -- origin ${REMOTE}`,
@@ -54,14 +55,18 @@ function rebuildLog(commit: string, token: string): string[] {
     `git -C ${DIR} -c advice.detachedHead=false checkout --quiet --detach --end-of-options ${sha(commit)}`,
     `git -C ${DIR} merge-base --end-of-options ${sha(commit)} ${BASE}`,
     `git -C ${DIR} rev-parse --verify HEAD`,
-    `sh -c printf %s "$1" > "$2" sh ${token} ${DIR}/.git/prq-ready`,
+    `sh -c umask 022; printf %s "$1" > "$2" sh ${token} ${DIR}/.git/prq-ready`,
   ];
 }
 
 const SETUP = ["intercept http", "intercept https *", `idle ${IDLE_STOP_MS}`];
 const STARTED = ["start", ...SETUP];
-// The cleanup after a reset.
-const PKILL = "pkill -KILL -x git|git-.*|rm|cat|sh";
+// The cleanup after a reset: the runner's mode that kills root's prepare processes.
+const CLEANUP = "python3 -I -S /usr/local/libexec/prq-skill-run --reset-cleanup";
+
+function isCleanup(argv: string[]): boolean {
+  return argv.at(-1) === "--reset-cleanup";
+}
 
 // The token the last prepare wrote.
 function tokenOf(container: FakeContainer): string {
@@ -129,6 +134,7 @@ describe("prepare", () => {
     expect(container.egress).toHaveLength(2);
     for (const exec of container.execs) {
       expect(exec.env).toEqual({
+        PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         GIT_SSL_CAINFO: "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
         GIT_TERMINAL_PROMPT: "0",
         GIT_CONFIG_NOSYSTEM: "1",
@@ -260,7 +266,7 @@ describe("prepare", () => {
     const from = container.log.length;
 
     expect(await stub.prepare(target(2, "b"))).toEqual({ ok: true, value: { sha: sha("b"), mergeBase: BASE } });
-    expect(container.log.slice(from)).toEqual([PKILL, ...SETUP, ...rebuildLog("b", tokenOf(container))]);
+    expect(container.log.slice(from)).toEqual([CLEANUP, ...SETUP, ...rebuildLog("b", tokenOf(container))]);
   });
 
   it("fails without an installation, touching no container", async () => {
@@ -394,7 +400,7 @@ describe("rebuild ownership", () => {
       expect(reply).toMatchObject({ ok: true, value: { page: { lines: ["hello"] } } });
     }
     expect(container.commands("start", from)).toHaveLength(1);
-    expect(container.commands("rm", from)).toHaveLength(1);
+    expect(container.commands("-rf", from)).toHaveLength(1);
     expect(container.commands("init", from)).toHaveLength(1);
     expect(container.commands("fetch", from)).toHaveLength(1);
   });
@@ -506,24 +512,25 @@ describe("after a reset", () => {
     const from = container.log.length;
 
     expect(await stub.run(target(1), readFile("README.md"))).toEqual(RELEASED);
-    expect(container.log.slice(from)).toEqual([PKILL]);
+    expect(container.log.slice(from)).toEqual([CLEANUP]);
 
     container.mergeBase = BASE;
     expect(await stub.prepare(target(2, "b"))).toEqual({ ok: true, value: { sha: sha("b"), mergeBase: BASE } });
     // The new instance sets the running container up again before its first command.
-    expect(container.log.slice(from, from + 5)).toEqual([PKILL, ...SETUP, `cat -- ${DIR}/.git/prq-ready`]);
+    expect(container.log.slice(from, from + 5)).toEqual([CLEANUP, ...SETUP, `cat -- ${DIR}/.git/prq-ready`]);
   });
 
   it("kills an earlier instance's rm, so it cannot remove the next prepare's checkout", async () => {
     captureLogs();
     const { name, stub: before, container } = await prepared("cleanup-rm");
-    // The token file is gone, so the next prepare rebuilds; its rm is held when the Workspace resets.
+    // The token file is gone, so the next prepare rebuilds; its wipe of the checkout is held when the Workspace resets.
     await runInDurableObject(before, () => {
       if (container.disk !== null) {
         container.disk.token = null;
       }
     });
-    const wipe = container.holdNext((argv) => argv[0] === "rm");
+    const wipeArgv = prepareArgv.wipe(DIR).join(" ");
+    const wipe = container.holdNext((argv) => argv.join(" ") === wipeArgv);
     void before.prepare(target(2)).catch(() => undefined);
     await untilHeld(wipe);
     const old = container.execs.at(-1);
@@ -531,7 +538,7 @@ describe("after a reset", () => {
     const stub = await reset(name);
 
     expect(await stub.prepare(target(3, "b"))).toEqual({ ok: true, value: { sha: sha("b"), mergeBase: BASE } });
-    expect(old?.argv[0]).toBe("rm");
+    expect(old?.argv).toEqual(prepareArgv.wipe(DIR));
     expect(old?.kills).toEqual([9]);
     // Let the old rm go on, as a process the cleanup missed would: the new checkout stays.
     await runInDurableObject(stub, async () => {
@@ -546,30 +553,30 @@ describe("after a reset", () => {
     captureLogs();
     const { name, container } = await prepared("cleanup-gate");
     container.on = (argv) => (argv.includes("show") ? { stdout: "hello\n" } : undefined);
-    const pkill = container.holdNext((argv) => argv[0] === "pkill");
+    const cleanup = container.holdNext(isCleanup);
     const stub = await reset(name);
     const from = container.log.length;
 
     const one = tracked(stub.run(target(2), readFile("README.md")));
     const two = tracked(stub.run(target(2), readFile("README.md")));
-    await untilHeld(pkill);
+    await untilHeld(cleanup);
     await scheduler.wait(50);
-    expect(container.log.slice(from)).toEqual([PKILL]);
+    expect(container.log.slice(from)).toEqual([CLEANUP]);
     expect(one.settled() || two.settled()).toBe(false);
-    await runInDurableObject(stub, () => pkill.open());
+    await runInDurableObject(stub, () => cleanup.open());
 
     for (const reply of await Promise.all([one.promise, two.promise])) {
       expect(reply).toMatchObject({ ok: true, value: { page: { lines: ["hello"] } } });
     }
-    expect(container.commands("pkill", from)).toHaveLength(1);
-    const after = container.execs.slice(container.execs.findIndex((exec) => exec.argv[0] === "pkill") + 1);
+    expect(container.commands("--reset-cleanup", from)).toHaveLength(1);
+    const after = container.execs.slice(container.execs.findIndex((exec) => isCleanup(exec.argv)) + 1);
     expect(after.map((exec) => exec.kills)).toEqual(after.map(() => []));
   });
 
-  it("stops the container when pkill fails, and opens the gate only once the stop is confirmed", async () => {
+  it("stops the container when the cleanup fails, and opens the gate only once the stop is confirmed", async () => {
     captureLogs();
     const { name, container } = await prepared("cleanup-stop");
-    container.on = (argv) => (argv[0] === "pkill" ? { reject: new Error("exec failed") } : undefined);
+    container.on = (argv) => (isCleanup(argv) ? { reject: new Error("exec failed") } : undefined);
     const stop = container.holdStop();
     const stub = await reset(name);
     const from = container.log.length;
@@ -578,7 +585,7 @@ describe("after a reset", () => {
     const two = tracked(stub.prepare(target(2)));
     await untilHeld(stop);
     await scheduler.wait(50);
-    expect(container.log.slice(from)).toEqual([PKILL, "destroy"]);
+    expect(container.log.slice(from)).toEqual([CLEANUP, "destroy"]);
     expect(one.settled() || two.settled()).toBe(false);
     container.mergeBase = BASE;
     await runInDurableObject(stub, () => stop.open());
@@ -590,10 +597,28 @@ describe("after a reset", () => {
     expect(container.log.slice(from + 2)).toEqual([...STARTED, ...rebuildLog("a", tokenOf(container))]);
   });
 
-  it("stops the container when pkill does not answer within 10 s", async () => {
+  it("stops the container when the cleanup exits 2, having had no pidfd to look with", async () => {
     captureLogs();
-    const { name, container } = await prepared("cleanup-pkill-timeout");
-    container.on = (argv) => (argv[0] === "pkill" ? { never: true } : undefined);
+    const { name, container } = await prepared("cleanup-no-pidfd");
+    container.on = (argv) => (isCleanup(argv) ? { exitCode: 2 } : undefined);
+    const stop = container.holdStop();
+    const stub = await reset(name);
+    const from = container.log.length;
+
+    const reply = tracked(stub.prepare(target(2)));
+    await untilHeld(stop);
+    expect(container.log.slice(from)).toEqual([CLEANUP, "destroy"]);
+    expect(reply.settled()).toBe(false);
+    container.mergeBase = BASE;
+    await runInDurableObject(stub, () => stop.open());
+    expect(await reply.promise).toEqual({ ok: true, value: { sha: sha("a"), mergeBase: BASE } });
+    expect(container.commands("init", from)).toHaveLength(1);
+  });
+
+  it("stops the container when the cleanup does not answer within 10 s", async () => {
+    captureLogs();
+    const { name, container } = await prepared("cleanup-timeout");
+    container.on = (argv) => (isCleanup(argv) ? { never: true } : undefined);
     const stop = container.holdStop();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const stub = await reset(name);
@@ -601,8 +626,8 @@ describe("after a reset", () => {
 
     const reply = tracked(stub.prepare(target(2)));
     await settles(() => container.log.length > from, "the cleanup");
-    await advance(stub, PKILL_MS - 1);
-    expect(container.log.slice(from)).toEqual([PKILL]);
+    await advance(stub, CLEANUP_MS - 1);
+    expect(container.log.slice(from)).toEqual([CLEANUP]);
     await advance(stub, 1);
     expect(stop.reached()).toBe(true);
     container.mergeBase = BASE;
@@ -615,7 +640,7 @@ describe("after a reset", () => {
   it("fails every call when the stop is not confirmed within 30 s, until a newer turn cleans up again", async () => {
     captureLogs();
     const { name, container } = await prepared("cleanup-fails");
-    container.on = (argv) => (argv[0] === "pkill" ? { reject: new Error("exec failed") } : undefined);
+    container.on = (argv) => (isCleanup(argv) ? { reject: new Error("exec failed") } : undefined);
     container.destroyReply = async () => undefined;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const stub = await reset(name);
@@ -628,22 +653,22 @@ describe("after a reset", () => {
     expect(one.settled() || two.settled()).toBe(false);
     await advance(stub, 1);
 
-    const reason = "pkill failed: exec failed, and the container was not confirmed stopped within 30 s";
+    const reason = "the cleanup failed: exec failed, and the container was not confirmed stopped within 30 s";
     expect(await one.promise).toEqual({ ok: false, kind: "cleanup", reason });
     expect(await two.promise).toEqual({ ok: false, kind: "cleanup", reason });
-    expect(container.log.slice(from)).toEqual([PKILL, "destroy"]);
+    expect(container.log.slice(from)).toEqual([CLEANUP, "destroy"]);
 
-    // The next turn tries again, and nothing runs before its cleanup ends: pkill now answers that no git runs.
+    // The next turn tries again, and nothing runs before its cleanup ends: the cleanup now answers that no git runs.
     container.on = () => undefined;
-    const retry = container.holdNext((argv) => argv[0] === "pkill");
+    const retry = container.holdNext(isCleanup);
     vi.useRealTimers();
     const next = tracked(stub.prepare(target(3)));
     await untilHeld(retry);
     await scheduler.wait(50);
-    expect(container.log.slice(from + 2)).toEqual([PKILL]);
+    expect(container.log.slice(from + 2)).toEqual([CLEANUP]);
     expect(next.settled()).toBe(false);
     await runInDurableObject(stub, () => retry.open());
     expect(await next.promise).toEqual({ ok: true, value: { sha: sha("a"), mergeBase: BASE } });
-    expect(container.commands("pkill", from)).toHaveLength(2);
+    expect(container.commands("--reset-cleanup", from)).toHaveLength(2);
   });
 });

@@ -134,7 +134,10 @@ describe("a preview", () => {
       name: "polish",
       description: "Polishes text.",
       license: "MIT",
-      allowedTools: [{ entry: "Bash(python3 ${CLAUDE_SKILL_DIR}/scripts/check.py *)" }, { entry: "Read" }],
+      allowedTools: [
+        { entry: "Bash(python3 ${CLAUDE_SKILL_DIR}/scripts/check.py *)", runs: true },
+        { entry: "Read", runs: false },
+      ],
       source: { owner: OWNER, repo: REPO, path: "skills/polish" },
       ref: { name: "main", kind: "branch" },
       sha,
@@ -508,7 +511,11 @@ describe("a confirm", () => {
       'allowed-tools:\n  - Read\n  - "Bash(python3  a.py *) "\n  - " Grep"',
     );
     const sha = await repo.commit(polishFiles("skills/polish", { "SKILL.md": listed }));
-    const entries = [{ entry: "Read" }, { entry: "Bash(python3  a.py *) " }, { entry: " Grep" }];
+    const entries = [
+      { entry: "Read", runs: false },
+      { entry: "Bash(python3  a.py *) ", runs: false },
+      { entry: " Grep", runs: false },
+    ];
     expect((await register(sha)).allowedTools).toEqual(entries);
     expect((await instructions()).skills.map((skill) => skill.allowedTools)).toEqual([entries]);
   });

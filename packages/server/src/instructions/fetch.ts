@@ -18,7 +18,7 @@ import { log } from "../log.ts";
 import { WaitTimeout, withTimeout } from "../wait.ts";
 import type { SkillLink } from "./link.ts";
 import { readSkillMd, type SkillFrontmatter } from "./skill.ts";
-import type { SkillFileContent, SkillVersion } from "./skills.ts";
+import { allowedToolsOf, type SkillFileContent, type SkillVersion } from "./skills.ts";
 
 // Reading a skill from GitHub (docs/design.md, Instructions and skills): the App's installation, the ref split and its
 // commit, the skill's subtree at that commit with its caps, and its blobs byte for byte. A preview reads SKILL.md alone;
@@ -472,7 +472,10 @@ export function previewSkill(client: GithubClient, target: PreviewTarget): Promi
     });
     return {
       ...frontmatter,
-      allowedTools: frontmatter.allowedTools?.map((entry) => ({ entry })) ?? null,
+      allowedTools: allowedToolsOf(
+        frontmatter.allowedTools,
+        files.map((file) => file.path),
+      ),
       source,
       ref,
       sha,

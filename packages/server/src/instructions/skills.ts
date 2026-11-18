@@ -1,6 +1,7 @@
-import { type Skill, SKILL_FILES, SkillName, SkillRef, SkillSource } from "@prq/protocol";
+import { type AllowedTool, type Skill, SKILL_FILES, SkillName, SkillRef, SkillSource } from "@prq/protocol";
 import * as v from "valibot";
 
+import { runnableEntry } from "./command.ts";
 import type { SkillFrontmatter } from "./skill.ts";
 
 // The host's skills as the Hub stores them: one prq_skills row per registered name, pinned to a commit, and its regular
@@ -80,8 +81,14 @@ type FileRow = { path: string; mode: "100644" | "100755"; size: number; blob: st
 
 const ALLOWED_TOOLS = v.array(v.string());
 
-function skillOf(row: SkillRow): Skill {
-  const allowedTools = row.allowed_tools === null ? null : v.parse(ALLOWED_TOOLS, JSON.parse(row.allowed_tools));
+// allowed-tools' entries as written, each with whether a cloud turn runs it against the skill's stored files.
+export function allowedToolsOf(entries: readonly string[] | null, files: readonly string[]): AllowedTool[] | null {
+  const stored = new Set(files);
+  return entries?.map((entry) => ({ entry, runs: runnableEntry(entry, stored) !== null })) ?? null;
+}
+
+function skillOf(row: SkillRow, files: readonly string[]): Skill {
+  const entries = row.allowed_tools === null ? null : v.parse(ALLOWED_TOOLS, JSON.parse(row.allowed_tools));
   return {
     name: row.name,
     rev: row.rev,
@@ -90,20 +97,45 @@ function skillOf(row: SkillRow): Skill {
     source: { owner: row.owner, repo: row.repo, path: row.path },
     ref: { name: row.ref, kind: row.ref_kind },
     sha: row.sha,
-    allowedTools: allowedTools?.map((entry) => ({ entry })) ?? null,
+    allowedTools: allowedToolsOf(entries, files),
     registeredAt: row.registered_at,
     updatedAt: row.updated_at,
   };
 }
 
+// The stored paths of a skill, or of every skill by name.
+function storedPaths(sql: SqlStorage, name?: string): Map<string, string[]> {
+  const rows =
+    name === undefined
+      ? sql.exec<{ name: string; path: string }>("SELECT name, path FROM prq_skill_files ORDER BY name, path")
+      : sql.exec<{ name: string; path: string }>(
+          "SELECT name, path FROM prq_skill_files WHERE name = ? ORDER BY path",
+          name,
+        );
+  const paths = new Map<string, string[]>();
+  for (const row of rows) {
+    const list = paths.get(row.name);
+    if (list === undefined) {
+      paths.set(row.name, [row.path]);
+    } else {
+      list.push(row.path);
+    }
+  }
+  return paths;
+}
+
 // Every registered skill, sorted by name.
 export function readSkills(sql: SqlStorage): Skill[] {
-  return sql.exec<SkillRow>("SELECT * FROM prq_skills ORDER BY name").toArray().map(skillOf);
+  const paths = storedPaths(sql);
+  return sql
+    .exec<SkillRow>("SELECT * FROM prq_skills ORDER BY name")
+    .toArray()
+    .map((row) => skillOf(row, paths.get(row.name) ?? []));
 }
 
 export function readSkill(sql: SqlStorage, name: string): Skill | null {
   const [row] = sql.exec<SkillRow>("SELECT * FROM prq_skills WHERE name = ?", name).toArray();
-  return row === undefined ? null : skillOf(row);
+  return row === undefined ? null : skillOf(row, storedPaths(sql, name).get(name) ?? []);
 }
 
 export function countSkills(sql: SqlStorage): number {
@@ -132,9 +164,14 @@ export type SkillRead =
   | { kind: "paths"; paths: string[] }
   | { kind: "changed" };
 
-export function readSkillPath(sql: SqlStorage, name: string, rev: number, path: string): SkillRead {
+// Whether the skill is still registered at the revision a turn listed.
+function atRev(sql: SqlStorage, name: string, rev: number): boolean {
   const [row] = sql.exec<{ rev: number }>("SELECT rev FROM prq_skills WHERE name = ?", name).toArray();
-  if (row?.rev !== rev) {
+  return row?.rev === rev;
+}
+
+export function readSkillPath(sql: SqlStorage, name: string, rev: number, path: string): SkillRead {
+  if (!atRev(sql, name, rev)) {
     return { kind: "changed" };
   }
   const [file] = sql
@@ -148,6 +185,20 @@ export function readSkillPath(sql: SqlStorage, name: string, rev: number, path: 
     .toArray()
     .map((entry) => entry.path);
   return { kind: "paths", paths };
+}
+
+// What a cloud turn's script run reads of a registered skill at the revision its turn listed: every stored file (path,
+// mode and bytes), or that the registration is no longer at that revision.
+export type SkillFilesRead =
+  | { kind: "files"; files: Pick<SkillFileContent, "path" | "mode" | "content">[] }
+  | { kind: "changed" };
+
+export function readSkillFilesAt(sql: SqlStorage, name: string, rev: number): SkillFilesRead {
+  if (!atRev(sql, name, rev)) {
+    return { kind: "changed" };
+  }
+  const files = readSkillFiles(sql, name).map(({ path, mode, content }) => ({ path, mode, content }));
+  return { kind: "files", files };
 }
 
 // Writes the version under its name at rev: the row (registered_at kept when the name is registered), and exactly its
@@ -192,7 +243,10 @@ export function writeSkill(sql: SqlStorage, version: SkillVersion, rev: number, 
       buffer.slice(byteOffset, byteOffset + byteLength),
     );
   }
-  return skillOf(row);
+  return skillOf(
+    row,
+    version.files.map((file) => file.path),
+  );
 }
 
 // Removes a skill's row and files; whether it was registered.

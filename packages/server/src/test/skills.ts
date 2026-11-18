@@ -113,12 +113,17 @@ export function skillWith(
     files = {},
     sha = "1".repeat(40),
     path = `skills/${name}`,
+    allowedTools = null,
+    executable = [],
   }: {
     description?: string;
     body?: string;
     files?: Record<string, string | Uint8Array>;
     sha?: string;
     path?: string;
+    // The frontmatter's allowed-tools entries, and the files stored with mode 100755.
+    allowedTools?: string[] | null;
+    executable?: string[];
   } = {},
 ): SkillVersion {
   const all = { "SKILL.md": `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n${body}`, ...files };
@@ -126,13 +131,14 @@ export function skillWith(
     name,
     description,
     license: null,
-    allowedTools: null,
+    allowedTools,
     source: { owner: OWNER, repo: REPO, path },
     ref: { name: "main", kind: "branch" },
     sha,
     files: Object.entries(all).map(([file, content]) => {
       const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
-      return { path: file, mode: "100644" as const, size: bytes.byteLength, blob: "2".repeat(40), content: bytes };
+      const mode = executable.includes(file) ? ("100755" as const) : ("100644" as const);
+      return { path: file, mode, size: bytes.byteLength, blob: "2".repeat(40), content: bytes };
     }),
   };
 }

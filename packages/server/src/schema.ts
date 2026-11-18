@@ -238,6 +238,13 @@ export const WORKSPACE_SCHEMA: SchemaSteps = [
     base_sha TEXT NOT NULL,
     merge_base TEXT,
     token TEXT NOT NULL)`,
+  // The scratch record of skill script runs: the turn whose scratch directory the container's runners keep, its
+  // generation (raised when a run's ending is unknown, so the next run makes the directory again), whether a runner
+  // made it (else the next frame is the turn's first), and whether a frame may be out whose ending no instance saw.
+  "ALTER TABLE prq_workspace ADD COLUMN scratch_seq INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE prq_workspace ADD COLUMN scratch_gen INTEGER NOT NULL DEFAULT 1",
+  "ALTER TABLE prq_workspace ADD COLUMN scratch_established INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE prq_workspace ADD COLUMN scratch_pending INTEGER NOT NULL DEFAULT 0",
 ];
 
 export function migrate(storage: DurableObjectStorage, steps: SchemaSteps): void {

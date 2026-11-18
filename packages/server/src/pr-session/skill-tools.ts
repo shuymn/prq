@@ -11,11 +11,12 @@ import {
 } from "ai";
 import * as v from "valibot";
 
+import { COMMAND_CHARS, commandArgv, parseEntry, type RunnableEntry } from "../instructions/command.ts";
 import { skillBody } from "../instructions/skill.ts";
-import type { SkillRead } from "../instructions/skills.ts";
+import type { SkillFilesRead, SkillRead } from "../instructions/skills.ts";
 import { errorName, log } from "../log.ts";
 import { WaitTimeout } from "../wait.ts";
-import { fitPage, MIN_PAGE_CHARS, type Page, type PageRequest, pageLines } from "./pages.ts";
+import { cutAt, fitPage, MIN_PAGE_CHARS, type Page, type PageRequest, pageLines } from "./pages.ts";
 import type { ContextRoom } from "./room.ts";
 import {
   continuation,
@@ -29,24 +30,42 @@ import {
   TOOL_RESULT_CHARS,
   withNote,
 } from "./tools.ts";
+import {
+  raceAbort,
+  SCRIPT_STDIN_CHARS,
+  SCRIPT_TOOL_MS,
+  type ScriptEnding,
+  type ScriptResult,
+  STDERR_TAIL_CHARS,
+  type WorkspaceClient,
+  type WorkspaceTarget,
+} from "./workspace.ts";
 
 // The skill tools of a cloud turn (docs/design.md, Model context): the turn lists each registered skill's name and
-// description, and these load the rest on demand. activate_skill returns a skill's SKILL.md body, and
-// read_skill_resource a file of a skill activated earlier in the turn. Every call reads the revision the turn listed,
-// so a turn never mixes two versions of one skill; a result whose skill resolved starts with the server's status line,
-// from which an earlier turn's marker is read (projection.ts). A tool never throws, and its result keeps the bounds of
-// every tool result (tools.ts).
+// description, and these load the rest on demand. activate_skill returns a skill's SKILL.md body, read_skill_resource
+// a file of a skill activated earlier in the turn, and run_skill_script runs a command such a skill allows in the
+// workspace container. Every call reads the revision the turn listed, so a turn never mixes two versions of one skill;
+// a result whose skill resolved starts with the server's status line, from which an earlier turn's marker is read
+// (projection.ts). A tool never throws, and its result keeps the bounds of every tool result (tools.ts).
 
-const SKILL_TOOLS = ["activate_skill", "read_skill_resource"] as const;
+const SKILL_TOOLS = ["activate_skill", "read_skill_resource", "run_skill_script"] as const;
 type SkillTool = (typeof SKILL_TOOLS)[number];
 
-// How a skill call that resolved its skill ended: a page or a file delivered, nothing delivered for lack of room, or a
-// refusal or a failure.
-type Outcome = "read" | "no room" | "error";
+// How a skill call that resolved its skill ended: a page or a file delivered, a script's exit or its timeout, nothing
+// delivered or run for lack of room, or a refusal or a failure.
+type Outcome = "read" | `exit ${number}` | "timeout" | "no room" | "error";
 
 // A skill as a turn lists it at its start: what its system message shows (name, description) and what its calls read
-// and name (revision, commit, source).
-export type TurnSkill = Pick<Skill, "name" | "description" | "rev" | "sha" | "source">;
+// and name (revision, commit, source, and the allowed-tools entries its scripts run by).
+export type TurnSkill = Pick<Skill, "name" | "description" | "rev" | "sha" | "source" | "allowedTools">;
+
+// What a turn's script runs use: its workspace and target, and the Hub's read of a skill's files at a revision (the
+// caller bounds it, and the signal ends the wait).
+type ScriptContext = {
+  workspace: WorkspaceClient;
+  target: WorkspaceTarget;
+  files(name: string, rev: number, signal: AbortSignal): Promise<SkillFilesRead>;
+};
 
 export type SkillContext = {
   // The skills the turn listed at its start, by name.
@@ -54,12 +73,23 @@ export type SkillContext = {
   kind: "analysis" | "answer";
   // The Hub's read of a skill's path at a revision; the caller bounds it, and the signal ends the wait.
   read(name: string, rev: number, path: string, signal: AbortSignal): Promise<SkillRead>;
+  // The turn's script runs, when it is offered run_skill_script (a workspace, and a skill with a runnable entry).
+  scripts: ScriptContext | null;
   room: ContextRoom;
-  // The skills of which the turn delivered a page of the body: the only ones read_skill_resource reads.
+  // The skills of which the turn delivered a page of the body: the only ones read_skill_resource and run_skill_script
+  // use.
   activated: Set<string>;
   // What the logs name the turn by.
   fields: { pr: string; jobId: string };
 };
+
+// The entries of a skill's allowed-tools a cloud turn runs.
+export function runnableEntries(skill: Pick<TurnSkill, "allowedTools">): RunnableEntry[] {
+  return (skill.allowedTools ?? []).flatMap(({ entry, runs }) => {
+    const parsed = runs ? parseEntry(entry) : null;
+    return parsed === null ? [] : [parsed];
+  });
+}
 
 // The line a resolved skill call's result starts with, written by the server before anything else.
 function statusLine(toolName: SkillTool, skill: TurnSkill, outcome: Outcome): string {
@@ -69,7 +99,8 @@ function statusLine(toolName: SkillTool, skill: TurnSkill, outcome: Outcome): st
 // The status line, matched whole against the grammar the server writes it in: the tool, the skill's name, its 40-hex
 // commit, its decimal revision and one of the outcomes.
 const STATUS_LINE = new RegExp(
-  `^\\[(${SKILL_TOOLS.join("|")}) skill ([a-z0-9]+(?:-[a-z0-9]+)*) at ([0-9a-f]{40}) rev ([1-9][0-9]*): (read|no room|error)\\]$`,
+  `^\\[(${SKILL_TOOLS.join("|")}) skill ([a-z0-9]+(?:-[a-z0-9]+)*) at ([0-9a-f]{40}) rev ([1-9][0-9]*): ` +
+    "(read|exit (?:0|[1-9][0-9]{0,2})|timeout|no room|error)\\]$",
 );
 
 const SkillNameInput = v.pipe(
@@ -95,6 +126,19 @@ const ResourceInput = v.object({
   startChar: v.optional(StartChar),
 });
 
+const RunInput = v.object({
+  name: SkillNameInput,
+  command: v.pipe(
+    v.string(),
+    v.minLength(1),
+    v.maxLength(COMMAND_CHARS),
+    v.description("The command, as the skill's activation lists the commands it allows; ${CLAUDE_SKILL_DIR} included"),
+  ),
+  stdin: v.optional(
+    v.pipe(v.string(), v.maxLength(SCRIPT_STDIN_CHARS), v.description("Text given to the script's standard input")),
+  ),
+});
+
 // What the provider is told of each skill tool, the same in every turn.
 export const SKILL_TOOL_DEFINITIONS = {
   activate_skill: {
@@ -108,6 +152,20 @@ export const SKILL_TOOL_DEFINITIONS = {
       "Read a file of a skill, with line numbers, or list a directory of it, after activating the skill with " +
       "activate_skill. Paths are relative to the skill's directory; SKILL.md is read with activate_skill.",
     inputSchema: valibotSchema(ResourceInput),
+  },
+};
+
+// What the provider is told of the run tool, offered in a turn with a workspace while a listed skill allows a script.
+export const RUN_TOOL_DEFINITION = {
+  run_skill_script: {
+    description:
+      "Run a command a skill allows, after activating the skill with activate_skill (its activation lists the " +
+      "commands), in the workspace and without a shell: ${CLAUDE_SKILL_DIR} is the skill's directory, and pipes, " +
+      "redirections and && are not taken. stdin is given to the script's standard input: where a skill's example " +
+      "feeds a script through a heredoc or <, give that text as stdin and only the words before it as command. The " +
+      "working directory lasts for this turn's later runs unless the workspace restarts, which the result then says. " +
+      "A script is not run again for its output: what does not fit the result is cut.",
+    inputSchema: valibotSchema(RunInput),
   },
 };
 
@@ -158,7 +216,7 @@ type Shown = { outcome: "read" | "error"; text: string };
 // One resolved skill call: its tool and skill, the Hub path it reads, the lines a delivered page shows after the status
 // line (the activation's header), what it shows from the Hub's answer, and what a delivery records.
 type Call = {
-  tool: SkillTool;
+  tool: Exclude<SkillTool, "run_skill_script">;
   skill: TurnSkill;
   path: string;
   header: readonly string[];
@@ -187,29 +245,40 @@ function unresolved(context: SkillContext, text: string): string {
   return result;
 }
 
+// The no-room result of a call that resolved its skill.
+function noRoomResult(toolName: SkillTool, skill: TurnSkill): string {
+  return `${statusLine(toolName, skill, "no room")}\n${NO_ROOM}`;
+}
+
+// A refusal or a failure after its status line, cut to the room left; the no-room result when even that does not fit.
+function skillError(
+  toolName: SkillTool,
+  skill: TurnSkill,
+  text: string,
+  left: number,
+): { outcome: Outcome; text: string } {
+  const cut = fitResult(`${statusLine(toolName, skill, "error")}\n${text}`, left);
+  return cut === NO_ROOM
+    ? { outcome: "no room", text: noRoomResult(toolName, skill) }
+    : { outcome: "error", text: cut };
+}
+
 // Ends a resolved call: the status line, composed last, then the rest. A delivery is shown whole within the room left
 // or becomes the no-room result, so the outcome and what it records follow what the model receives; any other result
 // is cut after its status line. Logged with identifiers and counts, never text.
 function resolved(context: SkillContext, call: Call, shown: Shown | { outcome: "no room" }, extra: object): string {
   const left = context.room.leftChars();
-  const noRoom = `${statusLine(call.tool, call.skill, "no room")}\n${NO_ROOM}`;
-  let outcome: Outcome = shown.outcome;
-  let result = noRoom;
+  let outcome: Outcome = "no room";
+  let result = noRoomResult(call.tool, call.skill);
   if (shown.outcome === "read") {
     const text = [statusLine(call.tool, call.skill, "read"), ...call.header, shown.text].join("\n");
     if (text.length <= Math.min(TOOL_RESULT_CHARS, left)) {
+      outcome = "read";
       result = text;
       call.delivered?.();
-    } else {
-      outcome = "no room";
     }
   } else if (shown.outcome === "error") {
-    const cut = fitResult(`${statusLine(call.tool, call.skill, "error")}\n${shown.text}`, left);
-    if (cut === NO_ROOM) {
-      outcome = "no room";
-    } else {
-      result = cut;
-    }
+    ({ outcome, text: result } = skillError(call.tool, call.skill, shown.text, left));
   }
   context.room.take(result.length);
   const { name, rev, sha } = call.skill;
@@ -275,13 +344,18 @@ async function readPaged(context: SkillContext, signal: AbortSignal | undefined,
   return resolved(context, call, source.render(fitPage(page, cap, source.numbered), byRoom), extra);
 }
 
-// The first page's header: where the skill came from, how its files are read, and that its scripts do not run here.
-function firstHeader(skill: TurnSkill): string[] {
+// The first page's header: where the skill came from, how its files are read, and the commands its scripts run with,
+// or that they do not run here (no runnable entry, or no workspace in the turn).
+function firstHeader(skill: TurnSkill, scripts: boolean): string[] {
   const { owner, repo, path } = skill.source;
+  const entries = scripts ? runnableEntries(skill) : [];
   return [
     `From ${owner}/${repo}, ${path === "" ? "its root" : path}.`,
     'Read its files with read_skill_resource and a path relative to the skill; a directory\'s path lists it, "." lists all.',
-    "It runs no scripts here: use its instructions and files.",
+    entries.length === 0
+      ? "It runs no scripts here: use its instructions and files."
+      : "Its scripts run with run_skill_script and one of these commands, ${CLAUDE_SKILL_DIR} being the skill's " +
+        `directory: ${entries.map((entry) => entry.command).join("; ")}`,
   ];
 }
 
@@ -320,9 +394,220 @@ function listing(page: Page, byRoom: boolean): Shown {
   return { outcome: "read", text: pathList(page, byRoom) };
 }
 
-// The skill tools of a turn whose list is not empty, sorted by name. No tool has needsApproval (tools.ts).
+// --- Script runs ---
+
+// The notice a run's result carries right after its status line, kept whole, when the turn's scratch directory had to
+// be made again: the model runs the earlier steps (a `run` before its `verify`) again.
+export function lostScratch(kind: SkillContext["kind"]): string {
+  return (
+    `the working directory of this ${kind === "analysis" ? "summary" : "answer"}'s earlier script runs was lost ` +
+    "(an earlier run's ending is unknown, or the workspace restarted): run the earlier steps again"
+  );
+}
+
+// Why a run that resolved its skill did not run, or ended without an exit, as the model is told.
+function endingText(ending: ScriptEnding): string {
+  if (ending.kind === "not started") {
+    return `error: the script did not start (${ending.reason})`;
+  }
+  if (ending.kind === "unknown") {
+    return `error: the script's ending is unknown (${ending.reason}); its effects may or may not have happened`;
+  }
+  if (ending.kind !== "refused") {
+    return "";
+  }
+  const { end } = ending;
+  if (end.kind === "busy") {
+    return "error: another script run is still ending; try again shortly";
+  }
+  switch (end.reason) {
+    case "unclean":
+      return (
+        "error: the processes of an earlier script run could not be confirmed ended, so scripts do not run until the " +
+        "workspace restarts (after 30 minutes without a request); go on without the script"
+      );
+    case "expired":
+      return "error: the script did not start in time";
+    case "stale-turn":
+    case "stale-scratch":
+      return "error: a newer run took this run's place, and it did not start";
+    case "checkout":
+      return "error: the checkout changed before the script started; run it again";
+    case "member":
+      return `error: a file of the skill could not be installed: ${end.detail ?? "?"}`;
+    default:
+      return `error: the script's runner failed (${end.reason})`;
+  }
+}
+
+function callError(error: unknown): string {
+  if (error instanceof DOMException && error.name === "TimeoutError") {
+    return `error: the workspace did not answer within ${SCRIPT_TOOL_MS / 60_000} minutes`;
+  }
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "error: the tool call was cancelled";
+  }
+  return `error: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+// What the log names a run's ending by.
+function endingName(ending: ScriptEnding): string {
+  switch (ending.kind) {
+    case "exit":
+      return `exit ${ending.code}`;
+    case "refused":
+      return ending.end.kind === "busy" ? "busy" : `failed:${ending.end.reason}`;
+    default:
+      return ending.kind;
+  }
+}
+
+// Output sections joined by a line break, the empty ones left out.
+function sections(out: string, err: string): string {
+  return [out, err].filter((part) => part !== "").join("\n");
+}
+
+// The note a cut stdout ends with: the exact count of its characters not shown.
+function cutNote(notShown: number): string {
+  return `[${notShown} more characters of output not shown]`;
+}
+
+// A run's output within the room left after its status line and notice: stdout, whole or cut with the note, then
+// stderr's tail; stderr keeps at most a third of a room that cannot hold both whole. The note is there exactly when
+// stdout was cut, past the room when even it does not fit, as the status line is (runScript).
+function scriptOutput(result: ScriptResult, left: number): string {
+  const room = Math.max(0, left);
+  const label = `stderr (last ${STDERR_TAIL_CHARS} characters):\n`;
+  const err = result.stderr === "" ? "" : `${label}${result.stderr}`;
+  const whole = result.stdout.length === result.stdoutChars;
+  if (whole && sections(result.stdout, err).length <= room) {
+    return sections(result.stdout, err);
+  }
+  const errRoom = Math.min(err.length, Math.floor(room / 3));
+  const shownErr = errRoom > label.length ? `${label}${result.stderr.slice(-(errRoom - label.length))}` : "";
+  const errTaken = shownErr === "" ? 0 : shownErr.length + 1;
+  if (whole && result.stdout.length + errTaken <= room) {
+    return sections(result.stdout, shownErr);
+  }
+  const outRoom = room - errTaken - cutNote(result.stdoutChars).length - 1;
+  const shown = cutAt(result.stdout, Math.max(0, outRoom));
+  const note = cutNote(result.stdoutChars - shown.length);
+  const out = shown === "" ? note : withNote(shown, note);
+  if (out.length + errTaken <= room) {
+    return sections(out, shownErr);
+  }
+  return note;
+}
+
+// run_skill_script: a command an activated skill allows, matched against its runnable entries (never a shell), run in
+// the workspace container with the skill's files at the turn's revision. The room is checked before anything runs and
+// again at the end, where the output is cut to what is left. The status line (the run's true ending), the lost-scratch
+// notice and a cut's count are delivered and charged whatever parallel results took meanwhile, past the room as a
+// no-room result is. No pages: running a script again for a page would repeat its effects.
+async function runScript(
+  context: SkillContext,
+  signal: AbortSignal | undefined,
+  { name, command, stdin = "" }: { name: string; command: string; stdin?: string | undefined },
+): Promise<string> {
+  const skill = context.skills.get(name);
+  if (skill === undefined) {
+    return unresolved(context, unknownSkill(name));
+  }
+  const runTool = "run_skill_script";
+  const noRoom = () => {
+    const result = noRoomResult(runTool, skill);
+    context.room.take(result.length);
+    return result;
+  };
+  const refuse = (text: string) => {
+    const result = skillError(runTool, skill, text, context.room.leftChars()).text;
+    context.room.take(result.length);
+    return result;
+  };
+  const entries = runnableEntries(skill);
+  const { scripts } = context;
+  if (!context.activated.has(name)) {
+    return refuse(`error: activate ${name} first: call activate_skill with its name`);
+  }
+  if (scripts === null || entries.length === 0) {
+    return refuse(`error: the skill ${name} runs no scripts here`);
+  }
+  const argv = commandArgv(command, name, entries);
+  if ("issue" in argv) {
+    return refuse(
+      `error: ${argv.issue}; the commands ${name} allows: ${entries.map((entry) => entry.command).join("; ")}`,
+    );
+  }
+  // The most the status line and the notice take, then a page's least.
+  const framing = `${statusLine(runTool, skill, "exit 255")}\n${lostScratch(context.kind)}\n`.length;
+  const capChars = Math.min(TOOL_RESULT_CHARS, context.room.leftChars()) - framing;
+  if (capChars < MIN_PAGE_CHARS) {
+    return noRoom();
+  }
+  const callSignal = signal ?? new AbortController().signal;
+  let read: SkillFilesRead;
+  try {
+    read = await scripts.files(name, skill.rev, callSignal);
+  } catch (error) {
+    return refuse(readError(error));
+  }
+  if (read.kind === "changed") {
+    return unresolved(context, changedSkill(context, name));
+  }
+  const started = Date.now();
+  let result: ScriptResult;
+  try {
+    const run = { name, files: read.files, argv: argv.argv, stdin, capChars };
+    result = await raceAbort(() => scripts.workspace.runScript(scripts.target, run, callSignal), callSignal);
+  } catch (error) {
+    const text = refuse(callError(error));
+    scriptLog(context, skill, argv.script, { ending: "error", ms: Date.now() - started });
+    return text;
+  }
+  const { ending } = result;
+  const outcome: Outcome =
+    ending.kind === "exit" ? `exit ${ending.code}` : ending.kind === "timeout" ? "timeout" : "error";
+  const head = [statusLine(runTool, skill, outcome)];
+  if (result.scratch === "lost") {
+    head.push(lostScratch(context.kind));
+  }
+  if (outcome === "error") {
+    head.push(endingText(ending));
+  }
+  const framed = head.join("\n");
+  const output = scriptOutput(result, Math.min(TOOL_RESULT_CHARS, context.room.leftChars()) - framed.length - 1);
+  const text = output === "" ? framed : `${framed}\n${output}`;
+  context.room.take(text.length);
+  scriptLog(context, skill, argv.script, {
+    ending: endingName(ending),
+    ms: Date.now() - started,
+    stdoutBytes: result.stdoutBytes,
+    stderrBytes: result.stderrBytes,
+    scratch: result.scratch,
+    clean: result.clean,
+  });
+  return text;
+}
+
+// prq.skill.script: identifiers, the ending and sizes, never the command's words or the input (they hold the host's
+// text).
+function scriptLog(context: SkillContext, skill: TurnSkill, script: string, fields: object): void {
+  const { name, rev, sha } = skill;
+  log("prq.skill.script", { ...context.fields, name, rev, sha, script, ...fields });
+}
+
+// The skill tools of a turn whose list is not empty, sorted by name, with run_skill_script when the turn has its
+// scripts. No tool has needsApproval (tools.ts).
 export function skillTools(context: SkillContext): ToolSet {
   return {
+    ...(context.scripts === null
+      ? {}
+      : {
+          run_skill_script: tool({
+            ...RUN_TOOL_DEFINITION.run_skill_script,
+            execute: (input, { abortSignal }) => runScript(context, abortSignal, input),
+          }),
+        }),
     activate_skill: tool({
       ...SKILL_TOOL_DEFINITIONS.activate_skill,
       execute: ({ name, startLine = 1, startChar = 0 }, { abortSignal }) => {
@@ -338,7 +623,7 @@ export function skillTools(context: SkillContext): ToolSet {
             tool: "activate_skill",
             skill,
             path: "SKILL.md",
-            header: first ? firstHeader(skill) : [],
+            header: first ? firstHeader(skill, context.scripts !== null) : [],
             source: (read) => {
               const body = read.kind === "file" ? skillBody(read.content) : null;
               if (body === null) {

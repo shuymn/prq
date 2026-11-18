@@ -406,7 +406,7 @@ function onlyProcedureOptions(args: readonly string[]): boolean {
 }
 
 // Whether argv is one of the workspace procedure's commands for the checkout directory: a git command in it with only
-// the procedure's own global options, its creation or removal, or a read or write of its ready token.
+// the procedure's own global options, its creation or removal, or a read, removal or write of its ready token.
 export function isCheckoutStep(argv: readonly string[], dir: string): boolean {
   const same = (expected: readonly string[]) =>
     expected.length === argv.length && expected.every((arg, index) => arg === argv[index]);
@@ -418,6 +418,7 @@ export function isCheckoutStep(argv: readonly string[], dir: string): boolean {
     same(prepareArgv.wipe(dir)) ||
     same(prepareArgv.init(dir)) ||
     same(prepareArgv.readToken(dir)) ||
+    same(prepareArgv.dropToken(dir)) ||
     (/^[0-9a-f]+$/.test(token) && same(prepareArgv.writeToken(dir, token)))
   );
 }
@@ -437,6 +438,8 @@ type CheckoutRunner = {
 export class FixtureCheckout {
   readonly path: string;
   readonly log: string[] = [];
+  // Each command the procedure ran, in order, with whether the ready token was in the directory before it.
+  readonly tokenBefore: { command: string; present: boolean }[] = [];
   readonly #runner: CheckoutRunner;
 
   constructor(runner: CheckoutRunner, path: string) {
@@ -445,7 +448,9 @@ export class FixtureCheckout {
   }
 
   async #run(argv: readonly string[]): Promise<StepResult> {
-    this.log.push(argv.join(" ").replaceAll(this.path, "<dir>"));
+    const command = argv.join(" ").replaceAll(this.path, "<dir>");
+    this.log.push(command);
+    this.tokenBefore.push({ command, present: await this.has(relativeToken()) });
     return this.#runner.run(argv);
   }
 

@@ -5,11 +5,14 @@
 // changes the container, inside the Workspace (runInDurableObject).
 
 import { env } from "cloudflare:workers";
+import { parseTar } from "nanotar";
 import { expect, vi } from "vitest";
 
+import type { FrameHeader } from "../skill-runner.ts";
 import { Workspace, type WorkspaceContainer } from "../workspace.ts";
 
 const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
 export type ExecCall = {
   argv: string[];
@@ -18,7 +21,63 @@ export type ExecCall = {
   // The signals kill() was called with, and the stdout bytes the process emitted.
   kills: number[];
   emitted: number;
+  // The bytes written to the process's stdin, and whether it was ended.
+  stdin: Uint8Array[];
+  stdinEnded: boolean;
 };
+
+// The skill runner's state on the container's disk (container/prq-skill-run.py), lost with the disk: its lock, its
+// state (the newest sequence and its scratch generation), its running marker, each turn's scratch directory (its files
+// by name) and the installed skills (each file's mode and text).
+export type RunnerDisk = {
+  locked: boolean;
+  state: { seq: number; gen: number } | null;
+  running: boolean;
+  scratch: Map<number, Map<string, string>>;
+  skills: Map<string, Map<string, { mode: string; text: string }>>;
+};
+
+function emptyRunnerDisk(): RunnerDisk {
+  return { locked: false, state: null, running: false, scratch: new Map(), skills: new Map() };
+}
+
+// A script as the fake runner runs it: the skill and its argv, the input, and the turn's scratch directory (which the
+// script may change).
+export type FakeScript = {
+  name: string;
+  argv: string[];
+  input: string;
+  header: FrameHeader;
+  scratch: Map<string, string>;
+  files: Map<string, { mode: string; text: string }>;
+};
+
+// How a script ends, as a test scripts it: an exit (0 by default) or its timeout, its output, whether the runner
+// confirmed its processes ended, and its trailer (this run's, none, or one with another nonce); or never, or the RPC
+// carrying the process failing after the frame (its streams and exit code reject).
+export type ScriptReply = {
+  exitCode?: number;
+  timeout?: boolean;
+  stdout?: string;
+  stderr?: string;
+  clean?: boolean;
+  trailer?: "own" | "none" | "foreign";
+  never?: boolean;
+  rpcFailure?: boolean;
+};
+
+// Where a runner can be held: after its frame and before its lock, or inside its lock before its script ends.
+export type RunnerStage = "lock" | "script";
+
+const RUNNER_PATH = "/usr/local/libexec/prq-skill-run";
+
+// Whether an exec is a script run's runner (not its reset cleanup), by the path and flag a test expects, apart from the
+// Workspace's own argv builder.
+export function isRunnerArgv(argv: readonly string[]): boolean {
+  return argv[3] === RUNNER_PATH && argv[4] !== "--reset-cleanup";
+}
+
+const PREPARE_NAMES = /^(?:git|git-.*|rm|cat|sh)$/;
 
 // How one command ends: its exit code and outputs (stdout as text or bytes, emitted in chunks), or never.
 export type Reply = {
@@ -52,6 +111,17 @@ export class FakeContainer implements WorkspaceContainer {
   readonly starts: unknown[] = [];
   readonly egress: unknown[] = [];
   disk: Disk = null;
+  runner: RunnerDisk = emptyRunnerDisk();
+  // A test's script: how each run that gets past the runner's checks ends.
+  onScript: (script: FakeScript) => ScriptReply = () => ({});
+  // The scripts the runners spawned, in order.
+  readonly spawned: FakeScript[] = [];
+  // A runner's exec rejects with this error before it returns a process (the RPC failing).
+  runnerReject: Error | null = null;
+  // The ending of every runner, by nonce: its trailer's fields.
+  readonly runnerEnds: { nonce: string; scratch: string; end: string; clean: boolean }[] = [];
+  readonly #runnerHolds: { stage: RunnerStage; hold: PendingHold }[] = [];
+  readonly #execHolds: PendingHold[] = [];
   // The merge base, and how many deepen rounds it takes to reach it.
   mergeBase: string | null = null;
   deepenNeeded = 0;
@@ -75,6 +145,7 @@ export class FakeContainer implements WorkspaceContainer {
     this.#running = true;
     this.#intercepted = false;
     this.disk = null;
+    this.runner = emptyRunnerDisk();
     this.#exited = Promise.withResolvers<void>();
   }
 
@@ -82,6 +153,7 @@ export class FakeContainer implements WorkspaceContainer {
   stop(): void {
     this.#running = false;
     this.disk = null;
+    this.runner = emptyRunnerDisk();
     this.#exited.resolve();
   }
 
@@ -142,6 +214,47 @@ export class FakeContainer implements WorkspaceContainer {
     };
   }
 
+  // Holds the next runner that reaches the stage until the hold is opened.
+  holdRunner(stage: RunnerStage): Hold {
+    const hold: PendingHold = { match: () => true, reached: false, opened: false, release: () => undefined };
+    this.#runnerHolds.push({ stage, hold });
+    return {
+      reached: () => hold.reached,
+      open: () => {
+        hold.opened = true;
+        hold.release();
+      },
+    };
+  }
+
+  // Holds the next exec that matches before it returns its process (a pending admission) until the hold is opened.
+  holdExec(match: (argv: string[]) => boolean): Hold {
+    const hold: PendingHold = { match, reached: false, opened: false, release: () => undefined };
+    this.#execHolds.push(hold);
+    return {
+      reached: () => hold.reached,
+      open: () => {
+        hold.opened = true;
+        hold.release();
+      },
+    };
+  }
+
+  // Takes out the first hold that matches and marks it reached: a promise of its opening (settled at once when none
+  // matches or it was opened already).
+  #reach<T>(holds: T[], matches: (entry: T) => boolean, holdOf: (entry: T) => PendingHold): Promise<void> {
+    const index = holds.findIndex(matches);
+    const [entry] = index === -1 ? [] : holds.splice(index, 1);
+    const pending = entry === undefined ? undefined : holdOf(entry);
+    if (pending === undefined || pending.opened) {
+      return Promise.resolve();
+    }
+    const waiting = Promise.withResolvers<void>();
+    pending.reached = true;
+    pending.release = waiting.resolve;
+    return waiting.promise;
+  }
+
   // The running processes outlive the instance that started them, which a test is about to reset: that instance's
   // code is gone, so a later kill ends a process without resuming any of it.
   orphanProcesses(): void {
@@ -156,23 +269,37 @@ export class FakeContainer implements WorkspaceContainer {
   }
 
   async exec(cmd: string[], options?: ContainerExecOptions): Promise<ExecProcess> {
-    const call: ExecCall = { argv: [...cmd], env: options?.env, signal: options?.signal, kills: [], emitted: 0 };
+    const call: ExecCall = {
+      argv: [...cmd],
+      env: options?.env,
+      signal: options?.signal,
+      kills: [],
+      emitted: 0,
+      stdin: [],
+      stdinEnded: false,
+    };
     this.log.push(cmd.join(" "));
     this.execs.push(call);
     if (!this.#running) {
       throw new Error("the container is not running");
     }
-    const index = this.#holds.findIndex((candidate) => candidate.match(call.argv));
-    let hold: Promise<void> = Promise.resolve();
-    if (index !== -1) {
-      const [pending] = this.#holds.splice(index, 1);
-      if (pending !== undefined && !pending.opened) {
-        const waiting = Promise.withResolvers<void>();
-        pending.reached = true;
-        pending.release = waiting.resolve;
-        hold = waiting.promise;
+    await this.#reach(
+      this.#execHolds,
+      (hold) => hold.match(call.argv),
+      (hold) => hold,
+    );
+    if (isRunnerArgv(call.argv)) {
+      if (this.runnerReject !== null) {
+        throw this.runnerReject;
       }
+      return this.#runnerProcess(call);
     }
+    // Its handle returns at once; the command answers once its hold opens.
+    const hold = this.#reach(
+      this.#holds,
+      (candidate) => candidate.match(call.argv),
+      (candidate) => candidate,
+    );
     const early = this.on(call.argv);
     if (early?.reject !== undefined) {
       throw early.reject;
@@ -184,21 +311,168 @@ export class FakeContainer implements WorkspaceContainer {
     return child;
   }
 
+  // A runner's process: it reads the frame only once the Workspace has written it and ended stdin (a stdin ended
+  // without a complete frame changes nothing), applies the runner's checks in their order on the runner's disk, and
+  // replies with the script's output and the trailer as the test scripts it.
+  #runnerProcess(call: ExecCall): ExecProcess {
+    const name = call.argv[call.argv.indexOf("--") - 1] ?? "";
+    const argv = call.argv.slice(call.argv.indexOf("--") + 1);
+    const stdinEnded = Promise.withResolvers<void>();
+    const stdin = new WritableStream<Uint8Array>({
+      write: (chunk) => {
+        call.stdin.push(new Uint8Array(chunk));
+      },
+      close: () => {
+        call.stdinEnded = true;
+        stdinEnded.resolve();
+      },
+    });
+    const outcome = stdinEnded.promise.then(() => this.#runScript(name, argv, joined(call.stdin)));
+    const reply = outcome.then(({ nonce, scratch, end, script }): Reply => {
+      if (script?.never === true) {
+        return { never: true };
+      }
+      if (script?.rpcFailure === true) {
+        throw new Error("the RPC to the container failed");
+      }
+      const clean = script?.clean ?? true;
+      const trailerNonce = script?.trailer === "foreign" ? "f".repeat(32) : nonce;
+      const trailer =
+        script?.trailer === "none" ? "" : `\n${trailerNonce} scratch=${scratch} end=${end} clean=${clean ? 1 : 0}\n`;
+      this.runnerEnds.push({ nonce, scratch, end, clean });
+      return { exitCode: 0, stdout: script?.stdout ?? "", stderr: `${script?.stderr ?? ""}${trailer}` };
+    });
+    const { process: child, orphan } = fakeProcess(
+      call,
+      reply.then(
+        () => undefined,
+        () => undefined,
+      ),
+      () => {
+        throw new Error("answered by the runner");
+      },
+      reply,
+    );
+    const live = { argv: call.argv, kill: (signal?: number) => child.kill(signal), orphan };
+    this.#live.add(live);
+    void child.exitCode.then(
+      () => this.#live.delete(live),
+      () => this.#live.delete(live),
+    );
+    return { ...child, stdin };
+  }
+
+  async #runScript(name: string, argv: string[], bytes: Uint8Array): Promise<RunnerOutcome & { nonce: string }> {
+    const frame = readFrame(bytes);
+    if (!("header" in frame)) {
+      return { nonce: frame.nonce ?? "-", scratch: "-", end: "failed:frame" };
+    }
+    const { header } = frame;
+    const received = Date.now();
+    await this.#reach(
+      this.#runnerHolds,
+      (entry) => entry.stage === "lock",
+      (entry) => entry.hold,
+    );
+    if (this.runner.locked) {
+      return { nonce: header.nonce, scratch: "-", end: "busy" };
+    }
+    const disk = this.runner;
+    disk.locked = true;
+    try {
+      const refusal = this.#refusal(header, received);
+      if (refusal !== null) {
+        return { nonce: header.nonce, scratch: "-", end: refusal };
+      }
+      const files = new Map<string, { mode: string; text: string }>();
+      for (const item of parseTar(frame.archive)) {
+        if (item.type !== "file") {
+          return { nonce: header.nonce, scratch: "-", end: `failed:member ${JSON.stringify(item.name)}` };
+        }
+        files.set(item.name, { mode: item.attrs?.mode ?? "", text: decoder.decode(item.data) });
+      }
+      let scratch: string;
+      if (header.first || disk.state === null || header.seq > disk.state.seq) {
+        disk.scratch.clear();
+        scratch = header.first ? "new" : "lost";
+      } else if (disk.state?.seq === header.seq && disk.state.gen === header.gen && disk.scratch.has(header.seq)) {
+        scratch = "kept";
+      } else {
+        disk.scratch.delete(header.seq);
+        scratch = "lost";
+      }
+      if (scratch !== "kept") {
+        disk.scratch.set(header.seq, new Map());
+      }
+      disk.state = { seq: header.seq, gen: header.gen };
+      disk.skills.set(name, files);
+      disk.running = true;
+      const run: FakeScript = {
+        name,
+        argv,
+        input: decoder.decode(frame.input),
+        header,
+        scratch: disk.scratch.get(header.seq) ?? new Map(),
+        files,
+      };
+      await this.#reach(
+        this.#runnerHolds,
+        (entry) => entry.stage === "script",
+        (entry) => entry.hold,
+      );
+      this.spawned.push(run);
+      const script = this.onScript(run);
+      if (script.clean !== false) {
+        disk.running = false;
+      }
+      const end = script.timeout === true ? "timeout" : `exit:${script.exitCode ?? 0}`;
+      return { nonce: header.nonce, scratch, end, script };
+    } finally {
+      disk.locked = false;
+    }
+  }
+
+  // The runner's refusals, in its order, on its disk; null when the run may go on.
+  #refusal(header: FrameHeader, received: number): string | null {
+    const { state, running } = this.runner;
+    if (running) {
+      return "failed:unclean";
+    }
+    if (Date.now() >= received + header.leftMs) {
+      return "failed:expired";
+    }
+    if (state !== null && header.seq < state.seq) {
+      return "failed:stale-turn";
+    }
+    if (state?.seq === header.seq && (header.gen < state.gen || (header.gen === state.gen && header.first))) {
+      return "failed:stale-scratch";
+    }
+    if (this.disk?.token !== header.token) {
+      return "failed:checkout";
+    }
+    return null;
+  }
+
   // The commands a prepare and its cleanup run, as git and the shell answer them on the simulated disk.
   #simulate(argv: string[]): Reply {
     const [program, ...args] = argv;
-    if (program === "pkill") {
-      // pkill -KILL [-x] PATTERN: every process still running whose name matches (the whole name with -x).
-      const source = args.at(-1) ?? "";
-      const pattern = new RegExp(args.includes("-x") ? `^(?:${source})$` : source);
-      const matched = [...this.#live].filter((live) => pattern.test(live.argv[0] ?? ""));
+    if (argv[3] === RUNNER_PATH) {
+      // The runner's reset cleanup: every process still running that a prepare starts (root's in the container),
+      // never a runner (python3).
+      const matched = [...this.#live].filter((live) => PREPARE_NAMES.test(live.argv[0] ?? ""));
       for (const live of matched) {
         live.kill(9);
       }
       return { exitCode: matched.length > 0 ? 0 : 1 };
     }
     if (program === "rm") {
-      this.disk = null;
+      if (args[0] === "-f") {
+        if (this.disk !== null) {
+          this.disk.token = null;
+        }
+      } else {
+        this.disk = null;
+      }
       return { exitCode: 0 };
     }
     if (program === "cat") {
@@ -263,6 +537,69 @@ export class FakeContainer implements WorkspaceContainer {
   }
 }
 
+// --- The skill runner ---
+
+type RunnerOutcome = { scratch: string; end: string; script?: ScriptReply };
+
+// The frame an exec's stdin received, as a runner reads it.
+export function frameOf(call: ExecCall): ReturnType<typeof readFrame> {
+  return readFrame(joined(call.stdin));
+}
+
+// The runner execs among the execs, in order (not the reset cleanup).
+export function runnerExecs(container: FakeContainer): ExecCall[] {
+  return container.execs.filter((call) => isRunnerArgv(call.argv));
+}
+
+// The frame on a runner's stdin, read as the runner reads it: the header line, then exactly the declared archive and
+// input; only the nonce (or null) when it is not complete or has more.
+function readFrame(
+  bytes: Uint8Array,
+): { header: FrameHeader; archive: Uint8Array; input: Uint8Array } | { nonce: string | null } {
+  const end = bytes.indexOf(0x0a);
+  if (end === -1) {
+    return { nonce: null };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decoder.decode(bytes.subarray(0, end)));
+  } catch {
+    return { nonce: null };
+  }
+  const field = (key: string): unknown =>
+    typeof parsed === "object" && parsed !== null ? Reflect.get(parsed, key) : undefined;
+  const nonce = field("nonce");
+  const archiveBytes = field("archiveBytes");
+  const inputBytes = field("inputBytes");
+  if (typeof nonce !== "string" || typeof archiveBytes !== "number" || typeof inputBytes !== "number") {
+    return { nonce: null };
+  }
+  if (bytes.byteLength !== end + 1 + archiveBytes + inputBytes) {
+    return { nonce };
+  }
+  const header: FrameHeader = {
+    nonce,
+    seq: Number(field("seq")),
+    gen: Number(field("gen")),
+    first: field("first") === true,
+    token: String(field("token")),
+    leftMs: Number(field("leftMs")),
+  };
+  // Copies: nanotar's parseTar reads the view's whole buffer.
+  const archive = bytes.slice(end + 1, end + 1 + archiveBytes);
+  return { header, archive, input: bytes.slice(end + 1 + archiveBytes) };
+}
+
+function joined(chunks: readonly Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
 // A process that answers once its hold lets it go: the reply is made then (a held command changes the simulated disk
 // only when it goes on), its output streams in chunks, and it exits. kill() ends it at once with 137, its streams
 // closed, and a held command then never answers; an orphaned process's kill settles nothing its starter waits on.
@@ -270,16 +607,35 @@ function fakeProcess(
   call: ExecCall,
   hold: Promise<void>,
   respond: () => Reply,
+  answer?: Promise<Reply>,
 ): { process: ExecProcess; orphan: () => void } {
   const exit = Promise.withResolvers<number>();
+  // Settled for whoever reads the exit code; a failed RPC's rejection is not left unhandled when no one does.
+  exit.promise.catch(() => undefined);
   const answered = Promise.withResolvers<Reply | null>();
   let killed = false;
   let orphaned = false;
-  void hold.then(() => {
+  let failure: { error: unknown } | null = null;
+  void hold.then(async () => {
     if (killed) {
       return;
     }
-    const reply = respond();
+    let reply: Reply;
+    try {
+      reply = answer === undefined ? respond() : await answer;
+    } catch (error) {
+      if (orphaned) {
+        return;
+      }
+      failure = { error };
+      answered.resolve(null);
+      exit.reject(error);
+      return;
+    }
+    // An orphaned process's starter is gone: what it waited on stays unsettled.
+    if (orphaned) {
+      return;
+    }
     answered.resolve(reply);
     if (reply.never !== true) {
       exit.resolve(reply.exitCode ?? 0);
@@ -292,6 +648,10 @@ function fakeProcess(
     return new ReadableStream<Uint8Array>({
       async pull(controller) {
         const reply = await answered.promise;
+        if (failure !== null) {
+          controller.error(failure.error);
+          return;
+        }
         if (reply === null || killed || reply.never === true) {
           controller.close();
           return;

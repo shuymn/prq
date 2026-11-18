@@ -70,11 +70,13 @@ export function withFacts(
   return lines.join("\n");
 }
 
-// The skill mechanism, the core's only line about skills: what the list below it is and how its tools load a skill.
+// The skill mechanism, the core's only line about skills: what the list below it is and how its tools load a skill,
+// and, when the turn runs scripts, how they run.
 export const SKILLS_LINE =
   "The host's skills are listed below by name and description. When the task or the host's instructions call for " +
   "one, call activate_skill with its name before writing, and follow what it says; read_skill_resource reads the " +
   "files it names.";
+export const SCRIPTS_SENTENCE = "run_skill_script runs the commands an activated skill allows.";
 
 // The label of the skill list: one JSON record per line keeps each field delimited, so a description holding a line
 // break, a record-shaped text or the host block's tags stays inside its string.
@@ -89,11 +91,14 @@ export function instructionPart({
   kind,
   tools,
   skills = [],
+  scripts = false,
   hostPrompt,
 }: {
   kind: Job["target"]["kind"];
   tools: boolean;
   skills?: readonly SkillRecord[];
+  // Whether the turn is offered run_skill_script.
+  scripts?: boolean;
   hostPrompt: string;
 }): string {
   const lines = ["You work on one GitHub pull request: you summarize it and answer questions about it."];
@@ -106,7 +111,7 @@ export function instructionPart({
   if (skills.length > 0) {
     const sorted = skills.toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     lines.push(
-      SKILLS_LINE,
+      scripts ? `${SKILLS_LINE} ${SCRIPTS_SENTENCE}` : SKILLS_LINE,
       SKILL_LIST_LABEL,
       ...sorted.map(({ name, description }) => JSON.stringify({ name, description })),
     );

@@ -7,11 +7,17 @@ import {
   type CommandResult,
   type PreparedWorkspace,
   raceAbort,
+  type ScriptEnding,
+  SCRIPT_CALL_MS,
+  type ScriptResult,
+  type ScriptRun,
   STDERR_CHARS,
+  STDERR_TAIL_CHARS,
   type WorkspaceCommand,
   type WorkspaceTarget,
 } from "./pr-session/workspace.ts";
 import { migrate, WORKSPACE_SCHEMA } from "./schema.ts";
+import { RESET_CLEANUP_ARGV, runnerArgv, scriptFrame, splitTrailer, stderrKept } from "./skill-runner.ts";
 import {
   opArgv,
   type Checkout,
@@ -38,6 +44,8 @@ import {
 // inherit start's environment, so every command gets the CA and the rest of git's environment itself.
 const CHECKOUT_DIR = "/workspace/repo";
 const EXEC_ENV = {
+  // The image's PATH (Dockerfile), given rather than left to the runtime: `git` resolves to the image's wrapper.
+  PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
   GIT_SSL_CAINFO: "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
   GIT_TERMINAL_PROMPT: "0",
   GIT_CONFIG_NOSYSTEM: "1",
@@ -52,18 +60,28 @@ export const COMMAND_MS = 60_000;
 export const PREPARE_MS = 30 * 60_000;
 // After a reset: the old instance's git is killed within 10 s, or the container is stopped and confirmed stopped
 // within 30 s.
-export const PKILL_MS = 10_000;
+export const CLEANUP_MS = 10_000;
 export const STOP_MS = 30_000;
+// A skill script runs for at most 120 s (the runner's PRQ_SCRIPT_S).
+export const SCRIPT_MS = 120_000;
+// The wait for one runner: its frame within 30 s of its start, the script's 120 s, reaping's 5 s, and a margin. A
+// script call ends within SCRIPT_CALL_MS of its arrival: a rebuild's PREPARE_MS, an earlier run in the queue and this
+// one at RUNNER_MS each (pr-session/workspace.ts); a call whose bound passes before its exec never starts.
+export const RUNNER_MS = 3 * 60_000;
+// The runner's environment: its script bound, in seconds.
+const RUNNER_ENV = { PRQ_SCRIPT_S: String(SCRIPT_MS / 1000) };
+// A frame is written to the runner's stdin in chunks of at most this size.
+const FRAME_CHUNK_BYTES = 64 * 1024;
 // The most a command's page collects: 4 bytes for every character a result may hold. The page reader counts only
 // what it collects, so a page however far into the output stays reachable.
 export const OUTPUT_CAP_BYTES = 4 * TOOL_RESULT_CHARS;
 // The most of a prepare step's stdout kept (a SHA, a token).
 const STEP_STDOUT_CHARS = 1000;
 const SIGKILL = 9;
-// The cleanup after a reset: every process the Workspace starts in the container, by its exact name (git and its
-// helpers, rm, cat, and the sh that writes the ready token), so none of an earlier instance's prepare goes on. The
-// container's own process (sleep, the image's CMD) is not among them.
-const CLEANUP_ARGV = ["pkill", "-KILL", "-x", "git|git-.*|rm|cat|sh"];
+// The cleanup after a reset is the runner's --reset-cleanup (skill-runner.ts): every process a prepare starts, root's
+// git and its helpers, rm, cat and the sh that writes the ready token, so none of an earlier instance's prepare goes
+// on. A skill script's processes (the skill user's) and its runner (python3) are left to end under their own bounds,
+// and so is the container's own process (sleep, the image's CMD).
 
 // What the Workspace uses of its container.
 export type WorkspaceContainer = Pick<
@@ -101,6 +119,12 @@ const RELEASED = "the turn has ended";
 type Flight = { seq: number; sha: string; abort: AbortController; promise: Promise<Checkout>; settled: Promise<void> };
 
 type Gate = { seq: number; released_through: number };
+// The scratch record: the turn whose scratch directory the runners keep, its generation, whether a runner made the
+// directory (else the next frame is the turn's first), and whether a frame may be out whose ending this instance has
+// not seen.
+type ScratchRow = { scratch_seq: number; scratch_gen: number; scratch_established: number; scratch_pending: number };
+// A script run's wait, which a release or a newer turn ends.
+type LiveScript = { seq: number; abort: AbortController };
 type ReadyRow = { remote: string; sha: string; base_sha: string; merge_base: string | null; token: string };
 
 // A GitHub repository's owner/name, and a commit SHA: the only values a prepare puts into a URL or an argv.
@@ -131,6 +155,58 @@ async function within<T>(promise: Promise<T>, ms: number): Promise<T | "timeout"
   }
 }
 
+// A stream read to its end so the process writing it is never blocked, holding at most its first `head` characters,
+// with the count of every character and byte it held.
+async function readHead(
+  stream: ReadableStream<Uint8Array> | null,
+  head: number,
+): Promise<{ text: string; chars: number; bytes: number }> {
+  const decoder = new TextDecoder();
+  let text = "";
+  let chars = 0;
+  let bytes = 0;
+  const take = (decoded: string) => {
+    chars += decoded.length;
+    if (text.length < head) {
+      text += decoded.slice(0, head - text.length);
+    }
+  };
+  if (stream !== null) {
+    for await (const chunk of stream) {
+      bytes += chunk.byteLength;
+      take(decoder.decode(chunk, { stream: true }));
+    }
+  }
+  take(decoder.decode());
+  return { text, chars, bytes };
+}
+
+// A stream read to its end, holding at most its last `tail` characters, with its bytes.
+async function readTail(
+  stream: ReadableStream<Uint8Array> | null,
+  tail: number,
+): Promise<{ text: string; bytes: number }> {
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  if (stream !== null) {
+    for await (const chunk of stream) {
+      bytes += chunk.byteLength;
+      text = (text + decoder.decode(chunk, { stream: true })).slice(-tail);
+    }
+  }
+  return { text: (text + decoder.decode()).slice(-tail), bytes };
+}
+
+// Why a script call ended at its bound.
+function callBound(): Error {
+  return new Error(`the script call reached its bound of ${SCRIPT_CALL_MS / 60_000} minutes`);
+}
+
+function randomHex(): string {
+  return crypto.randomUUID().replaceAll("-", "");
+}
+
 // A stream's text up to chars, read to its end (the rest dropped), so the process writing it is never blocked.
 async function readCapped(stream: ReadableStream<Uint8Array> | null, chars: number): Promise<string> {
   if (stream === null) {
@@ -157,12 +233,19 @@ export class Workspace extends DurableObject<Env> {
   // setup completes. A running container does not show it was set up: a setup cut short (an abort, a reset) leaves
   // it running without its interception, so each instance sets it up before its first command.
   #setUpFor: number | null = null;
+  // Script runs one at a time per instance: each waits for the one before it.
+  #scripts: Promise<void> = Promise.resolve();
+  readonly #liveScripts = new Set<LiveScript>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#sql = ctx.storage.sql;
     migrate(ctx.storage, WORKSPACE_SCHEMA);
-    this.#cleanup = this.#cleanUp();
+    // A pending scratch record means a frame may be out with no instance left to see its ending: the turn's scratch is
+    // uncertain, so its generation is raised, durably, before this instance can send a frame (every container
+    // operation waits for the cleanup).
+    const raised = this.#raisePendingScratch();
+    this.#cleanup = this.#cleanUp(raised);
   }
 
   // The container (spied on in tests, which run without containers).
@@ -201,14 +284,64 @@ export class Workspace extends DurableObject<Env> {
     }
   }
 
+  // Runs a skill script in the container through its runner (container/prq-skill-run.py), the checkout of the target's
+  // commit made ready first: one exec of the runner, whose frame is written only to a caller still waiting. The call is
+  // bounded from its arrival across the checkout, the script queue and the exec (SCRIPT_CALL_MS), and the exec's wait
+  // by RUNNER_MS; a run whose bound passes before its exec never starts. The Workspace never stops the container or
+  // kills a runner for a script: a runner whose ending it did not see goes on under its own bounds, and its turn's
+  // scratch is then uncertain, so the scratch generation is raised and the turn's next run makes it again.
+  async runScript(target: WorkspaceTarget, run: ScriptRun): Promise<WorkspaceReply<ScriptResult>> {
+    const deadline = Date.now() + SCRIPT_CALL_MS;
+    const bound = new AbortController();
+    const timer = setTimeout(() => bound.abort(callBound()), SCRIPT_CALL_MS);
+    const live: LiveScript = { seq: target.seq, abort: new AbortController() };
+    this.#liveScripts.add(live);
+    const signal = AbortSignal.any([bound.signal, live.abort.signal]);
+    const turn = Promise.withResolvers<void>();
+    const before = this.#scripts;
+    this.#scripts = before.then(() => turn.promise);
+    try {
+      let token: string;
+      try {
+        this.#admit(target.seq);
+        token = (await untilAborted(this.#ensure(target), signal)).token;
+        await untilAborted(before, signal);
+        const cleanup = await untilAborted(this.#cleanup, signal);
+        if (cleanup !== null) {
+          throw new Refusal("cleanup", cleanup);
+        }
+        this.#check(target.seq);
+        // The bound is the deadline itself, also when the queue frees at the instant its timer is due.
+        if (Date.now() >= deadline) {
+          bound.abort(callBound());
+        }
+        signal.throwIfAborted();
+      } catch (error) {
+        if (signal.aborted && !(error instanceof Refusal)) {
+          return { ok: true, value: notStarted(signal.reason) };
+        }
+        return failure(error, "failed");
+      }
+      return { ok: true, value: await this.#runScript(target.seq, run, token, deadline, signal) };
+    } catch (error) {
+      return failure(error, "command");
+    } finally {
+      turn.resolve();
+      this.#liveScripts.delete(live);
+      clearTimeout(timer);
+    }
+  }
+
   // The turn of seq has ended: its calls, and those of every older turn, are refused from now on, and the prepare in
-  // flight is aborted when it is theirs. A newer turn's work is never touched.
+  // flight is aborted when it is theirs; their script runs' waits end, the runners themselves going on under their own
+  // bounds. A newer turn's work is never touched.
   async release(seq: number): Promise<void> {
     this.#sql.exec("UPDATE prq_workspace SET released_through = max(released_through, ?) WHERE id = 1", seq);
     const flight = this.#flight;
     if (flight !== null && flight.seq <= seq) {
       flight.abort.abort(new Refusal("refused", RELEASED));
     }
+    this.#endScripts((live) => live.seq <= seq, RELEASED);
   }
 
   // The prepare in flight, if any (for tests).
@@ -243,16 +376,22 @@ export class Workspace extends DurableObject<Env> {
       if (flight !== null && flight.seq < seq) {
         flight.abort.abort(new Refusal("refused", SUPERSEDED));
       }
+      this.#endScripts((live) => live.seq < seq, SUPERSEDED);
       if (this.#cleanupFailed) {
-        this.#cleanup = this.#cleanUp();
+        this.#cleanup = this.#cleanUp(false);
       }
     }
   }
 
-  // Whether the call may still act: its sequence is the newest and not released.
-  #check(seq: number): void {
+  // Why the call may no longer act, or null: it may while its sequence is the newest and not released.
+  #turnRefusal(seq: number): Refusal | null {
     const gate = this.#gate();
-    const refusal = this.#refusal(seq, gate) ?? (seq === gate.seq ? null : new Refusal("refused", SUPERSEDED));
+    return this.#refusal(seq, gate) ?? (seq === gate.seq ? null : new Refusal("refused", SUPERSEDED));
+  }
+
+  // Throws unless the call may still act.
+  #check(seq: number): void {
+    const refusal = this.#turnRefusal(seq);
     if (refusal !== null) {
       throw refusal;
     }
@@ -274,16 +413,211 @@ export class Workspace extends DurableObject<Env> {
     return untilAborted(Promise.resolve(operation(this.container())), signal);
   }
 
+  // --- Script runs ---
+
+  // Ends the waits of the script runs the predicate picks; their runners go on.
+  #endScripts(picked: (live: LiveScript) => boolean, why: string): void {
+    for (const live of this.#liveScripts) {
+      if (picked(live)) {
+        live.abort.abort(new Refusal("refused", why));
+      }
+    }
+  }
+
+  #scratch(): ScratchRow {
+    return this.#sql
+      .exec<ScratchRow>(
+        "SELECT scratch_seq, scratch_gen, scratch_established, scratch_pending FROM prq_workspace WHERE id = 1",
+      )
+      .one();
+  }
+
+  // A scratch record left pending by an earlier instance: its generation raised, established, no longer pending.
+  // Whether it was raised (the caller makes it durable before any frame).
+  #raisePendingScratch(): boolean {
+    if (this.#scratch().scratch_pending === 0) {
+      return false;
+    }
+    this.#uncertainScratch();
+    return true;
+  }
+
+  // The turn's scratch may have been changed by a runner whose ending is not known: the next run makes it again (a
+  // newer generation, not the turn's first), and a runner arriving late with the older generation is refused.
+  #uncertainScratch(): void {
+    this.#sql.exec(
+      `UPDATE prq_workspace SET scratch_gen = scratch_gen + 1, scratch_established = 1, scratch_pending = 0
+       WHERE id = 1`,
+    );
+  }
+
+  // No frame of the run can be out: its record is not pending.
+  #clearPending(): void {
+    this.#sql.exec("UPDATE prq_workspace SET scratch_pending = 0 WHERE id = 1");
+  }
+
+  // One run's exec, its frame gate and its ending; the call has passed its checks and holds the script queue.
+  async #runScript(
+    seq: number,
+    run: ScriptRun,
+    token: string,
+    deadline: number,
+    callSignal: AbortSignal,
+  ): Promise<ScriptResult> {
+    // The turn's record, made pending and durable before any runner can exist.
+    if (this.#scratch().scratch_seq !== seq) {
+      this.#sql.exec(
+        `UPDATE prq_workspace SET scratch_seq = ?, scratch_gen = 1, scratch_established = 0, scratch_pending = 0
+         WHERE id = 1`,
+        seq,
+      );
+    }
+    this.#sql.exec("UPDATE prq_workspace SET scratch_pending = 1 WHERE id = 1");
+    const record = this.#scratch();
+    try {
+      await untilAborted(this.ctx.storage.sync(), callSignal);
+    } catch (error) {
+      this.#clearPending();
+      if (callSignal.aborted) {
+        return notStarted(callSignal.reason);
+      }
+      throw error;
+    }
+    // Checked again with no await before the exec; the bound is the deadline itself, also when the wait ended at the
+    // instant its timer is due.
+    const late = callSignal.aborted || Date.now() >= deadline;
+    if (late || this.#turnRefusal(seq) !== null) {
+      this.#clearPending();
+      if (late) {
+        return notStarted(callSignal.aborted ? callSignal.reason : callBound());
+      }
+      this.#check(seq);
+    }
+    const runner = new AbortController();
+    const timer = setTimeout(
+      () => runner.abort(new Error(`the runner did not end within ${RUNNER_MS / 60_000} minutes`)),
+      RUNNER_MS,
+    );
+    try {
+      return await this.#exec(seq, run, token, deadline, record, AbortSignal.any([callSignal, runner.signal]));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async #exec(
+    seq: number,
+    run: ScriptRun,
+    token: string,
+    deadline: number,
+    record: ScratchRow,
+    execBound: AbortSignal,
+  ): Promise<ScriptResult> {
+    const nonce = randomHex();
+    const started = (async () =>
+      this.container().exec(runnerArgv(run.name, run.argv), {
+        env: RUNNER_ENV,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      }))();
+    // The frame gate: when the handle returns, the sequence and the bound are checked again with no await before the
+    // first byte is written; a runner whose caller has given up gets its stdin ended with no byte, and ends having
+    // touched nothing.
+    const frame: { gate: "open" | "sent" | "closed" } = { gate: "open" };
+    const framed = started.then(async (process) => {
+      const writer = process.stdin?.getWriter();
+      if (frame.gate === "closed" || execBound.aborted || Date.now() >= deadline || this.#turnRefusal(seq) !== null) {
+        frame.gate = "closed";
+        log("prq.workspace.frame_withheld", { workspace: this.ctx.id.name, seq });
+        await writer?.close();
+        return;
+      }
+      frame.gate = "sent";
+      const parts = scriptFrame(
+        {
+          nonce,
+          seq,
+          gen: record.scratch_gen,
+          first: record.scratch_established === 0,
+          token,
+          leftMs: Math.max(0, deadline - Date.now()),
+        },
+        run.files,
+        new TextEncoder().encode(run.stdin),
+      );
+      for (const part of parts) {
+        for (let offset = 0; offset < part.byteLength; offset += FRAME_CHUNK_BYTES) {
+          await writer?.write(part.subarray(offset, offset + FRAME_CHUNK_BYTES));
+        }
+      }
+      await writer?.close();
+    });
+    framed.catch(() => undefined);
+    let process: ExecProcess;
+    try {
+      process = await untilAborted(started, execBound);
+    } catch (error) {
+      if (frame.gate === "open") {
+        frame.gate = "closed";
+        this.#clearPending();
+        return notStarted(execBound.aborted ? execBound.reason : error);
+      }
+      this.#uncertainScratch();
+      return unknown(error);
+    }
+    if (frame.gate !== "sent") {
+      this.#clearPending();
+      this.#check(seq);
+      return notStarted(execBound.aborted ? execBound.reason : callBound());
+    }
+    const stdout = readHead(process.stdout, run.capChars);
+    const stderr = readTail(process.stderr, stderrKept(STDERR_TAIL_CHARS));
+    let out: Awaited<typeof stdout>;
+    let err: Awaited<typeof stderr>;
+    try {
+      [out, err] = await untilAborted(Promise.all([stdout, stderr, process.exitCode]), execBound);
+    } catch (error) {
+      // The wait ended (the bound, a release, a newer turn, a failed RPC): the runner goes on, unwatched.
+      this.#uncertainScratch();
+      return unknown(execBound.aborted ? execBound.reason : error);
+    }
+    const { stderr: text, trailer } = splitTrailer(err.text, nonce);
+    const streams = {
+      stdout: out.text,
+      stdoutChars: out.chars,
+      stderr: text.slice(-STDERR_TAIL_CHARS),
+      stdoutBytes: out.bytes,
+      stderrBytes: err.bytes,
+    };
+    if (trailer === null) {
+      this.#uncertainScratch();
+      return { ...unknown(new Error("the runner ended without this run's trailer")), ...streams };
+    }
+    this.#clearPending();
+    if (trailer.scratch !== null) {
+      this.#sql.exec("UPDATE prq_workspace SET scratch_established = 1 WHERE id = 1");
+    }
+    const ending: ScriptEnding =
+      trailer.end.kind === "exit" || trailer.end.kind === "timeout"
+        ? trailer.end
+        : { kind: "refused", end: trailer.end };
+    return { ...streams, ending, scratch: trailer.scratch, clean: trailer.clean };
+  }
+
   // --- The cleanup after a start ---
 
   // Nothing of an earlier instance may run when this one runs git: its prepare may have been cut by a reset while its
   // fetch went on in the container. A container not running has nothing left; else every git process is killed, and
   // when that cannot be made sure, the container is stopped (its disk goes with it) and confirmed stopped. Only a
   // confirmed ending opens the gate; otherwise every call fails with the reason until a newer turn tries again.
-  async #cleanUp(): Promise<string | null> {
+  async #cleanUp(raised: boolean): Promise<string | null> {
     this.#cleanupFailed = false;
     let reason: string | null;
     try {
+      if (raised) {
+        await this.ctx.storage.sync();
+      }
       reason = await this.#cleanUpContainer(this.container());
     } catch (error) {
       reason = messageOf(error);
@@ -300,19 +634,19 @@ export class Workspace extends DurableObject<Env> {
       return null;
     }
     const kill = async (): Promise<string | null> => {
-      const process = await container.exec(CLEANUP_ARGV, { env: EXEC_ENV });
+      const process = await container.exec(RESET_CLEANUP_ARGV, { env: EXEC_ENV });
       const code = await process.exitCode;
       // 0: killed, 1: none was running.
-      return code === 0 || code === 1 ? null : `pkill exited with ${code}`;
+      return code === 0 || code === 1 ? null : `the cleanup exited with ${code}`;
     };
     const killed = await within(
-      kill().catch((error: unknown) => `pkill failed: ${messageOf(error)}`),
-      PKILL_MS,
+      kill().catch((error: unknown) => `the cleanup failed: ${messageOf(error)}`),
+      CLEANUP_MS,
     );
     if (killed === null) {
       return null;
     }
-    const why = killed === "timeout" ? `pkill did not answer within ${PKILL_MS / 1000} s` : killed;
+    const why = killed === "timeout" ? `the cleanup did not answer within ${CLEANUP_MS / 1000} s` : killed;
     // The container is stopped instead: its disk, and so the checkout, go with it.
     this.#clearReady();
     const exited = container.monitor().then(
@@ -528,6 +862,18 @@ export class Workspace extends DurableObject<Env> {
       clearTimeout(timer);
     }
   }
+}
+
+const NO_OUTPUT = { stdout: "", stdoutChars: 0, stderr: "", stdoutBytes: 0, stderrBytes: 0 };
+
+// A run that sent no frame: no runner can act on it.
+function notStarted(why: unknown): ScriptResult {
+  return { ending: { kind: "not started", reason: messageOf(why) }, scratch: null, clean: true, ...NO_OUTPUT };
+}
+
+// A run whose wait ended after its frame without its trailer.
+function unknown(why: unknown): ScriptResult {
+  return { ending: { kind: "unknown", reason: messageOf(why) }, scratch: null, clean: false, ...NO_OUTPUT };
 }
 
 function failure(error: unknown, kind: "failed" | "command"): WorkspaceFailure {

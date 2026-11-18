@@ -1,7 +1,7 @@
 import type { Job, PrDetails, PrRef } from "@prq/protocol";
 
 import { instructionPart, withFacts } from "./prompt.ts";
-import type { TurnSkill } from "./skill-tools.ts";
+import { runnableEntries, type TurnSkill } from "./skill-tools.ts";
 import { toolDefinitionsJson } from "./turn-tools.ts";
 
 // A cloud turn's instruction prefix (docs/design.md, Model context): its system message and the definitions of the
@@ -25,11 +25,13 @@ export type Prefix = {
 };
 
 // What of a turn's prefix holds for the whole turn, built once at its start: whether it has the workspace's tools, the
-// skills it lists, the system message's instruction part as rendered, whether any tool is offered, the offered tools'
-// definitions as JSON and the fingerprints, which leave the pull request's facts out.
+// skills it lists, whether it runs their scripts (a workspace, and a runnable entry), the system message's instruction
+// part as rendered, whether any tool is offered, the offered tools' definitions as JSON and the fingerprints, which
+// leave the pull request's facts out.
 export type TurnInstructions = {
   workspace: boolean;
   skills: readonly TurnSkill[];
+  scripts: boolean;
   instructions: string;
   tools: boolean;
   definitions: string;
@@ -41,12 +43,13 @@ export async function turnInstructions(
   job: Job,
   { workspace, skills, hostPrompt }: { workspace: boolean; skills: readonly TurnSkill[]; hostPrompt: string },
 ): Promise<TurnInstructions> {
-  const instructions = instructionPart({ kind: job.target.kind, tools: workspace, skills, hostPrompt });
-  const definitions = await toolDefinitionsJson({ workspace, skills: skills.length > 0 });
+  const scripts = workspace && skills.some((skill) => runnableEntries(skill).length > 0);
+  const instructions = instructionPart({ kind: job.target.kind, tools: workspace, skills, scripts, hostPrompt });
+  const definitions = await toolDefinitionsJson({ workspace, skills: skills.length > 0, scripts });
   const tools = definitions !== "";
   const fingerprint = await fingerprintOf(instructions, definitions);
   const bare = tools ? await fingerprintOf(instructions, "") : fingerprint;
-  return { workspace, skills, instructions, tools, definitions, fingerprint, bare };
+  return { workspace, skills, scripts, instructions, tools, definitions, fingerprint, bare };
 }
 
 // The turn's prefix with the pull request's facts as `details` holds them.

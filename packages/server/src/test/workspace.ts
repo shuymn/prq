@@ -7,6 +7,8 @@ import { pageLines } from "../pr-session/pages.ts";
 import {
   type CommandResult,
   type PreparedWorkspace,
+  type ScriptResult,
+  type ScriptRun,
   STDERR_CHARS,
   type WorkspaceClient,
   type WorkspaceCommand,
@@ -206,6 +208,27 @@ export class FakeWorkspace implements WorkspaceClient {
     const output = this.#git(command.argv);
     const page = await pageLines(this.#stream(output.stdout), command.page);
     return { exitCode: output.exitCode, page, stderr: output.stderr.slice(0, STDERR_CHARS) };
+  }
+
+  // Each script run, as the run tool sent it; and how a run ends, as a test says (an exit 0 with no output by default).
+  readonly scriptRuns: (ScriptRun & { target: WorkspaceTarget })[] = [];
+  scriptReply: (run: ScriptRun) => ScriptResult | Promise<ScriptResult> = () => ({
+    ending: { kind: "exit", code: 0 },
+    scratch: "new",
+    stdout: "",
+    stdoutChars: 0,
+    stderr: "",
+    stdoutBytes: 0,
+    stderrBytes: 0,
+    clean: true,
+  });
+
+  async runScript(target: WorkspaceTarget, run: ScriptRun, _signal: AbortSignal): Promise<ScriptResult> {
+    this.scriptRuns.push({ ...run, target });
+    if (this.hang) {
+      return new Promise<never>(() => undefined);
+    }
+    return this.scriptReply(run);
   }
 
   async release(seq: number): Promise<void> {

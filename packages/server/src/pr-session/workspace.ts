@@ -1,3 +1,4 @@
+import type { FrameFile, RunnerEnd } from "../skill-runner.ts";
 import { WaitTimeout } from "../wait.ts";
 import type { Workspace, WorkspaceFailure } from "../workspace.ts";
 import type { Page, PageRequest } from "./pages.ts";
@@ -28,12 +29,41 @@ export type WorkspaceCommand = { argv: readonly string[]; page: PageRequest };
 // How a command ended: its exit code, its page of output (read through pageLines), and the start of its stderr.
 export type CommandResult = { exitCode: number; page: Page; stderr: string };
 
+// A skill script to run in the workspace: the skill's name and its files at the turn's revision, the validated argv,
+// the script's input, and how many characters of its stdout the result may show.
+export type ScriptRun = { name: string; files: FrameFile[]; argv: string[]; stdin: string; capChars: number };
+
+// How a script run ended, as far as the Workspace knows: the script's exit or its timeout; the runner's refusal before
+// anything ran (busy, or failed:<reason>); no frame sent, so nothing can run (`not started`, with why); or the wait
+// ended after the frame without this run's trailer (`unknown`, with why).
+export type ScriptEnding =
+  | Extract<RunnerEnd, { kind: "exit" | "timeout" }>
+  | { kind: "refused"; end: Extract<RunnerEnd, { kind: "busy" | "failed" }> }
+  | { kind: "not started" | "unknown"; reason: string };
+
+// A script run's result: its ending, the state of the turn's scratch directory (null when the run did not reach it),
+// stdout up to the run's cap with the count of every character the stream held, the last characters of stderr, the
+// bytes of each stream, and whether the runner confirmed every process of the run ended.
+export type ScriptResult = {
+  ending: ScriptEnding;
+  scratch: "new" | "kept" | "lost" | null;
+  stdout: string;
+  stdoutChars: number;
+  stderr: string;
+  stdoutBytes: number;
+  stderrBytes: number;
+  clean: boolean;
+};
+
 export interface WorkspaceClient {
   // Makes the checkout of the target's commit ready (fetching it and the base), or fails with the reason.
   prepare(target: WorkspaceTarget, signal: AbortSignal): Promise<PreparedWorkspace>;
   // Runs one command in the checkout of the target's commit, rebuilding the checkout first when it was lost. Rejects
   // with WorkspaceLost when the turn cannot go on.
   run(target: WorkspaceTarget, command: WorkspaceCommand, signal: AbortSignal): Promise<CommandResult>;
+  // Runs a skill script in the workspace, the checkout of the target's commit ready first, as run does. Rejects with
+  // WorkspaceLost when the turn cannot go on.
+  runScript(target: WorkspaceTarget, run: ScriptRun, signal: AbortSignal): Promise<ScriptResult>;
   // The turn of this sequence has ended: work it started stops, and its later calls are refused.
   release(seq: number): Promise<void>;
 }
@@ -53,7 +83,7 @@ export class WorkspaceLost extends Error {
 // The session's client of its Workspace. The Workspace answers failures as values (an error's class does not cross
 // RPC); they are thrown here as the callers expect them. A call's signal is not sent: the caller stops waiting on it,
 // and the turn's release stops what the Workspace is doing for it.
-export function workspaceClient(stub: Pick<Workspace, "prepare" | "run" | "release">): WorkspaceClient {
+export function workspaceClient(stub: Pick<Workspace, "prepare" | "run" | "runScript" | "release">): WorkspaceClient {
   return {
     prepare: async (target) => {
       const reply = await stub.prepare(target);
@@ -64,6 +94,13 @@ export function workspaceClient(stub: Pick<Workspace, "prepare" | "run" | "relea
     },
     run: async (target, command) => {
       const reply = await stub.run(target, command);
+      if (!reply.ok) {
+        throw runFailure(reply);
+      }
+      return reply.value;
+    },
+    runScript: async (target, run) => {
+      const reply = await stub.runScript(target, run);
       if (!reply.ok) {
         throw runFailure(reply);
       }
@@ -91,6 +128,16 @@ export const WORKSPACE_CALL_MS = 31 * 60_000;
 
 // The most stderr a command returns: enough for git's message.
 export const STDERR_CHARS = 1000;
+
+// A skill script call ends within 36 minutes of reaching the Workspace (src/workspace.ts: a rebuild's 30 minutes, then
+// an earlier run in the queue and this one at 3 minutes each), and the run tool waits a minute longer, so the
+// Workspace's own answer comes first.
+export const SCRIPT_CALL_MS = 36 * 60_000;
+export const SCRIPT_TOOL_MS = SCRIPT_CALL_MS + 60_000;
+// The most of a script's stderr a result shows: its end, where a Python traceback names its cause.
+export const STDERR_TAIL_CHARS = 2000;
+// The longest input a script is given, in UTF-16 code units (at most four UTF-8 bytes each in the frame).
+export const SCRIPT_STDIN_CHARS = 100_000;
 
 // Waits for a workspace call until it settles, the signal aborts, or, when given, the backstop passes (a WaitTimeout).
 // A call is not started once the signal has aborted, so no call's failure goes unobserved. Every ending removes the

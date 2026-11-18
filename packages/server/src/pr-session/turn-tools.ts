@@ -9,17 +9,18 @@ import {
 
 import { STREAM_TIMEOUT } from "./model.ts";
 import { ContextRoom } from "./room.ts";
-import { type SkillContext, SKILL_TOOL_DEFINITIONS, skillTools } from "./skill-tools.ts";
+import { RUN_TOOL_DEFINITION, type SkillContext, SKILL_TOOL_DEFINITIONS, skillTools } from "./skill-tools.ts";
 import { GIT_TOOL_DEFINITIONS, MIN_RESULT_CHARS, type ToolContext, workspaceTools } from "./tools.ts";
-import { WORKSPACE_CALL_MS } from "./workspace.ts";
+import { SCRIPT_TOOL_MS, WORKSPACE_CALL_MS } from "./workspace.ts";
 
 // A cloud turn's tools (docs/design.md, Model context): one set, decided at the turn's start from its workspace and its
 // skill list. The git tools with a workspace, the skill tools while a skill is registered (with or without a
-// workspace). The same set gives the definitions its prefix counts and its fingerprints hash, and the tools it runs, so
-// no tool reaches the provider uncounted.
+// workspace), and run_skill_script with a workspace while a listed skill has a runnable entry. The same set gives the
+// definitions its prefix counts and its fingerprints hash, and the tools it runs, so no tool reaches the provider
+// uncounted.
 
 // Which tools a turn is offered.
-type Offered = { workspace: boolean; skills: boolean };
+type Offered = { workspace: boolean; skills: boolean; scripts?: boolean };
 
 function byName<T>([a]: [string, T], [b]: [string, T]): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -36,6 +37,7 @@ export async function toolDefinitionsJson(offered: Offered): Promise<string> {
   const entries = sortedByName<{ description: string; inputSchema: FlexibleSchema<unknown> }>({
     ...(offered.workspace ? GIT_TOOL_DEFINITIONS : {}),
     ...(offered.skills ? SKILL_TOOL_DEFINITIONS : {}),
+    ...(offered.scripts === true ? RUN_TOOL_DEFINITION : {}),
   });
   if (entries.length === 0) {
     return "";
@@ -52,10 +54,11 @@ export async function toolDefinitionsJson(offered: Offered): Promise<string> {
 
 // What a turn's streamText is given besides its model and context. Every turn loops until a step makes no tool call
 // (no step limit for now: docs/design.md, Billing limits); the AI SDK's own default would end it after
-// one step. Tool calls are bounded by the workspace backstop, through the abort signal each execute receives.
+// one step. Tool calls are bounded by the workspace backstop, through the abort signal each execute receives: a script
+// run's is a minute past the Workspace's own bound on it, so the Workspace answers first.
 export const TURN_LOOP = {
   stopWhen: isLoopFinished(),
-  timeout: { ...STREAM_TIMEOUT, toolMs: WORKSPACE_CALL_MS },
+  timeout: { ...STREAM_TIMEOUT, toolMs: WORKSPACE_CALL_MS, tools: { run_skill_scriptMs: SCRIPT_TOOL_MS } },
 };
 
 type ToolLoop = {
