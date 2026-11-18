@@ -465,16 +465,6 @@ function summaryRequest(kind: SummaryKind, conversation: string, previous: strin
   return { kind, prompt: `# Conversation\n${conversation}\n\n${earlier}# Instructions\n${prompt}` };
 }
 
-export function notesRequest(toSummarize: readonly Step[], previous: string | null): SummaryRequest {
-  return summaryRequest("notes", serializeSteps(toSummarize), previous);
-}
-
-// A split turn's first steps, summarized into its checkpoint, or added to the checkpoint `previous` when a later cut
-// falls further inside the same turn.
-export function turnPrefixRequest(turnPrefix: readonly Step[], previous: string | null = null): SummaryRequest {
-  return summaryRequest("turn-prefix", serializeSteps(turnPrefix), previous);
-}
-
 // A summary request's tokens as a turn's requests are estimated (characters ÷ 3, its system prompt included), with
 // its output allowance.
 export function requestTokens(request: SummaryRequest, maxOutputTokens: number): number {

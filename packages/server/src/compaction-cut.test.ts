@@ -4,16 +4,16 @@ import { describe, expect, it } from "vitest";
 import {
   findCut,
   keptPart,
-  notesRequest,
+  nextBatch,
   partsChars,
   projectionSteps,
   readFiles,
   serializeSteps,
   SUMMARIZATION_PROMPT,
   SUMMARIZATION_SYSTEM_PROMPT,
+  type SummaryKind,
   TURN_PREFIX_SUMMARIZATION_PROMPT,
   TURN_PREFIX_UPDATE_PROMPT,
-  turnPrefixRequest,
   UPDATE_SUMMARIZATION_PROMPT,
 } from "./pr-session/compaction.ts";
 import { contextBudget } from "./pr-session/context-budget.ts";
@@ -252,6 +252,11 @@ describe("the files read", () => {
   });
 });
 
+// The prompt of a summary request for Q1, a new summary or an update of `previous`, as compaction builds it.
+function promptOf(kind: SummaryKind, previous: string | null): string {
+  return nextBatch(kind, projectionSteps([Q1]), 0, previous, 1_048_576, 8192).request?.prompt ?? "";
+}
+
 describe("the prompts", () => {
   it("ask for no language", () => {
     const prompts = [
@@ -264,12 +269,10 @@ describe("the prompts", () => {
     for (const prompt of prompts) {
       expect(prompt).not.toMatch(/language|japanese|english|日本語/i);
     }
-    expect(notesRequest(projectionSteps([Q1]), null).prompt.endsWith(SUMMARIZATION_PROMPT)).toBe(true);
-    expect(notesRequest(projectionSteps([Q1]), "earlier").prompt).toContain(
-      "<previous-summary>\nearlier\n</previous-summary>",
-    );
-    expect(turnPrefixRequest(projectionSteps([Q1])).prompt.endsWith(TURN_PREFIX_SUMMARIZATION_PROMPT)).toBe(true);
-    const update = turnPrefixRequest(projectionSteps([Q1]), "the checkpoint").prompt;
+    expect(promptOf("notes", null).endsWith(SUMMARIZATION_PROMPT)).toBe(true);
+    expect(promptOf("notes", "earlier")).toContain("<previous-summary>\nearlier\n</previous-summary>");
+    expect(promptOf("turn-prefix", null).endsWith(TURN_PREFIX_SUMMARIZATION_PROMPT)).toBe(true);
+    const update = promptOf("turn-prefix", "the checkpoint");
     expect(update).toContain("<previous-summary>\nthe checkpoint\n</previous-summary>");
     expect(update.endsWith(TURN_PREFIX_UPDATE_PROMPT)).toBe(true);
   });
