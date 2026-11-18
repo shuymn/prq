@@ -83,6 +83,7 @@ describe("prq context", () => {
       job: claimed.job,
       instructions: {
         prompts: { analysis: NEVER_SAVED, answer: NEVER_SAVED },
+        skills: [],
         dir: expect.stringMatching(SET),
       },
       messages: [],

@@ -53,10 +53,14 @@ describe("readContext", () => {
     expect(questionOf(context)).toBe("abcdef");
   });
 
-  it("keeps the first page's instructions, and empty prompts when a server sends none", async () => {
+  it("keeps the first page's instructions, and empty prompts and no skills when a server sends none", async () => {
     const saved = { text: "Answer briefly.", savedAt: 1 };
-    const instructions = { prompts: { analysis: saved, answer: saved } };
-    const later = { prompts: { analysis: { text: "", savedAt: null }, answer: { text: "", savedAt: null } } };
+    const skills = [{ name: "polish", description: "Polishes text.", rev: 3, sha: "1".repeat(40) }];
+    const instructions = { prompts: { analysis: saved, answer: saved }, skills };
+    const later = {
+      prompts: { analysis: { text: "", savedAt: null }, answer: { text: "", savedAt: null } },
+      skills: [],
+    };
     const { context } = await read([
       { ...page([user("q", "first")], "c1"), instructions },
       { ...page([], null), instructions: later },

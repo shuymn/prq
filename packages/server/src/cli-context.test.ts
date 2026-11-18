@@ -8,6 +8,8 @@ import {
   PROMPT_CHARS,
   PRQ_VERSION_HEADER,
   ROUTE_CALL_MS,
+  SKILL_COUNT,
+  SKILL_DESCRIPTION_CHARS,
 } from "@prq/protocol";
 import { runInDurableObject } from "cloudflare:test";
 import * as v from "valibot";
@@ -32,6 +34,7 @@ import {
 } from "./test/cli.ts";
 import {
   clearQueue,
+  clearSkills,
   gate,
   clearPrompts,
   holdInsert,
@@ -42,6 +45,7 @@ import {
   tracked,
   within,
 } from "./test/session.ts";
+import { registered, skillWith } from "./test/skills.ts";
 import { BASE, push, send, sha } from "./test/webhook.ts";
 import { SERVER_VERSION } from "./version.ts";
 
@@ -51,6 +55,7 @@ const sockets: AgentSocket[] = [];
 beforeEach(async () => {
   await clearQueue();
   await clearPrompts();
+  await clearSkills();
 });
 
 afterEach(() => {
@@ -104,7 +109,7 @@ describe("context", () => {
       pr: ref,
       details: null,
       job: claim.job,
-      instructions: { prompts: { analysis: never, answer: never } },
+      instructions: { prompts: { analysis: never, answer: never }, skills: [] },
       messages: [{ id: "q1", role: "user", text: "question q1" }],
       nextCursor: null,
     });
@@ -261,6 +266,7 @@ describe("context", () => {
     });
     expect((await contextOf(post("/cli/context", token, contextBody(ref, claim, "laptop")))).instructions).toEqual({
       prompts: { analysis: { text: "", savedAt: null }, answer: { text: "", savedAt: null } },
+      skills: [],
     });
   });
 
@@ -446,14 +452,20 @@ describe("context pages", () => {
     expect(new TextEncoder().encode(JSON.stringify(full)).length).toBeGreaterThan(CONTEXT_PAGE_BYTES - 64);
   });
 
-  it("carries both prompts at their cap on the first page only, the page within the budget", async () => {
+  it("carries both prompts and the skill list at their caps on the first page only, the page within the budget", async () => {
     captureLogs();
-    // Each prompt at its cap, each character a six-byte escape in JSON; and a question larger than a page, which the
-    // first page holds as much of as its room allows.
+    // Each prompt and SKILL_COUNT descriptions at their caps, each character a six-byte escape in JSON; and a question
+    // larger than a page, which the first page holds as much of as its room allows.
     const analysis = "\u0001".repeat(PROMPT_CHARS);
     const answer = "\u0002".repeat(PROMPT_CHARS);
     await (await hub()).savePrompt("analysis", analysis);
     await (await hub()).savePrompt("answer", answer);
+    const skills = [];
+    for (let index = 0; index < SKILL_COUNT; index += 1) {
+      const name = `skill-${String(index).padStart(2, "0")}`;
+      const description = "\u0003".repeat(SKILL_DESCRIPTION_CHARS);
+      skills.push(await registered(skillWith(name, { description, sha: String(index % 10).repeat(40) })));
+    }
     const { ref, token } = await localSession("pages", sockets, question("huge-q", "x".repeat(12 * 1024 * 1024)));
     const claim = holding(await claimOver(token, "laptop"));
 
@@ -463,6 +475,10 @@ describe("context pages", () => {
     const [first, ...later] = pages;
     expect(first?.instructions?.prompts.analysis.text).toBe(analysis);
     expect(first?.instructions?.prompts.answer.text).toBe(answer);
+    // Each registered skill, by name, with its description, revision and commit; nothing else of it.
+    expect(first?.instructions?.skills).toEqual(
+      skills.map((skill) => ({ name: skill.name, description: skill.description, rev: skill.rev, sha: skill.sha })),
+    );
     expect(later.every((page) => page.instructions === undefined)).toBe(true);
     // The first page is filled to the room the instructions leave.
     const bytes = new TextEncoder().encode(JSON.stringify(first)).length;

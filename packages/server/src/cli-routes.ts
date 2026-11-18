@@ -6,6 +6,8 @@ import {
   type ContextResponse,
   type ErrorResponse,
   ROUTE_CALL_MS,
+  SkillFilesRequest,
+  type SkillFilesResponse,
   SubmitRequest,
   type SubmitResponse,
   WaitRequest,
@@ -18,7 +20,7 @@ import * as v from "valibot";
 import { type CallBound, errorResponse, invalidRequest, Unavailable } from "./http.ts";
 import { hubStub, prSessionStub } from "./names.ts";
 
-// /cli/*: what a local agent calls (docs/design.md, Notification and wait; Owner and jobs). Each call to a Durable
+// /cli/*: what a local agent calls (docs/design.md, Notification and wait; Owner and jobs; Local CLI). Each call to a Durable
 // Object, its start included, is bounded; when the bound passes the route answers 503 and the call keeps running.
 export function cliRoutes(bound: CallBound) {
   return (
@@ -86,6 +88,20 @@ export function cliRoutes(bound: CallBound) {
           return (await prSessionStub(c.env, pr)).context(agentId, jobId, claimId, cursor);
         })();
         const result = await bound(call, ROUTE_CALL_MS, "the context");
+        return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
+      })
+      // A skill's files are not job data: the read takes no claim and is no contact from an agent. It only reads the Hub,
+      // so one that lands after the route stopped waiting changes nothing; the agent's resend reads the page again.
+      .post("/skill", vValidator("json", SkillFilesRequest, invalidRequest), async (c) => {
+        const { name, rev, cursor } = c.req.valid("json");
+        const call = (async (): Promise<SkillFilesResponse | ErrorResponse> => {
+          try {
+            return await (await hubStub(c.env)).skillPage(name, rev, cursor);
+          } catch (error) {
+            throw new Unavailable("the Hub's skill read failed", { cause: error });
+          }
+        })();
+        const result = await bound(call, ROUTE_CALL_MS, "the skill");
         return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
       })
   );

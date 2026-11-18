@@ -25,6 +25,7 @@ function context(answer: string): Context {
     job,
     instructions: {
       prompts: { analysis: { text: "Summarize.", savedAt: 1 }, answer: { text: answer, savedAt: 2 } },
+      skills: [],
     },
     messages: [{ id: "q", role: "user", text: "Why?" }],
   };

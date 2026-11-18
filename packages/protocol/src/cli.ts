@@ -1,6 +1,6 @@
 import * as v from "valibot";
 
-import { ContextInstructions } from "./instructions.ts";
+import { ContextInstructions, ContextSkill, SKILL_PATH_BYTES } from "./instructions.ts";
 import { MessageMetadata } from "./messages.ts";
 import { AgentId, MessageId, PrDetails, PrRef, Sha } from "./pr.ts";
 
@@ -132,3 +132,27 @@ export const ContextResponse = v.object({
   nextCursor: v.nullable(v.string()),
 });
 export type ContextResponse = v.InferOutput<typeof ContextResponse>;
+
+// /cli/skill: one page of a registered skill's files, at the revision the context listed. cursor is the nextCursor of
+// the page before; none for the first page. A skill is not job data: the request names no agent or claim.
+export const SkillFilesRequest = v.object({
+  name: ContextSkill.entries.name,
+  rev: ContextSkill.entries.rev,
+  cursor: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(SKILL_PATH_BYTES))),
+});
+export type SkillFilesRequest = v.InferOutput<typeof SkillFilesRequest>;
+
+// A file of a skill, whole: its path in the skill, git mode, size in bytes, git blob SHA-1, and its bytes in base64.
+// The reader checks the bytes against the size and the blob, so a byte that does not decode as sent is found there.
+const SkillFileBytes = v.object({
+  path: v.string(),
+  mode: v.picklist(["100644", "100755"]),
+  size: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+  blob: Sha,
+  content: v.string(),
+});
+
+// The answer to a skill request: whole files in path order, as many as fit in the server's page budget (at least one),
+// and nextCursor, which asks for the next page; null when this page holds the last file.
+export const SkillFilesResponse = v.object({ files: v.array(SkillFileBytes), nextCursor: v.nullable(v.string()) });
+export type SkillFilesResponse = v.InferOutput<typeof SkillFilesResponse>;

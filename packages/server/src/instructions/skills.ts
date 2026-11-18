@@ -1,6 +1,15 @@
-import { type AllowedTool, type Skill, SKILL_FILES, SkillName, SkillRef, SkillSource } from "@prq/protocol";
+import {
+  type AllowedTool,
+  type Skill,
+  SKILL_FILES,
+  type SkillFilesResponse,
+  SkillName,
+  SkillRef,
+  SkillSource,
+} from "@prq/protocol";
 import * as v from "valibot";
 
+import { CONTEXT_PAGE_BYTES, jsonBytes, longestJson } from "../pr-session/context.ts";
 import { runnableEntry } from "./command.ts";
 import type { SkillFrontmatter } from "./skill.ts";
 
@@ -164,19 +173,26 @@ export type SkillRead =
   | { kind: "paths"; paths: string[] }
   | { kind: "changed" };
 
-// Whether the skill is still registered at the revision a turn listed.
-function atRev(sql: SqlStorage, name: string, rev: number): boolean {
+// The revision the skill is registered at; undefined when it is not registered.
+function storedRev(sql: SqlStorage, name: string): number | undefined {
   const [row] = sql.exec<{ rev: number }>("SELECT rev FROM prq_skills WHERE name = ?", name).toArray();
-  return row?.rev === rev;
+  return row?.rev;
+}
+
+// The bytes of the skill's file at path: a cursor of one row, or of none when no file is there.
+function fileContent(sql: SqlStorage, name: string, path: string) {
+  return sql.exec<{ content: ArrayBuffer }>(
+    "SELECT content FROM prq_skill_files WHERE name = ? AND path = ?",
+    name,
+    path,
+  );
 }
 
 export function readSkillPath(sql: SqlStorage, name: string, rev: number, path: string): SkillRead {
-  if (!atRev(sql, name, rev)) {
+  if (storedRev(sql, name) !== rev) {
     return { kind: "changed" };
   }
-  const [file] = sql
-    .exec<{ content: ArrayBuffer }>("SELECT content FROM prq_skill_files WHERE name = ? AND path = ?", name, path)
-    .toArray();
+  const [file] = fileContent(sql, name, path).toArray();
   if (file !== undefined) {
     return { kind: "file", content: new Uint8Array(file.content) };
   }
@@ -194,11 +210,72 @@ export type SkillFilesRead =
   | { kind: "changed" };
 
 export function readSkillFilesAt(sql: SqlStorage, name: string, rev: number): SkillFilesRead {
-  if (!atRev(sql, name, rev)) {
+  if (storedRev(sql, name) !== rev) {
     return { kind: "changed" };
   }
   const files = readSkillFiles(sql, name).map(({ path, mode, content }) => ({ path, mode, content }));
   return { kind: "files", files };
+}
+
+// What /cli/skill reads of a registered skill at the revision a local agent's context listed: a page of its files; or
+// that the skill is not registered, is at another revision, or has no file at the cursor's path.
+type SkillPageRead =
+  | { kind: "page"; page: SkillFilesResponse }
+  | { kind: "missing" }
+  | { kind: "changed" }
+  | { kind: "bad_cursor" };
+
+// The characters of n bytes in base64.
+function base64Chars(bytes: number): number {
+  return 4 * Math.ceil(bytes / 3);
+}
+
+// Bytes as base64, through btoa a chunk at a time: a whole file as one argument list would overflow the stack.
+function base64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let at = 0; at < bytes.length; at += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+  }
+  return btoa(binary);
+}
+
+// A page of a skill's files from the cursor's path (the first file when there is none), in path order: whole files with
+// their bytes in base64, as many as fit in CONTEXT_PAGE_BYTES of JSON with the cursor of the skill's longest path, at
+// least one. A file is at most SKILL_FILE_BYTES (1.4 MB in base64), so none is split. The sizes are read first and
+// only the page's files whole, one at a time. The cursor is the next file's path: the files at one revision never
+// change, so it stays valid for as long as the revision does.
+export function readSkillPage(sql: SqlStorage, name: string, rev: number, cursor: string | undefined): SkillPageRead {
+  const current = storedRev(sql, name);
+  if (current === undefined) {
+    return { kind: "missing" };
+  }
+  if (current !== rev) {
+    return { kind: "changed" };
+  }
+  const stored = sql
+    .exec<Omit<FileRow, "content">>(
+      "SELECT path, mode, size, blob FROM prq_skill_files WHERE name = ? ORDER BY path",
+      name,
+    )
+    .toArray();
+  const start = cursor === undefined ? 0 : stored.findIndex((file) => file.path === cursor);
+  if (start < 0) {
+    return { kind: "bad_cursor" };
+  }
+  const longest = longestJson(stored.map((file) => file.path));
+  let left = CONTEXT_PAGE_BYTES - jsonBytes({ files: [], nextCursor: longest });
+  const files: SkillFilesResponse["files"] = [];
+  for (const file of stored.slice(start)) {
+    // A comma before each file but the first.
+    const bytes = jsonBytes({ ...file, content: "" }) + base64Chars(file.size) + (files.length > 0 ? 1 : 0);
+    if (files.length > 0 && bytes > left) {
+      break;
+    }
+    left -= bytes;
+    const { content } = fileContent(sql, name, file.path).one();
+    files.push({ ...file, content: base64(new Uint8Array(content)) });
+  }
+  return { kind: "page", page: { files, nextCursor: stored[start + files.length]?.path ?? null } };
 }
 
 // Writes the version under its name at rev: the row (registered_at kept when the name is registered), and exactly its

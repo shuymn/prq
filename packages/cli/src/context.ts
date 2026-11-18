@@ -12,9 +12,10 @@ export type Context = Pick<ContextResponse, "pr" | "details" | "job"> & {
   messages: Message[];
 };
 
-// A server that sends no instructions has no prompts to send.
+// A server that sends no instructions has no prompts or skills to send.
 const NO_INSTRUCTIONS: ContextInstructions = {
   prompts: { analysis: { text: "", savedAt: null }, answer: { text: "", savedAt: null } },
+  skills: [],
 };
 
 // Reads every page of a job's context, from no cursor until nextCursor is null, keeps the first page's instructions,
