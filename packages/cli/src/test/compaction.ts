@@ -11,6 +11,13 @@
 //    decision and still uses it.
 // 4. A provider refusal fails the job with the provider's reason: one question to a second Worker whose API key is
 //    wrong (the provider refuses it, so nothing is spent), its reason with the key redacted and cut to 500 characters.
+// With host prompts (saved through PUT /api/prompts/:kind before the analysis), also:
+// - prompts: each request the Worker sent to the model holds only its own kind's prompt: an analysis turn's the
+//   analysis prompt, an answer turn's the answer prompt, and a summary request neither.
+// - languages (with an answer prompt; reported apart from the check's verdict, since only a prompt such as "Answer in
+//   the language of the question." asks for it): one question in each language at the end, and each answer's prose,
+//   its letters outside code, headings, links and markup: at least 200, Japanese scripts at least half of the
+//   Japanese answer's, Latin at least nine tenths of the English answer's.
 
 import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -19,9 +26,9 @@ import { type PrRef, type PrSessionView, sessionName } from "@prq/protocol";
 import * as v from "valibot";
 
 import { contextLimit } from "../../../server/src/pr-session/context-budget.ts";
-import { ask, deliver, getMessages, sessionView } from "./pr.ts";
+import { ask, deliver, getMessages, savePrompt, sessionView } from "./pr.ts";
 import type { GithubApp } from "./reconcile.ts";
-import { type ModelSettings, startWorker, type Worker } from "./worker.ts";
+import { type ModelRequest, type ModelSettings, startWorker, type Worker } from "./worker.ts";
 import { readPull, untilEnded, workspaceContainers } from "./workspace.ts";
 
 const POLL_MS = 500;
@@ -36,24 +43,154 @@ const WRONG_KEY = "sk-prq-check-wrong-key-000000000000";
 const NAME = "Kestrel";
 
 // The check's questions in one language: the decision, a code question about a file, the question about the last file
-// read, and the recall of the decision's name.
-type Questions = { decision: string; code: (file: string) => string; lastFile: string; recall: string };
+// read, the recall of the decision's name, and the question of the languages step.
+type Questions = {
+  language: "english" | "japanese";
+  decision: string;
+  code: (file: string) => string;
+  lastFile: string;
+  recall: string;
+  explain: string;
+};
 
 export const ENGLISH: Questions = {
+  language: "english",
   decision: `A decision for the rest of this conversation: refer to this pull request's change as a whole as "Project ${NAME}", and keep each answer to at most three sentences. Confirm it in one sentence.`,
   code: (file) =>
     `Call the read_file tool now on ${file} (even if you read it before), and say in two sentences what it does in this pull request.`,
   lastFile: "Which file of this pull request did you read last? Answer with its path only.",
   recall: "What name did I ask you to use for this pull request's change as a whole? Reply with that name only.",
+  explain:
+    "For this question only, the three-sentence limit does not apply: in one paragraph of at least six sentences, explain what this pull request changes and why. Use no code blocks.",
 };
 
 export const JAPANESE: Questions = {
+  language: "japanese",
   decision: `この会話の残りについての決定事項です。このプルリクエストの変更全体を「Project ${NAME}」と呼び、各回答は3文以内にしてください。確認を1文で答えてください。`,
   code: (file) =>
     `今すぐ read_file ツールで ${file} を読み（前に読んでいても）、このプルリクエストでそのファイルが何をしているかを2文で説明してください。`,
   lastFile: "このプルリクエストのファイルで最後に読んだのはどれですか。パスだけを答えてください。",
   recall: "このプルリクエストの変更全体を何と呼ぶよう頼みましたか。その名前だけを答えてください。",
+  explain:
+    "この質問に限り3文以内の制限は適用しません。このプルリクエストが何をなぜ変えるのかを、6文以上の1段落で説明してください。コードブロックは使わないでください。",
 };
+
+// The host's prompts the check saves before the analysis; empty for one it leaves unsaved.
+export type Prompts = { analysis: string; answer: string };
+
+// What a request the Worker sent to the model is, by its system message: a turn of the analysis or of an answer (by
+// the job's line), a summary request (the summarizer's system prompt, SUMMARIZATION_SYSTEM_PROMPT in
+// packages/server/src/pr-session/compaction.ts, which imports workerd's types), or neither.
+type RequestKind = "analysis" | "answer" | "summary" | "other";
+
+const RequestBody = v.looseObject({
+  messages: v.array(v.looseObject({ role: v.string(), content: v.unknown() })),
+});
+
+function systemOf(body: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const request = v.safeParse(RequestBody, parsed);
+  const [first] = request.success ? request.output.messages : [];
+  return first?.role === "system" && typeof first.content === "string" ? first.content : null;
+}
+
+function requestKind(system: string | null): RequestKind {
+  if (system === null) {
+    return "other";
+  }
+  if (system.startsWith("You are a context summarization assistant.")) {
+    return "summary";
+  }
+  if (system.includes("\nYour job: summarize the pull request at head ")) {
+    return "analysis";
+  }
+  return system.includes("\nYour job: answer the last question") ? "answer" : "other";
+}
+
+// Whether a request's body holds a prompt, as JSON escapes it.
+function inBody(body: string, prompt: string): boolean {
+  return prompt !== "" && body.includes(JSON.stringify(prompt).slice(1, -1));
+}
+
+// Whether each request holds only its own kind's prompt: a turn's system message holds its kind's prompt in the host's
+// block (when that prompt is saved), and no request holds the other prompt anywhere in its body (as JSON escapes it).
+// The counts of each kind, and a line for each request that does not hold.
+export function promptsHeld(
+  requests: readonly ModelRequest[],
+  prompts: Prompts,
+): { counts: Record<RequestKind, number>; wrong: string[] } {
+  const counts: Record<RequestKind, number> = { analysis: 0, answer: 0, summary: 0, other: 0 };
+  const wrong: string[] = [];
+  requests.forEach(({ body }, index) => {
+    const system = systemOf(body);
+    const kind = requestKind(system);
+    counts[kind] += 1;
+    const own = kind === "analysis" || kind === "answer" ? prompts[kind] : "";
+    const others = (["analysis", "answer"] as const).filter((other) => other !== kind && inBody(body, prompts[other]));
+    const block = `\n<host-instructions>\n${own}\n</host-instructions>\n`;
+    if (kind === "other") {
+      wrong.push(`request ${index + 1}: neither a turn nor a summary request`);
+    } else if (own !== "" && !(system ?? "").includes(block)) {
+      wrong.push(`request ${index + 1} (${kind}): its system message does not hold the ${kind} prompt`);
+    } else if (others.length > 0) {
+      wrong.push(`request ${index + 1} (${kind}): holds the ${others.join(" and ")} prompt`);
+    }
+  });
+  return { counts, wrong };
+}
+
+// The letters of an answer's prose, outside fenced code blocks, code spans, heading lines, link targets, URLs and HTML
+// tags, and how many are in Japanese scripts (Hiragana, Katakana, Han, and the letters they share, such as ー) and in Latin. List
+// markers and other markup hold no letters.
+export function proseLetters(text: string): { letters: number; japanese: number; latin: number } {
+  let fence: string | null = null;
+  const prose: string[] = [];
+  for (const line of text.split("\n")) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence !== null) {
+      if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length) {
+        fence = null;
+      }
+      continue;
+    }
+    if (marker !== undefined) {
+      fence = marker;
+      continue;
+    }
+    if (!HEADING.test(line)) {
+      prose.push(line);
+    }
+  }
+  const stripped = prose
+    .join("\n")
+    .replace(/`[^`\n]*`/g, "")
+    .replace(/\]\([^)\s]*\)/g, "]")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/<[^>\n]*>/g, "");
+  const count = (pattern: RegExp) => stripped.match(pattern)?.length ?? 0;
+  return {
+    letters: count(/\p{L}/gu),
+    japanese: count(/(?=\p{L})[\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Han}]/gu),
+    latin: count(/\p{sc=Latin}/gu),
+  };
+}
+
+// Whether an answer's prose is in the language: at least 200 letters, Japanese scripts at least half of them for
+// Japanese, Latin at least nine tenths for English.
+export function inLanguage(text: string, language: Questions["language"]): { ok: boolean; line: string } {
+  const { letters, japanese, latin } = proseLetters(text);
+  const share = (part: number) => (letters === 0 ? 0 : part / letters);
+  const ok = letters >= 200 && (language === "japanese" ? share(japanese) >= 0.5 : share(latin) >= 0.9);
+  return {
+    ok,
+    line: `${letters} letters of prose, Japanese ${share(japanese).toFixed(2)}, Latin ${share(latin).toFixed(2)}`,
+  };
+}
 
 // A Markdown heading line, at any level.
 const HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
@@ -274,6 +411,7 @@ export async function checkCompaction(
   pr: PrRef,
   print: (line: string) => void,
   questions: Questions,
+  prompts: Prompts,
 ): Promise<boolean> {
   const window = Number(settings.model.MODEL_CONTEXT_TOKENS);
   const limit = contextLimit(window);
@@ -283,10 +421,18 @@ export async function checkCompaction(
     `compaction check: ${pr.owner}/${pr.repo}#${pr.number} at head ${pull.head.sha}, model ${settings.model.MODEL_ID}, ` +
       `window ${window} (compacted above ${limit}); ${files.length} changed files`,
   );
-  const results = { compacted: false, unchanged: false, queued: false, refused: false };
+  const prompted = prompts.analysis !== "" || prompts.answer !== "";
+  const results = { compacted: false, unchanged: false, queued: false, refused: false, prompts: !prompted };
+  let languages: boolean | null = null;
   const tracked = await workspaceContainers();
   const worker = await startWorker({ model: settings.model, githubApp: settings.app.settings, containers: true });
   try {
+    for (const kind of ["analysis", "answer"] as const) {
+      if (prompts[kind] !== "") {
+        await savePrompt(worker, kind, prompts[kind]);
+        print(`the ${kind} prompt saved: ${prompts[kind]}`);
+      }
+    }
     print("step 1: the analysis, the decision, then code questions until a compaction is adopted after the decision");
     await deliver(worker, pr, {
       action: "opened",
@@ -298,6 +444,10 @@ export async function checkCompaction(
     await (await worker.durableObject("PrSession", sessionName(pr)))["settle"]?.();
     const analysis = await untilEnded(worker, pr, (job) => job.target.kind === "analysis");
     print(`  analysis: ${analysis?.state ?? "none"}${analysis?.failure == null ? "" : `: ${analysis.failure}`}`);
+    if (analysis?.state === "done" && prompts.analysis !== "") {
+      const summary = textOf(await messages(worker, pr), `analysis-${analysis.jobId}`);
+      print(`  the analysis: ${inLanguage(summary, "japanese").line}; ${firstLine(summary)}`);
+    }
     const afterAnalysis = (await context(worker, pr)).context_tokens;
     print(`  context count ${afterAnalysis ?? "estimated"} (limit ${limit})`);
     // A compaction the analysis started ends before the decision is asked, so a later one summarizes the decision.
@@ -394,7 +544,12 @@ export async function checkCompaction(
     for (const line of events(worker, 0, /prq\.compaction\./)) {
       print(`  ${line}`);
     }
-    results.compacted = adopted && stored.rev > trigger.rev && decisionIndex >= 0 && decisionIndex < cutIndex;
+    results.compacted =
+      adopted &&
+      stored.rev > trigger.rev &&
+      decisionIndex >= 0 &&
+      decisionIndex < cutIndex &&
+      outline(stored.text ?? "").length > 0;
     print(results.compacted ? "step 1: as expected" : "step 1: NOT as expected");
 
     print("step 2: the conversation the author sees is unchanged by the compaction");
@@ -447,6 +602,39 @@ export async function checkCompaction(
         ? `step 3: as expected${waitedDuringSummary ? "" : " (their requests returned after the summary, so their wait during it is not shown)"}`
         : "step 3: NOT as expected",
     );
+
+    if (prompts.answer !== "") {
+      print("languages: a question in each language, each answer's prose (reported apart from the verdict)");
+      const asked = questions.language === "japanese" ? [ENGLISH, JAPANESE] : [JAPANESE, ENGLISH];
+      languages = true;
+      for (const language of asked) {
+        const id = `language-${language.language}`;
+        print(`question ${id}: ${language.explain}`);
+        await ask(worker, pr, id, language.explain);
+        const job = await untilEnded(worker, pr, answerTo(id));
+        const text = job?.state === "done" ? textOf(await messages(worker, pr), `answer-${job.jobId}`) : "";
+        const measured = inLanguage(text, language.language);
+        languages &&= measured.ok;
+        print(`  ${job?.state ?? "no job"}: ${measured.line}: ${measured.ok ? "as expected" : "NOT as expected"}`);
+        print(`  ${firstLine(text || (job?.failure ?? ""))}`);
+      }
+      print(languages ? "languages: as expected" : "languages: NOT as expected");
+    }
+
+    if (prompted) {
+      print("prompts: each model request holds only its own kind's prompt");
+      const { counts, wrong } = promptsHeld(worker.modelRequests(), prompts);
+      print(
+        `  ${worker.modelRequests().length} requests: ${counts.analysis} of the analysis, ${counts.answer} of answers, ` +
+          `${counts.summary} summary requests, ${counts.other} other`,
+      );
+      for (const line of wrong) {
+        print(`  ${line}`);
+      }
+      results.prompts =
+        wrong.length === 0 && counts.analysis > 0 && counts.answer > 0 && counts.summary > 0 && counts.other === 0;
+      print(results.prompts ? "prompts: as expected" : "prompts: NOT as expected");
+    }
   } finally {
     await worker.close();
     const { seen, removed } = await tracked.remove();
@@ -472,7 +660,9 @@ export async function checkCompaction(
     await refusing.close();
   }
 
-  const ok = results.compacted && results.unchanged && results.queued && results.refused;
-  print(ok ? "as expected" : "NOT as expected");
+  const ok = results.compacted && results.unchanged && results.queued && results.refused && results.prompts;
+  print(
+    `${ok ? "as expected" : "NOT as expected"}${languages === null ? "" : `; languages: ${languages ? "as expected" : "NOT as expected"}`}`,
+  );
   return ok;
 }

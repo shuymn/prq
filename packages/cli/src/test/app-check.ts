@@ -6,7 +6,7 @@
 
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { parseEnv } from "node:util";
+import { parseArgs, type ParseArgsOptionsConfig, parseEnv } from "node:util";
 
 import { canonicalPrRef, type PrRef } from "@prq/protocol";
 
@@ -27,25 +27,48 @@ const NAMES = [
 const TOKEN = /\bgh[opsur]_[A-Za-z0-9_]+/g;
 const JWT = /\beyJ[\w-]+\.[\w-]+\.[\w-]+/g;
 
-export type AppCheck = (
+// The values of a check's options, as parseArgs gives them.
+type Values<O extends ParseArgsOptionsConfig> = ReturnType<
+  typeof parseArgs<{ options: O; allowPositionals: true }>
+>["values"];
+
+export type AppCheck<O extends ParseArgsOptionsConfig = ParseArgsOptionsConfig> = (
   settings: { app: GithubApp; model: ModelSettings },
   pr: PrRef,
   print: (line: string) => void,
+  values: Values<O>,
 ) => Promise<boolean>;
 
-// Runs a check named `name` against the pull request its one argument names, besides any of the check's `options`, with
-// the settings of packages/server/.dev.vars, and sets the exit code.
-export async function runAppCheck(name: string, check: AppCheck, options: readonly string[] = []): Promise<void> {
+// Runs a check named `name` against the pull request its one argument names, besides the check's `options` (each a flag
+// or an option with a value), with the settings of packages/server/.dev.vars, and sets the exit code.
+export async function runAppCheck<const O extends ParseArgsOptionsConfig>(
+  name: string,
+  check: AppCheck<O>,
+  options: O,
+): Promise<void> {
   function fail(reason: string): never {
     process.stderr.write(`${name} check: ${reason}\n`);
     process.exit(1);
   }
 
-  // A "--" before the argument (as some package managers pass it) is not an argument, nor is an option of the check.
-  const args = process.argv.slice(2).filter((arg) => arg !== "--" && !options.includes(arg));
-  const target = args.length === 1 ? /^([^/\s]+)\/([^#\s]+)#([1-9][0-9]*)$/.exec(args[0] ?? "") : null;
+  const usage = Object.entries(options)
+    .map(
+      ([option, { type }]) => `[--${option}${type === "string" ? ` <${option.split("-").at(-1) ?? "value"}>` : ""}] `,
+    )
+    .join("");
+  // A "--" before the arguments (as some package managers pass it) is not an argument.
+  let parsed: { values: Values<O>; positionals: string[] };
+  try {
+    parsed = parseArgs({ args: process.argv.slice(2).filter((arg) => arg !== "--"), options, allowPositionals: true });
+  } catch (error) {
+    fail(
+      `${error instanceof Error ? error.message : String(error)}; usage: check:${name} ${usage}<owner>/<repo>#<number>`,
+    );
+  }
+  const { values, positionals } = parsed;
+  const target = positionals.length === 1 ? /^([^/\s]+)\/([^#\s]+)#([1-9][0-9]*)$/.exec(positionals[0] ?? "") : null;
   if (target === null) {
-    fail(`usage: check:${name} ${options.map((option) => `[${option}] `).join("")}<owner>/<repo>#<number>`);
+    fail(`usage: check:${name} ${usage}<owner>/<repo>#<number>`);
   }
   const [, owner = "", repo = "", number = ""] = target;
 
@@ -100,6 +123,7 @@ export async function runAppCheck(name: string, check: AppCheck, options: readon
       },
       canonicalPrRef({ owner, repo, number: Number(number) }),
       print,
+      values,
     );
     process.exitCode = ok ? 0 : 1;
   } catch (error) {

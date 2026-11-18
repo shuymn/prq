@@ -44,7 +44,13 @@ export type Worker = {
   sql(className: "Hub" | "PrSession", name: string, query: string, ...bindings: unknown[]): Promise<unknown[]>;
   // The Worker's log lines since it started or was last reset.
   logs(): string[];
+  // The requests the Worker sent to the model provider since it started or was last reset, in order.
+  modelRequests(): readonly ModelRequest[];
 };
+
+// A request the Worker sent to the model provider (MODEL_BASE_URL): its URL and its body as sent, for the checks that
+// read what the model was given. Its headers, which hold the API key, are not kept, and no check prints a body.
+export type ModelRequest = { url: string; body: string };
 
 // The content codings Node's fetch decodes. Their responses arrive decoded with the content-encoding header kept, and
 // the harness hands them to the Worker as they are, so workerd would decode the body again and fail (a Brotli stream:
@@ -105,9 +111,15 @@ export async function startWorker({
   const jwk: JWK = { ...(await exportJWK(publicKey)), kid: KEY_ID, alg: "RS256", use: "sig" };
   let fetches = 0;
   let failures = 0;
+  const recorded: ModelRequest[] = [];
   const passThrough = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
+    if (model.MODEL_BASE_URL !== "" && url.startsWith(model.MODEL_BASE_URL)) {
+      const request = new Request(input, init);
+      recorded.push({ url, body: await request.clone().text() });
+      return decodedOnce(await passThrough(request));
+    }
     if (url !== CERTS_URL) {
       return decodedOnce(await passThrough(input, init));
     }
@@ -157,6 +169,7 @@ export async function startWorker({
       url = (await harness.listen()).url.origin;
       fetches = 0;
       failures = 0;
+      recorded.length = 0;
     },
     async close() {
       globalThis.fetch = passThrough;
@@ -189,5 +202,6 @@ export async function startWorker({
       return storage.exec(query, ...bindings);
     },
     logs: () => harness.getLogs().map((entry) => entry.message),
+    modelRequests: () => recorded,
   };
 }

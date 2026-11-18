@@ -5,4 +5,4 @@
 import { runAppCheck } from "./app-check.ts";
 import { checkWorkspace } from "./workspace.ts";
 
-await runAppCheck("workspace", checkWorkspace);
+await runAppCheck("workspace", checkWorkspace, {});
