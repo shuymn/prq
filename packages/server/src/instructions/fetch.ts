@@ -444,7 +444,7 @@ function frontmatterOf(bytes: Uint8Array): SkillFrontmatter {
 
 // What a preview reads: a link (its segments split into a ref and a path), or a ref named whole, against the
 // registered repository and path.
-export type PreviewTarget = { link: SkillLink } | { source: SkillSource; ref: string };
+type PreviewTarget = { link: SkillLink } | { source: SkillSource; ref: string };
 
 // A preview: the ref resolved to its commit, the tree read by that SHA, and SKILL.md's frontmatter. Nothing is stored.
 export function previewSkill(client: GithubClient, target: PreviewTarget): Promise<SkillPreview> {
