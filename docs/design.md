@@ -822,8 +822,8 @@ never summarized, and once answered it enters the kept part with its answer, whe
   heading with text under it is not adopted. The heading may be at any level and in any language (the prompts name no
   language, so a summary may title its sections in the conversation's), but it is a `#` heading, as the prompts write
   them: DeepSeek wrote such headings in all four real compactions, in English and Japanese conversations. A reply in
-  another layout (bold or `Label:` lines) fails the compaction with the notes unchanged, and an unfilled outline inside
-  a code fence or split by `---` is not recognised as empty. Before that check, a tag prq wraps the notes or a request's
+  another layout (bold or `Label:` lines) or an unfilled outline in a code fence or split by `---` fails the compaction
+  with the notes unchanged; a fence or a break is not text. Before that check, a tag prq wraps the notes or a request's
   parts in (`summary`, `previous-summary`, `conversation`) is peeled where it encloses the whole reply, until none is
   left; everything else, a file list included, is the reply's own. An update reads the stored summaries only, and the
   notes are assembled from them as stored. Each summary request, estimated as a turn's are (characters ÷ 3) with the

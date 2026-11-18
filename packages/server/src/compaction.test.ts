@@ -419,6 +419,7 @@ describe("a summary's reply", () => {
   const indented =
     "## Key facts\n- Keep this exact block:\n\n  <read-files>\n  ALLOW_ONLY_CHANGED_FILES=false\n  </read-files>";
   const fixture = "## Decisions\n- Use this list as the fixture:\n\n<read-files>\nsrc/b.ts\n</read-files>";
+  const fenced = `\`\`\`\n${DECIDED}\n\`\`\``;
   it.for([
     [
       "wrappers one inside another around only a file list",
@@ -432,6 +433,9 @@ describe("a summary's reply", () => {
     ],
     ["its prompt's headings with only blank sections", "## Decisions\n\n## Key facts\n   \n", NOT_ADOPTED],
     ["headings of its own language and level with only blank sections", "## 決定事項\n\n### 重要な事実\n", NOT_ADOPTED],
+    ["blank sections inside a code fence", "```markdown\n## Decisions\n\n## Key facts\n```", NOT_ADOPTED],
+    ["blank sections split by thematic breaks", "## Decisions\n---\n## Key facts\n\n* * *\n", NOT_ADOPTED],
+    ["a summary inside a code fence", fenced, adoptedWith(fenced)],
     ["an ordinary summary", ordinary, adoptedWith(ordinary)],
     ["a summary with Japanese headings", japanese, adoptedWith(japanese)],
     ["a summary with third-level headings", deeper, adoptedWith(deeper)],
