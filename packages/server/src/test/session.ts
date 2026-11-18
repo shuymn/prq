@@ -10,6 +10,7 @@ import {
   type LedgerRow,
   type Owner,
   type PrRef,
+  type PromptKind,
   sessionName,
 } from "@prq/protocol";
 import type { UIMessage } from "ai";
@@ -60,6 +61,11 @@ export async function clearPrompts(): Promise<void> {
 
 export function hub(): Promise<DurableObjectStub<Hub>> {
   return hubStub(env);
+}
+
+// Saves a host's prompt through the Hub, as the prompts route does, and checks it was stored.
+export async function savePrompt(kind: PromptKind, prompt: string): Promise<void> {
+  expect(await (await hub()).savePrompt(kind, prompt)).toMatchObject({ text: prompt });
 }
 
 // The pool as a test needs it: no agent present, or the given agents present (a contact just now). The claims the

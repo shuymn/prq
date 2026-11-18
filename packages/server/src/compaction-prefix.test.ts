@@ -1,4 +1,4 @@
-import { type Job, PROMPT_CHARS, type PromptKind } from "@prq/protocol";
+import { type Job, PROMPT_CHARS } from "@prq/protocol";
 import type { UIMessage } from "ai";
 import { runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,7 +31,7 @@ import {
   useCloudModel,
   useWorkspace,
 } from "./test/model.ts";
-import { clearPrompts, gate, hub, jobOf, prSessionSeams, sessionSql } from "./test/session.ts";
+import { clearPrompts, gate, jobOf, prSessionSeams, savePrompt, sessionSql } from "./test/session.ts";
 import { BASE, push, send, sha } from "./test/webhook.ts";
 import { FakeWorkspace } from "./test/workspace.ts";
 
@@ -53,10 +53,6 @@ afterEach(() => {
 });
 
 const LIMIT = contextLimit(WINDOW);
-
-async function savePrompt(kind: PromptKind, prompt: string): Promise<void> {
-  expect(await (await hub()).savePrompt(kind, prompt)).toMatchObject({ text: prompt });
-}
 
 function estimate(chars: number): number {
   return Math.ceil(chars / CHARS_PER_TOKEN);

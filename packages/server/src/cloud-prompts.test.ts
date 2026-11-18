@@ -1,4 +1,4 @@
-import { type Job, PROMPT_CHARS, type PromptKind } from "@prq/protocol";
+import { type Job, PROMPT_CHARS } from "@prq/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Hub } from "./hub.ts";
@@ -30,7 +30,7 @@ import {
   useWorkspace,
 } from "./test/model.ts";
 import { advance, until } from "./test/provider.ts";
-import { clearPrompts, gate, hub, jobOf, prSessionSeams, retryIn, sessionSql } from "./test/session.ts";
+import { clearPrompts, gate, hub, jobOf, prSessionSeams, retryIn, savePrompt, sessionSql } from "./test/session.ts";
 import { BASE, push, sha } from "./test/webhook.ts";
 import { FakeWorkspace } from "./test/workspace.ts";
 
@@ -53,11 +53,6 @@ afterEach(() => {
 
 const ANALYSIS_PROMPT = "ANALYSIS-MARKER: write the summary as a list.";
 const ANSWER_PROMPT = "ANSWER-MARKER: answer in one sentence.";
-
-async function savePrompt(kind: PromptKind, text: string): Promise<void> {
-  const saved = await (await hub()).savePrompt(kind, text);
-  expect(saved).toMatchObject({ text });
-}
 
 function systemOf(call: CallOptions | undefined): string {
   const [first] = call?.prompt ?? [];
