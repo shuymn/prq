@@ -24,6 +24,8 @@ import {
   REPO_PAGE_ROWS,
   type RepoPage,
   SavePromptRequest,
+  type Skill,
+  SKILL_COUNT,
   WaitRequest,
   waitBoundMs,
   type WaitResponse,
@@ -33,6 +35,18 @@ import * as v from "valibot";
 
 import { refuseSubAgent, sendServerVersion } from "./agents.ts";
 import { readPrompts, writePrompt } from "./instructions/prompts.ts";
+import {
+  countSkills,
+  deleteSkill,
+  isSkillVersion,
+  readSkill,
+  readSkillFiles,
+  readSkills,
+  skillChanged,
+  type SkillBundle,
+  type SkillVersion,
+  writeSkill,
+} from "./instructions/skills.ts";
 import {
   claimReleasedAt,
   LedgerEntry,
@@ -465,10 +479,10 @@ export class Hub extends Agent<Env, HubView> {
 
   // --- Instructions ---
 
-  // The host's instructions (docs/design.md, Instructions and skills): both prompts, and the registered skills, of
-  // which there are none yet. A cloud turn reads them at its start, and /cli/context with its first page.
+  // The host's instructions (docs/design.md, Instructions and skills): both prompts, and the registered skills sorted
+  // by name. A cloud turn reads them at its start, and /cli/context with its first page.
   async instructions(): Promise<Instructions> {
-    return { prompts: readPrompts(this.#sql), skills: [] };
+    return { prompts: readPrompts(this.#sql), skills: readSkills(this.#sql) };
   }
 
   // Replaces a kind's prompt and answers it as stored. A kind or a text the protocol refuses changes nothing.
@@ -479,6 +493,78 @@ export class Hub extends Agent<Env, HubView> {
     const saved = writePrompt(this.#sql, kind, text, this.clock());
     log("prq.prompt.saved", { kind, chars: text.length });
     return saved;
+  }
+
+  // A registered skill, or null.
+  skill(name: string): Skill | null {
+    return readSkill(this.#sql, name);
+  }
+
+  // A registered skill with every file of its pinned commit: the stored copy as a reader gets it.
+  skillBundle(name: string): SkillBundle | null {
+    const skill = readSkill(this.#sql, name);
+    return skill === null ? null : { skill, files: readSkillFiles(this.#sql, name) };
+  }
+
+  // Registers a skill read and checked by a confirm, in one transaction with its checks: the name is free, and fewer
+  // than SKILL_COUNT skills are registered. The registration takes a new revision from the Hub's counter.
+  registerSkill(version: SkillVersion): Skill | ErrorResponse {
+    if (!isSkillVersion(version)) {
+      return { error: "bad_request", detail: "not a skill version" };
+    }
+    const stored = this.ctx.storage.transactionSync((): Skill | ErrorResponse => {
+      if (readSkill(this.#sql, version.name) !== null) {
+        return { error: "skill_exists", detail: `a skill named ${version.name} is registered already` };
+      }
+      if (countSkills(this.#sql) >= SKILL_COUNT) {
+        return { error: "bad_request", detail: `${SKILL_COUNT} skills are registered already; remove one first` };
+      }
+      return this.#writeSkill(version);
+    });
+    if (!("error" in stored)) {
+      log("prq.skill.registered", { name: stored.name, rev: stored.rev, sha: stored.sha, files: version.files.length });
+    }
+    return stored;
+  }
+
+  // Replaces a registered skill's version with one read and checked by a confirm, in one transaction with its check: the
+  // registration is still at expectedRev, the revision the update was previewed against. A remove, or a remove and a
+  // register again, since then answers skill_changed and changes nothing.
+  updateSkill(version: SkillVersion, expectedRev: number): Skill | ErrorResponse {
+    if (!isSkillVersion(version)) {
+      return { error: "bad_request", detail: "not a skill version" };
+    }
+    const stored = this.ctx.storage.transactionSync((): Skill | ErrorResponse => {
+      if (readSkill(this.#sql, version.name)?.rev !== expectedRev) {
+        return {
+          error: "skill_changed",
+          detail: skillChanged(version.name),
+        };
+      }
+      return this.#writeSkill(version);
+    });
+    if (!("error" in stored)) {
+      log("prq.skill.updated", { name: stored.name, rev: stored.rev, sha: stored.sha, files: version.files.length });
+    }
+    return stored;
+  }
+
+  #writeSkill(version: SkillVersion): Skill {
+    writeSkill(this.#sql, version, this.#next(), this.clock());
+    const skill = readSkill(this.#sql, version.name);
+    if (skill === null) {
+      throw new Error("the skill just written is not stored");
+    }
+    return skill;
+  }
+
+  // Removes a skill, whatever its revision: its row and files. Whether one was registered.
+  removeSkill(name: string): boolean {
+    const removed = this.ctx.storage.transactionSync(() => deleteSkill(this.#sql, name));
+    if (removed) {
+      log("prq.skill.removed", { name });
+    }
+    return removed;
   }
 
   // The Hub's clock (spied on in tests, which set the time a presence ends and its alarm runs).

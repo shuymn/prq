@@ -39,6 +39,8 @@ describe("schema", () => {
         "prq_repos",
         "prq_ledger_totals",
         "prq_prompts",
+        "prq_skills",
+        "prq_skill_files",
       ];
       for (const table of tables) {
         sql.exec(`DROP TABLE ${table}`);

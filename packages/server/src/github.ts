@@ -13,18 +13,19 @@ import { withTimeout } from "./wait.ts";
 export const GITHUB_CALL_MS = 10_000;
 
 // The REST API version every request names.
-const API_VERSION = "2022-11-28";
+export const GITHUB_API_VERSION = "2022-11-28";
 
-// One HTTP exchange with GitHub, its response read whole, within GITHUB_CALL_MS. At the bound the request is aborted
-// and the call rejects at once, whether or not the request honours the abort; @octokit/request reports the rejection
-// as a RequestError with status 500. Every ending aborts the exchange's signal, which a finished one ignores.
-async function boundedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+// One HTTP exchange with GitHub and the read of its response, within GITHUB_CALL_MS together. At the bound the request
+// is aborted and the call rejects at once, whether or not the request or the read honours the abort. Every ending
+// aborts the exchange's signal, which a finished one ignores.
+export async function githubExchange<T>(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  read: (response: Response) => Promise<T>,
+): Promise<T> {
   const bound = new AbortController();
-  const signal = init?.signal ? AbortSignal.any([init.signal, bound.signal]) : bound.signal;
-  const exchange = async () => {
-    const response = await fetch(input, { ...init, signal });
-    return new Response(response.body === null ? null : await response.arrayBuffer(), response);
-  };
+  const signal = init.signal ? AbortSignal.any([init.signal, bound.signal]) : bound.signal;
+  const exchange = async () => read(await fetch(input, { ...init, signal }));
   try {
     return await withTimeout(exchange(), GITHUB_CALL_MS, "a GitHub request");
   } finally {
@@ -32,8 +33,20 @@ async function boundedFetch(input: RequestInfo | URL, init?: RequestInit): Promi
   }
 }
 
-const github = request.defaults({
-  headers: { "x-github-api-version": API_VERSION },
+// An exchange with its response read whole, for @octokit/request, which reports a rejection as a RequestError with
+// status 500.
+function boundedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return githubExchange(
+    input,
+    init ?? {},
+    async (response) => new Response(response.body === null ? null : await response.arrayBuffer(), response),
+  );
+}
+
+// The REST API's requests, each exchange bounded. A caller authorizes each request itself (the App's JWT or an
+// installation's token) and may pass a signal (`request: { signal }`) that aborts it.
+export const githubRequest = request.defaults({
+  headers: { "x-github-api-version": GITHUB_API_VERSION },
   request: { fetch: boundedFetch },
 });
 
@@ -51,6 +64,8 @@ export interface GithubClient {
   pullRequest(installationId: number, pr: PrRef): Promise<PullRequestState>;
   // The installation's token, minted within GITHUB_CALL_MS or taken from the cache.
   installationToken(installationId: number): Promise<string>;
+  // The App's own JWT, signed within GITHUB_CALL_MS, for the App's endpoints (its installations).
+  appToken(): Promise<string>;
 }
 
 function createClient(config: GithubAppConfig): GithubClient {
@@ -66,7 +81,7 @@ function createClient(config: GithubAppConfig): GithubClient {
       const signed = await withTimeout(signing, GITHUB_CALL_MS, "the App's JWT");
       return { jwt: signed.token, expiresAt: new Date(signed.expiration * 1000).toISOString() };
     },
-    request: github,
+    request: githubRequest,
   });
   const token = async (installationId: number) => {
     const minted = auth({ type: "installation", installationId });
@@ -74,8 +89,9 @@ function createClient(config: GithubAppConfig): GithubClient {
   };
   return {
     installationToken: token,
+    appToken: async () => (await withTimeout(auth({ type: "app" }), GITHUB_CALL_MS, "the App's JWT")).token,
     pullRequest: async (installationId, pr) => {
-      const response = await github("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+      const response = await githubRequest("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
         owner: pr.owner,
         repo: pr.repo,
         pull_number: pr.number,

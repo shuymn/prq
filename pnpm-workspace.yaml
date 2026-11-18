@@ -31,6 +31,11 @@ catalog:
   "@octokit/auth-app": 8.3.1
   "@octokit/request": 10.0.16
   universal-github-app-jwt: 2.2.2
+  # Skill registration: a SKILL.md's frontmatter is YAML, read with aliases refused; and the confirm's blob reads, at
+  # most six at a time (the Workers limit on simultaneous outgoing connections), the queued ones dropped at the first
+  # failure.
+  p-limit: 7.3.3
+  yaml: 2.9.1
 
   # Tests and TypeScript; fast-check generates the interleavings of the head reconciliation's oracle test.
   fast-check: 4.10.2

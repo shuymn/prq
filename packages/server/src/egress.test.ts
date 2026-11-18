@@ -26,6 +26,7 @@ beforeEach(() => {
   reply = () => new Response("served", { status: 200 });
   const github: GithubClient = {
     pullRequest: () => Promise.reject(new Error("not served")),
+    appToken: () => Promise.reject(new Error("not served")),
     installationToken: async (installationId) => {
       tokens.push(installationId);
       return TOKEN;

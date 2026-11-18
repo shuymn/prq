@@ -21,6 +21,7 @@ import * as v from "valibot";
 
 import { type CallBound, errorResponse, invalidRequest } from "./http.ts";
 import { hubStub, prSessionStub } from "./names.ts";
+import { skillRoutes } from "./skill-routes.ts";
 
 // A job in a pull request's path. Owner and repository take any case and address the canonical session; the number is
 // written without leading zeros.
@@ -76,11 +77,13 @@ export function apiRoutes(bound: CallBound) {
         return "error" in result ? errorResponse(c, result.error, result.detail) : c.json(result);
       })
       // The host's instructions for the settings (docs/design.md, Instructions and skills): both prompts, and the
-      // registered skills. Only reads.
+      // registered skills sorted by name. Only reads.
       .get("/instructions", async (c) => {
         const call = (async (): Promise<Instructions> => (await hubStub(c.env)).instructions())();
         return c.json(await bound(call, ROUTE_CALL_MS, "the Hub's instructions"));
       })
+      // The host's skills: register, update and remove.
+      .route("/skills", skillRoutes(bound))
       // Saves a prompt, stored before the answer; the last save wins. A save that lands after the route stopped waiting
       // is stored all the same, and the host's resend stores the same text again.
       .put(

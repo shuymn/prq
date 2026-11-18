@@ -27,6 +27,9 @@ const STATUS = {
   target_mismatch: 409,
   not_retryable: 409,
   stale_job: 409,
+  skill_exists: 409,
+  skill_changed: 409,
+  invalid_skill: 422,
 } as const satisfies Record<ErrorCode, ContentfulStatusCode>;
 
 export function errorResponse(c: Context, error: ErrorCode, detail?: string): Response {
