@@ -19,10 +19,11 @@ import { fitPage, MIN_PAGE_CHARS, type Page, type PageRequest, pageLines } from 
 import type { ContextRoom } from "./room.ts";
 import {
   continuation,
-  cutByRoom,
   fitResult,
   NO_ROOM,
   NOTE_CHARS,
+  numberedPage,
+  pathList,
   StartChar,
   StartLine,
   TOOL_RESULT_CHARS,
@@ -304,8 +305,7 @@ function bodyPage(page: Page, byRoom: boolean, first: boolean, lineEnd: boolean)
 
 function filePage(page: Page, byRoom: boolean): Shown {
   if (page.lines.length > 0) {
-    const lines = page.lines.map((text, index) => `${page.start.line + index}\t${text}`);
-    return { outcome: "read", text: withNote(lines.join("\n"), continuation(page, byRoom)) };
+    return { outcome: "read", text: numberedPage(page, byRoom) };
   }
   if (page.lineCount === 0) {
     return { outcome: "read", text: "(empty file)" };
@@ -317,8 +317,7 @@ function filePage(page: Page, byRoom: boolean): Shown {
 }
 
 function listing(page: Page, byRoom: boolean): Shown {
-  const note = page.next === null ? "" : `[${page.rest} more paths not shown; narrow the path${cutByRoom(byRoom)}]`;
-  return { outcome: "read", text: withNote(page.lines.join("\n"), note) };
+  return { outcome: "read", text: pathList(page, byRoom) };
 }
 
 // The skill tools of a turn whose list is not empty, sorted by name. No tool has needsApproval (tools.ts).

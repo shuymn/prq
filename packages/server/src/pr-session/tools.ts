@@ -120,7 +120,7 @@ export function continuation(page: Page, byRoom: boolean): string {
     : `[truncated inside line ${next.line}; call again with ${at}]`;
 }
 
-export function cutByRoom(byRoom: boolean): string {
+function cutByRoom(byRoom: boolean): string {
   return byRoom ? "; the context has no room for more" : "";
 }
 
@@ -167,6 +167,18 @@ export function fitResult(text: string, left: number): string {
   return `${cutAt(text, limit - RESULT_CUT.length)}${RESULT_CUT}`;
 }
 
+// A nonempty page of a file, each line after its number and a tab, with its continuation note.
+export function numberedPage(page: Page, byRoom: boolean): string {
+  const lines = page.lines.map((text, index) => `${page.start.line + index}\t${text}`);
+  return withNote(lines.join("\n"), continuation(page, byRoom));
+}
+
+// A page of paths, with how many more were left out.
+export function pathList(page: Page, byRoom: boolean): string {
+  const note = page.next === null ? "" : `[${page.rest} more paths not shown; narrow the path${cutByRoom(byRoom)}]`;
+  return withNote(page.lines.join("\n"), note);
+}
+
 function listFilesResult(path: string | undefined) {
   return (result: CommandResult, page: Page, byRoom: boolean): string => {
     if (result.exitCode !== 0) {
@@ -175,8 +187,7 @@ function listFilesResult(path: string | undefined) {
     if (page.lines.length === 0) {
       return path === undefined ? "no files" : `no files at ${path}`;
     }
-    const note = page.next === null ? "" : `[${page.rest} more paths not shown; narrow the path${cutByRoom(byRoom)}]`;
-    return withNote(page.lines.join("\n"), note);
+    return pathList(page, byRoom);
   };
 }
 
@@ -192,8 +203,7 @@ function readFileResult(result: CommandResult, page: Page, byRoom: boolean): str
       ? "(empty file)"
       : `error: startLine ${page.start.line} is past the end of the file (${page.lineCount} lines)`;
   }
-  const lines = page.lines.map((text, index) => `${page.start.line + index}\t${text}`);
-  return withNote(lines.join("\n"), continuation(page, byRoom));
+  return numberedPage(page, byRoom);
 }
 
 function grepResult(result: CommandResult, page: Page, byRoom: boolean): string {
