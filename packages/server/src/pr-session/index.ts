@@ -1419,10 +1419,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     }
     const { system } = prefix;
     const modelMessages = await convertToModelMessages(context.messages);
-    const loop =
-      code === null
-        ? null
-        : await toolLoop(code, this.contextTokens(), { system, messages: modelMessages }, context.measured);
+    // The first request's size: the context count, or without a measurement the estimate of the prefix (the system
+    // message and the tool definitions) and the messages as sent.
+    const start = context.measured ?? estimateTokens(prefix.chars + JSON.stringify(modelMessages).length);
+    const loop = code === null ? null : toolLoop(code, this.contextTokens(), start);
     const secret = this.#modelSecret();
     // The turn's first error, classified with the key redacted, is its reason; what the client is shown is that reason.
     const failWith = (error: unknown): string => {

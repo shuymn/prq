@@ -5,9 +5,10 @@
 import type { Job, PrDetails, PrRef } from "@prq/protocol";
 import { streamText } from "ai";
 
+import { estimateTokens } from "../src/pr-session/compaction.ts";
 import { contextBudget } from "../src/pr-session/context-budget.ts";
 import { classifyModelError, redact } from "../src/pr-session/model.ts";
-import { systemPrompt } from "../src/pr-session/prompt.ts";
+import { instructionPrefix } from "../src/pr-session/prefix.ts";
 import { NO_ROOM, toolLoop, TURN_LOOP } from "../src/pr-session/tools.ts";
 import { type CloudModel, stepTokens } from "../src/pr-session/turn.ts";
 import { FakeWorkspace, type Files } from "../src/test/workspace.ts";
@@ -121,9 +122,11 @@ export async function checkTools(
   const workspace = new FakeWorkspace({ base: BASE_FILES, head: HEAD_FILES });
   const target = { fullName: `${PR.owner}/${PR.repo}`, installationId: null, sha: HEAD, baseSha: BASE, seq: 1 };
   const prepared = await workspace.prepare(target, new AbortController().signal);
-  const { text: system } = systemPrompt({ pr: PR, details: DETAILS, job: JOB, tools: true, hostPrompt: "" });
+  const prefix = await instructionPrefix({ pr: PR, details: DETAILS, job: JOB, tools: true, hostPrompt: "" });
+  const { system } = prefix;
   const messages = [{ role: "user" as const, content: QUESTION }];
-  const loop = await toolLoop({ workspace, target, prepared }, window, { system, messages });
+  const start = estimateTokens(prefix.chars + JSON.stringify(messages).length);
+  const loop = toolLoop({ workspace, target, prepared }, window, start);
   say(`tools check: model ${model.modelId}, window ${window} (reserve ${contextBudget(window).reserve})`);
   say(`question: ${QUESTION}`);
   const offered: string[] = [];
