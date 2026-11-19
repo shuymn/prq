@@ -129,10 +129,17 @@ if (args[0] === "exec") {
 }
 `;
 
+// pnpm: recorded with the build's overrides it was given; FAKE_PNPM_CHANGE names the command ("install" or "build")
+// that changes a tracked file of the clone.
 const FAKE_PNPM = `#!${process.execPath}
-import { appendFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 
-appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "pnpm", args: process.argv.slice(2), cwd: process.cwd() }) + "\\n");
+const args = process.argv.slice(2);
+const env = { PRQ_BUILD_VERSION: process.env.PRQ_BUILD_VERSION ?? null, PRQ_BUILD_PREFIX: process.env.PRQ_BUILD_PREFIX ?? null };
+appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "pnpm", args, cwd: process.cwd(), env }) + "\\n");
+if (process.env.FAKE_PNPM_CHANGE === (args[0] === "install" ? "install" : "build")) {
+  writeFileSync("packages/cli/package.json", JSON.stringify({ version: "0.1.0", changed: true }) + "\\n");
+}
 `;
 
 const FAKE_GH = `#!${process.execPath}
@@ -156,6 +163,7 @@ const ToolCall = v.object({
   args: v.array(v.string()),
   cwd: v.string(),
   ppid: v.optional(v.number()),
+  env: v.optional(v.record(v.string(), v.nullable(v.string()))),
 });
 type ToolCall = v.InferOutput<typeof ToolCall>;
 
@@ -688,6 +696,20 @@ describe("deploy <tag>", () => {
     const secrets = "0000000a-0000-4000-8000-000000000000";
     await saveState({ deployment: [secrets], versions: { [LIVE]: "prq-bootstrap", [secrets]: null } });
     ledger = [{ rows: [ledgerRow(3, "cloud", 1, 0)], nextCursor: null }];
+    // The host's checkout hooks (core.hooksPath and a template's), and the browser check's build overrides.
+    const hook = `#!/bin/sh\necho ran >> ${join(root, "hook-ran")}\n`;
+    await mkdir(join(root, "host-hooks"));
+    await mkdir(join(root, "host-template", "hooks"), { recursive: true });
+    await writeFile(join(root, "host-hooks", "post-checkout"), hook, { mode: 0o700 });
+    await writeFile(join(root, "host-template", "hooks", "post-checkout"), hook, { mode: 0o700 });
+    Object.assign(env, {
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "core.hooksPath",
+      GIT_CONFIG_VALUE_0: join(root, "host-hooks"),
+      GIT_TEMPLATE_DIR: join(root, "host-template"),
+      PRQ_BUILD_VERSION: "v9.9.9",
+      PRQ_BUILD_PREFIX: "old-",
+    });
 
     const result = await deploy([TAG], { answers: ["y", "y"] });
 
@@ -704,6 +726,11 @@ describe("deploy <tag>", () => {
       { tool: "mise", args: ["exec", "--", "pnpm", "--dir", "packages/server", "run", "build"], cwd: clone },
       { tool: "pnpm", args: ["--dir", "packages/server", "run", "build"], cwd: clone },
     ]);
+    expect(await readFile(join(root, "hook-ran"), "utf8").catch(() => null)).toBeNull();
+    expect((await toolCalls()).find((each) => each.args.includes("build") && each.tool === "pnpm")?.env).toEqual({
+      PRQ_BUILD_VERSION: null,
+      PRQ_BUILD_PREFIX: null,
+    });
     // The upload with the clone's tools, from its server package.
     expect(tools.at(-1)?.args.slice(0, 4)).toEqual(["exec", "--", join(bin, "wrangler"), "deploy"]);
     expect(tools.at(-1)?.cwd).toBe(join(clone, "packages", "server"));
@@ -821,6 +848,24 @@ describe("deploy <tag>", () => {
     expect(result.code).toBe(1);
     expect(result.output).toContain(refusal);
     expect(await deployCalls()).toEqual([]);
+  });
+
+  it.each([
+    ["the install", "install", "before the build"],
+    ["the build", "build", "before the upload"],
+  ])("refuses a clone whose tracked files %s changed, %s", async (_what, change, when) => {
+    await bootstrapped();
+    env["FAKE_PNPM_CHANGE"] = change;
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(
+      `deploy: the clone's tracked files are no longer ${commit}'s ${when}: something in the clone changed them`,
+    );
+    expect(await deployCalls()).toEqual([]);
+    const builds = (await toolCalls()).filter((each) => each.tool === "pnpm" && each.args.includes("build"));
+    expect(builds).toHaveLength(change === "install" ? 0 : 1);
   });
 
   it("refuses while cloud work waits or runs, reading every ledger page with the service token", async () => {

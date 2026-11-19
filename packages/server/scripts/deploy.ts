@@ -86,6 +86,8 @@ const RESUME = "pnpm --dir packages/server run deploy -- --read-back";
 const POLL_ROUNDS = 180;
 // How long the owner has to look at a new container application in the dashboard.
 const PROVISIONING_MS = 30 * 60_000;
+// The web UI build's inputs for the browser check alone (vite.config.ts), which a release's build never takes.
+const BUILD_OVERRIDES = ["PRQ_BUILD_VERSION", "PRQ_BUILD_PREFIX"];
 // The most ledger pages the idle check reads.
 const LEDGER_PAGES = 1_000;
 const LEDGER_REQUEST_MS = 30_000;
@@ -473,10 +475,19 @@ async function idleCheck(host: string, ignoreRunning: boolean): Promise<string> 
   }
 }
 
+// The environment of the clone's steps: this process's, less the build's overrides.
+function stepEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const name of BUILD_OVERRIDES) {
+    delete env[name];
+  }
+  return env;
+}
+
 // A step in the clone, its output shown, refused when it fails.
 async function step(name: string, command: string, args: readonly string[], cwd: string): Promise<void> {
   print(`deploy: ${name}`);
-  const outcome = await run(name, command, args, { cwd, env: process.env, output: "show", timeoutMs: stepMs });
+  const outcome = await run(name, command, args, { cwd, env: stepEnv(), output: "show", timeoutMs: stepMs });
   if (outcome.timedOut) {
     throw new Refusal(`${name} did not finish within ${Math.round(stepMs / 1000)} s and was stopped`);
   }
@@ -492,6 +503,24 @@ async function gitOutput(cwd: string, args: readonly string[]): Promise<string> 
     throw new Refusal(`git ${args[0] ?? ""} failed (exit ${outcome.code ?? "by a signal"})`);
   }
   return outcome.stdout.trim();
+}
+
+// The clone as the release check checked it: HEAD still sha, and its tracked files as sha has them (none changed,
+// added to the index or removed).
+async function treeCheck(clone: string, sha: string, when: string): Promise<void> {
+  const head = await gitOutput(clone, ["rev-parse", "--verify", "HEAD"]);
+  const diff = await run("git diff", "git", ["diff", "--quiet", "--no-ext-diff", "--no-textconv", sha, "--"], {
+    cwd: clone,
+    env: process.env,
+    output: "keep",
+    timeoutMs: stepMs,
+  });
+  if (head !== sha || diff.code === 1) {
+    throw new Refusal(`the clone's tracked files are no longer ${sha}'s ${when}: something in the clone changed them`);
+  }
+  if (!succeeded(diff)) {
+    throw new Refusal(`git diff failed (exit ${diff.code ?? "by a signal"})`);
+  }
 }
 
 // None of the deployment's values in the clone's tracked files: each searched as a fixed string, ignoring case, read
@@ -761,16 +790,32 @@ async function release(tag: string, flags: Flags): Promise<number> {
   const url = await gitOutput(process.cwd(), ["config", "--get", "--end-of-options", "remote.origin.url"]);
   const clone = await mkdtemp(join(tmpdir(), `prq-deploy-${tag}-`));
   print(`clone: ${clone} (kept)`);
+  // No hook runs in the clone: neither the host's (core.hooksPath) nor a template's.
   await step(
     `git clone of ${tag}`,
     "git",
-    ["-c", "advice.detachedHead=false", "clone", "--branch", tag, "--", url, clone],
+    [
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "advice.detachedHead=false",
+      "clone",
+      "--template=",
+      "--branch",
+      tag,
+      "--",
+      url,
+      clone,
+    ],
     process.cwd(),
   );
   await step("the release check", process.execPath, ["--no-warnings", RELEASE_CHECK, tag], clone);
+  // The commit the release check checked.
+  const sha = await gitOutput(clone, ["rev-parse", "--verify", "HEAD"]);
   await step("mise trust", "mise", ["trust"], clone);
   await step("mise install", "mise", ["install"], clone);
   await step("pnpm install", "mise", ["exec", "--", "pnpm", "install", "--frozen-lockfile"], clone);
+  await treeCheck(clone, sha, "before the build");
   await step("the web UI's build", "mise", ["exec", "--", "pnpm", "--dir", "packages/server", "run", "build"], clone);
   await publicationCheck(clone, {
     PRQ_HOST: host,
@@ -779,7 +824,6 @@ async function release(tag: string, flags: Flags): Promise<number> {
     ACCESS_AUD: aud,
   });
   configCheck(clone);
-  const sha = await gitOutput(clone, ["rev-parse", "--verify", "HEAD"]);
 
   const dir = join(root, `${stamp()}-${tag}`);
   await mkdir(dir, { mode: 0o700 });
@@ -807,6 +851,13 @@ async function release(tag: string, flags: Flags): Promise<number> {
     record.data.outcome = outcome;
     await record.save();
     throw new Refusal(...lines, `record: ${dir}`);
+  };
+  // A refusal recorded as the outcome.
+  const refused = async (error: unknown): Promise<never> => {
+    if (error instanceof Refusal) {
+      await stop(`refused: ${error.lines.join("; ")}`, ...error.lines);
+    }
+    throw error;
   };
 
   const before = await readState(accountId);
@@ -854,12 +905,8 @@ async function release(tag: string, flags: Flags): Promise<number> {
   // Immediately before the upload. Nothing is served at the hostname until the first release's deploy.
   record.data.idle = bootstrapped
     ? "skipped: the live Worker is the bootstrap's (no binding but secrets), which serves nothing at the hostname"
-    : await idleCheck(host, flags.ignoreRunning).catch(async (error: unknown) => {
-        if (error instanceof Refusal) {
-          await stop(`refused: ${error.lines.join("; ")}`, ...error.lines);
-        }
-        throw error;
-      });
+    : await idleCheck(host, flags.ignoreRunning).catch(refused);
+  await treeCheck(clone, sha, "before the upload").catch(refused);
   record.data.outcome = "uploading";
   await record.save();
 
