@@ -945,17 +945,23 @@ async function release(tag: string, flags: Flags): Promise<number> {
     },
   );
   onInterrupt(null);
+  // Saved before what is live is read: a signal during that read leaves the upload's result recorded.
   record.data.upload = {
     exit: uploaded.code,
     signal: uploaded.signal,
     timedOut: uploaded.timedOut,
     versionId: await deployedVersion(output),
   };
-  record.data.after = await readState(accountId, before.application?.id ?? null);
-  if (!succeeded(uploaded)) {
+  if (succeeded(uploaded)) {
+    record.data.outcome = "deployed";
+  } else {
     record.data.outcome = uploaded.timedOut
       ? `the upload did not finish within ${Math.round(uploadMs / 1000)} s and was stopped`
       : `the upload failed (exit ${uploaded.code ?? uploaded.signal ?? "unknown"})`;
+  }
+  await record.save();
+  record.data.after = await readState(accountId, before.application?.id ?? null);
+  if (!succeeded(uploaded)) {
     await record.save();
     printError(`deploy: ${record.data.outcome}`);
     printError(`deploy: live now: ${versionsLine(record.data.after.deployment?.versions)}`);
@@ -963,14 +969,15 @@ async function release(tag: string, flags: Flags): Promise<number> {
     printError(`deploy: record: ${dir} (docs/operations.md, Recovery)`);
     return uploaded.code !== null && uploaded.code !== 0 ? uploaded.code : 1;
   }
-  record.data.outcome = "deployed";
   record.data.application = classify(before.application, record.data.after.application, flags.keepImage);
   await record.save();
   return readBack(record);
 }
 
 // --read-back: the record's account and application read again, and the read-back it lacked. A record whose upload
-// stopped is read back only when its version is live alone; otherwise what is live is recorded for the recovery.
+// stopped is read back only when its version is live alone; otherwise what is live is recorded for the recovery. A
+// record that reached the upload without its result (this process ended there with no chance to record it) takes the
+// version from wrangler's output file, which wrangler writes once its deploy is done.
 async function readBackAgain(path: string): Promise<number> {
   const info = await lstat(path).catch(() => null);
   const file = info?.isDirectory() === true ? join(path, "record.json") : path;
@@ -989,8 +996,18 @@ async function readBackAgain(path: string): Promise<number> {
     throw new Refusal(`${file} is not a deploy's record`);
   }
   const record = new Saved(join(file, ".."), file, parsed.output);
-  const { upload, accountId, before, flags, tag } = record.data;
+  const { accountId, before, flags, tag } = record.data;
   await checkConfigAccount(accountId);
+  if (record.data.upload === null && record.data.outcome === "uploading") {
+    record.data.upload = {
+      exit: null,
+      signal: null,
+      timedOut: false,
+      versionId: await deployedVersion(join(record.dir, "wrangler-output.jsonl")),
+    };
+    record.data.outcome = "the deploy ended during the upload without recording its result";
+  }
+  const { upload } = record.data;
   if (upload === null) {
     throw new Refusal(`the record's deploy stopped before its upload (${record.data.outcome}): nothing to read back`);
   }

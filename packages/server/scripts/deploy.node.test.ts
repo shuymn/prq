@@ -32,7 +32,8 @@ const WORKER_CONFIG = '{ "name": "prq", "workers_dev": false, "preview_urls": fa
 
 // The stand-in for wrangler. Its state (FAKE_WRANGLER_STATE): the live versions, each version's tag, the container
 // applications, how many reads of a changed application still find its rollout active, whether a deploy changes the
-// image, and a behavior per call ("fail", "hang", or for deploy "fail-after-upload"). Each call appends its arguments,
+// image, a behavior per call ("fail", "hang", or for deploy "fail-after-upload" and "hang-after-upload"), and the
+// behaviors a deploy sets once it has uploaded (afterDeploy). Each call appends its arguments,
 // working directory, parent and environment (and a deploy its config file) to FAKE_WRANGLER_LOG; a hanging call writes
 // its pid and its child's to FAKE_WRANGLER_PIDS.
 const FAKE_WRANGLER = `#!${process.execPath}
@@ -53,10 +54,13 @@ const state = JSON.parse(readFileSync(statePath, "utf8"));
 const save = () => writeFileSync(statePath, JSON.stringify(state));
 const behavior = state.behavior?.[call];
 const json = (value) => console.log(JSON.stringify(value, null, 2));
-if (behavior === "hang") {
+const hang = () => {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
   writeFileSync(process.env.FAKE_WRANGLER_PIDS, JSON.stringify([process.pid, child.pid]));
   setInterval(() => {}, 1000);
+};
+if (behavior === "hang") {
+  hang();
 } else if (behavior === "fail") {
   console.error("✘ [ERROR] A request to the Cloudflare API failed. [code: 10000]");
   process.exit(1);
@@ -104,6 +108,7 @@ if (behavior === "hang") {
       state.rolloutReads = state.rolloutAfterDeploy;
     }
   }
+  state.behavior = { ...state.behavior, ...state.afterDeploy };
   save();
   console.log("Uploaded prq");
   if (behavior === "fail-after-upload") {
@@ -112,6 +117,9 @@ if (behavior === "hang") {
   }
   appendFileSync(process.env.WRANGLER_OUTPUT_FILE_PATH, JSON.stringify({ type: "deploy", version: 1, worker_name: "prq", version_id: id }) + "\\n");
   console.log("Current Version ID: " + id);
+  if (behavior === "hang-after-upload") {
+    hang();
+  }
 }
 `;
 
@@ -176,6 +184,7 @@ type State = {
   rolloutReads: number;
   rolloutAfterDeploy: number;
   behavior: Record<string, string>;
+  afterDeploy: Record<string, string>;
 };
 type Result = { code: number | null; signal: NodeJS.Signals | null; output: string };
 
@@ -331,9 +340,16 @@ async function saveState(state: Partial<State>): Promise<void> {
     rolloutReads: 0,
     rolloutAfterDeploy: 2,
     behavior: {},
+    afterDeploy: {},
     ...state,
   };
   await writeFile(join(root, "wrangler-state.json"), JSON.stringify(full));
+}
+
+// The stand-in's state as it is now, changed.
+async function changeState(change: Partial<State>): Promise<void> {
+  const path = join(root, "wrangler-state.json");
+  await writeFile(path, JSON.stringify({ ...JSON.parse(await readFile(path, "utf8")), ...change }));
 }
 
 // A release live, with its container application, as after an earlier deploy.
@@ -1029,11 +1045,7 @@ describe("deploy <tag>", () => {
     const { dir, data } = await onlyRecord();
     expect(data.readBack).toMatchObject({ state: "incomplete", reason: "the owner stopped the rollout's read-back" });
 
-    const state = v.parse(
-      v.looseObject({ rolloutReads: v.number() }),
-      JSON.parse(await readFile(env["FAKE_WRANGLER_STATE"] ?? "", "utf8")),
-    );
-    await writeFile(env["FAKE_WRANGLER_STATE"] ?? "", JSON.stringify({ ...state, rolloutReads: 1 }));
+    await changeState({ rolloutReads: 1 });
     const again = await deploy(["--read-back", dir], { terminal: false });
     expect(again.code).toBe(0);
     expect((await record(dir)).readBack).toMatchObject({ state: "complete" });
@@ -1065,6 +1077,51 @@ describe("deploy <tag>", () => {
       expect(await ended(pid)).toBe(true);
     }
     expect((await onlyRecord()).data.outcome).toBe("stopped by SIGTERM during the upload; what is live is unread");
+  });
+
+  it("records the upload's result before it reads what is live, which --read-back reads after a signal there", async () => {
+    await released({ afterDeploy: { "deployments status": "hang" } });
+    const { result } = start([TAG], { answers: ["y"] });
+
+    await hangingPids();
+    const read = (await wranglerCalls()).findLast((call) => call.call === "deployments status");
+    process.kill(read?.ppid ?? 0, "SIGTERM");
+    await result;
+    const { dir, data } = await onlyRecord();
+    expect(data).toMatchObject({
+      outcome: "deployed",
+      upload: { exit: 0, versionId: "00000010-0000-4000-8000-000000000000" },
+      after: null,
+    });
+
+    await changeState({ behavior: {} });
+    const again = await deploy(["--read-back", dir], { terminal: false });
+    expect(again.code).toBe(0);
+    expect(await record(dir)).toMatchObject({ application: "unchanged", readBack: { state: "complete" } });
+  });
+
+  it("reads back a record that ended during the upload without its result, from wrangler's output file", async () => {
+    await released({ behavior: { deploy: "hang-after-upload" } });
+    const { result } = start([TAG], { answers: ["y"] });
+
+    const pids = await hangingPids();
+    const mise = (await toolCalls()).findLast((call) => call.tool === "mise");
+    process.kill(mise?.ppid ?? 0, "SIGKILL");
+    for (const pid of pids) {
+      process.kill(pid, "SIGKILL");
+    }
+    await result;
+    const { dir, data } = await onlyRecord();
+    expect(data).toMatchObject({ outcome: "uploading", upload: null });
+
+    await changeState({ behavior: {} });
+    const again = await deploy(["--read-back", dir], { terminal: false });
+    expect(again.code).toBe(0);
+    expect(await record(dir)).toMatchObject({
+      outcome: "deployed (read back after the upload stopped)",
+      upload: { exit: null, versionId: "00000010-0000-4000-8000-000000000000" },
+      readBack: { state: "complete" },
+    });
   });
 
   it("prints its usage for anything else", async () => {
