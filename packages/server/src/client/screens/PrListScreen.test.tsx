@@ -76,6 +76,12 @@ const controls = () => [
   page.getByRole("radio", { name: "All" }),
 ];
 const firstRepository = () => page.getByRole("table").getByRole("row").nth(1).getByRole("cell").first();
+const menuItems = () =>
+  page
+    .getByRole("menuitemradio")
+    .elements()
+    .map((item) => item.textContent);
+const repoTrigger = () => page.getByRole("button", { name: "All repositories" });
 
 // Each test starts from the default filter, at the top of the page.
 beforeEach(() => {
@@ -191,23 +197,34 @@ describe("the PR list's empty states", () => {
 });
 
 describe("the PR list's repositories", () => {
-  test("rows and the menu leave the owner out while there is one, and show it with more", async () => {
+  test("rows and the open menu leave the owner out while there is one, and show it with more", async () => {
     const { fetch, rerender } = await list(hubOf(view({ owners: 1 })));
     (await fetch.request(0)).respond({ rows: ROWS, nextCursor: null });
     await expect.poll(() => firstRepository().element().textContent).toBe("prq");
 
-    await page.getByRole("button", { name: "All repositories" }).click();
+    await repoTrigger().click();
     (await fetch.request(1)).respond({ rows: [{ fullName: "shuymn/kopje" }], nextCursor: null });
     await expect.element(page.getByRole("menuitemradio", { name: "kopje" })).toBeVisible();
 
     await rerender(hubOf(view({ owners: 2 })));
     await expect.poll(() => firstRepository().element().textContent).toBe("shuymn/prq");
+    await expect.poll(menuItems).toEqual(["All repositories", "shuymn/kopje"]);
+  });
+
+  test("a read of the repositories a second owner overtook names them with their owners", async () => {
+    const { fetch, rerender } = await list(hubOf(view({ owners: 1 })));
+    (await fetch.request(0)).respond({ rows: ROWS, nextCursor: null });
+    await repoTrigger().click();
+    const read = await fetch.request(1);
+    await rerender(hubOf(view({ owners: 2 })));
+    read.respond({ rows: [{ fullName: "one/app" }, { fullName: "two/app" }], nextCursor: null });
+    await expect.poll(menuItems).toEqual(["All repositories", "one/app", "two/app"]);
   });
 
   test("opening the menu reads every page of repositories", async () => {
     const { fetch } = await list(hubOf(view({ owners: 2 })));
     (await fetch.request(0)).respond({ rows: ROWS, nextCursor: null });
-    await page.getByRole("button", { name: "All repositories" }).click();
+    await repoTrigger().click();
     const first = await fetch.request(1);
     expect(path(first)).toBe("/api/repos");
     first.respond({ rows: [{ fullName: "nanaism/yomiyasu" }], nextCursor: "nanaism/yomiyasu" });
@@ -226,7 +243,7 @@ describe("the PR list's repositories", () => {
   test("a failed read shows the load failure in the menu, and Try again reads again", async () => {
     const { fetch } = await list(hubOf(view()));
     (await fetch.request(0)).respond({ rows: ROWS, nextCursor: null });
-    await page.getByRole("button", { name: "All repositories" }).click();
+    await repoTrigger().click();
     (await fetch.request(1)).fail();
     await expect.element(page.getByText("Couldn't load repositories")).toBeVisible();
     expect(page.getByRole("menuitemradio").elements()).toEqual([]);
@@ -239,7 +256,7 @@ describe("the PR list's repositories", () => {
   test("an empty read leaves All repositories alone", async () => {
     const { fetch } = await list(hubOf(view()));
     (await fetch.request(0)).respond({ rows: ROWS, nextCursor: null });
-    await page.getByRole("button", { name: "All repositories" }).click();
+    await repoTrigger().click();
     (await fetch.request(1)).respond({ rows: [], nextCursor: null });
     await expect.element(page.getByRole("menuitemradio", { name: "All repositories" })).toBeVisible();
     expect(page.getByRole("menuitemradio").elements()).toHaveLength(1);

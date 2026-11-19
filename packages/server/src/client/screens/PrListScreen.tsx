@@ -4,7 +4,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import * as v from "valibot";
 
-import { ALL_REPOSITORIES } from "../components/RepoFilter.tsx";
+import { ALL_REPOSITORIES, type RepoItems } from "../components/RepoFilter.tsx";
 import type { Hub } from "../hub.ts";
 import { type ListFilter, useLedger } from "../ledger.ts";
 import { useFetch } from "../reads.ts";
@@ -63,8 +63,14 @@ export function PrListScreen({ hub, notice }: { hub: Hub; notice?: ReactNode }) 
 
   const [snapshot, reader] = useLedger(fetcher, filter, hub);
   const owners = hub.view?.owners;
-  const label = useCallback((fullName: string) => repositoryName(fullName, owners), [owners]);
-  const [repoItems, readRepos] = useRepos(fetcher, label);
+  const [repos, readRepos] = useRepos(fetcher);
+  const repoItems: RepoItems =
+    repos.state === "ready"
+      ? {
+          state: "ready",
+          repos: repos.fullNames.map((fullName) => ({ value: fullName, label: repositoryName(fullName, owners) })),
+        }
+      : repos;
   const refreshFailed = snapshot.failure === "refresh";
   const loadMore = useCallback(() => reader.loadMore(), [reader]);
 
