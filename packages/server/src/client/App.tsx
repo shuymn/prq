@@ -3,7 +3,7 @@ import { lazy, Suspense, useEffect, useRef } from "react";
 import { Frame } from "./frame.tsx";
 import { useHub } from "./hub.ts";
 import { useLayout } from "./layout.ts";
-import { BuildNotice, ChunkBoundary, chunkFailed, useAssetFailed } from "./notices.tsx";
+import { BuildNotice, ChunkBoundary, chunkFailed, ShowFailed, useAssetFailed } from "./notices.tsx";
 import { type Route, useRoute } from "./routes.ts";
 import { NotFound } from "./screens/NotFound.tsx";
 import { PrDetailScreen } from "./screens/PrDetailScreen.tsx";
@@ -73,7 +73,7 @@ export function App() {
         <PrDetailScreen key={key} prRef={route.ref} hub={hub} layout={layout} notice={notice} />
       )}
       {route.name === "settings" && (
-        <ChunkBoundary key={key} onError={failAsset} fallback={notice()}>
+        <ChunkBoundary key={key} onError={failAsset} fallback={notice()} failed={<ShowFailed unsent={unsent} />}>
           <Suspense fallback={notice()}>
             <SettingsScreen notice={notice()} />
           </Suspense>

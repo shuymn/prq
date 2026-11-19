@@ -356,6 +356,29 @@ describe("the settings page", () => {
     expect(await page.locator('[data-component="Notice"]').count()).toBe(1);
     expect(browser.recorded().consoleErrors.filter((message) => chunk.test(message)).length).toBeGreaterThan(0);
   });
+
+  test("a save answered with a time it cannot show shows Couldn't show settings in its place; the header and the other pages keep working (LOW 2)", async () => {
+    const page = browser.page();
+    await page.route("**/api/prompts/analysis", (route) =>
+      route.fulfill({ json: { text: "Write in Japanese.", savedAt: 8_640_000_000_000_001 } }),
+    );
+    browser.expectConsoleError((message) => message.includes("RangeError"));
+    await page.goto(door("/"));
+    await pool(page, "Cloud only").waitFor();
+    await page.getByRole("link", { name: "Settings" }).click();
+    await page.getByRole("textbox", { name: "Analysis prompt" }).fill("Write in Japanese.");
+    await page.getByRole("form", { name: "Analysis prompt" }).getByRole("button", { name: "Save prompt" }).click();
+    await page.getByText("Couldn't show settings").waitFor();
+    expect(await page.getByText("Couldn't load part of this page.").count()).toBe(0);
+
+    await pool(page, "Cloud only").click();
+    await page.locator('[data-component="PoolPopover"]').waitFor();
+    await page.keyboard.press("Escape");
+    await page.goBack();
+    await page.getByRole("heading", { level: 1, name: "Pull requests" }).waitFor();
+    await page.getByRole("link", { name: "Settings" }).click();
+    await page.getByText("Couldn't show settings").waitFor();
+  });
 });
 
 describe("paths that are no page", () => {

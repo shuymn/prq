@@ -1,13 +1,14 @@
 // Which notice about the build the page shows (plan P2.8): the version notice whenever the server's version differs,
-// the asset notice only without it, and only for a part of the page that failed to load.
+// the asset notice only without it, and only for a part of the page that failed to load; a part that failed as it
+// rendered shows its own notice in its place.
 
-import { Component, lazy, type ReactNode, Suspense } from "react";
+import { lazy, Suspense } from "react";
 import { describe, expect, test } from "vitest";
 import { render, renderHook } from "vitest-browser-react";
 import { page } from "vitest/browser";
 
 import { PromptEditor } from "./components/PromptEditor.tsx";
-import { BuildNotice, ChunkBoundary, chunkFailed, useAssetFailed } from "./notices.tsx";
+import { BuildNotice, ChunkBoundary, chunkFailed, ShowFailed, useAssetFailed } from "./notices.tsx";
 
 const VERSION_TITLE = "A new version is available";
 const ASSET_TITLE = "Couldn't load part of this page.";
@@ -44,19 +45,6 @@ describe("the build's notice", () => {
   });
 });
 
-// What an error past the chunk's boundary reaches: the page's own handling, here a line naming it.
-class Outer extends Component<{ children: ReactNode }, { error: string | null }> {
-  override state: { error: string | null } = { error: null };
-
-  static getDerivedStateFromError(error: unknown): { error: string } {
-    return { error: error instanceof Error ? error.name : String(error) };
-  }
-
-  override render(): ReactNode {
-    return this.state.error === null ? this.props.children : <p>Past the boundary: {this.state.error}</p>;
-  }
-}
-
 describe("a lazily loaded part's boundary", () => {
   test("a part whose module could not load shows the fallback and reports a failed asset", async () => {
     let reported = 0;
@@ -64,7 +52,7 @@ describe("a lazily loaded part's boundary", () => {
       Promise.reject(new TypeError("Failed to fetch dynamically imported module")).catch(chunkFailed),
     );
     await render(
-      <ChunkBoundary onError={() => (reported += 1)} fallback={<p>The fallback</p>}>
+      <ChunkBoundary onError={() => (reported += 1)} fallback={<p>The fallback</p>} failed={<ShowFailed unsent />}>
         <Suspense fallback={null}>
           <Part />
         </Suspense>
@@ -74,11 +62,12 @@ describe("a lazily loaded part's boundary", () => {
     expect(reported).toBe(1);
   });
 
-  test("an error as a loaded part renders (a date past the clock's range) reports no failed asset and goes past it (LOW 2)", async () => {
+  test("an error as a loaded part renders (a date past the clock's range) shows its own notice there, reports no failed asset, and leaves the rest of the page (LOW 2)", async () => {
     let reported = 0;
     await render(
-      <Outer>
-        <ChunkBoundary onError={() => (reported += 1)} fallback={<p>The fallback</p>}>
+      <>
+        <p>The header</p>
+        <ChunkBoundary onError={() => (reported += 1)} fallback={<p>The fallback</p>} failed={<ShowFailed unsent />}>
           <PromptEditor
             title="Analysis prompt"
             purpose=""
@@ -88,9 +77,14 @@ describe("a lazily loaded part's boundary", () => {
             savedAt={8_640_000_000_000_001}
           />
         </ChunkBoundary>
-      </Outer>,
+      </>,
     );
-    await expect.element(page.getByText("Past the boundary: RangeError")).toBeVisible();
+    await expect.element(page.getByText("Couldn't show settings")).toBeVisible();
+    await expect
+      .element(page.getByText("Reload the page to try again. Reloading loses your unsent question."))
+      .toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Reload" })).toBeVisible();
+    await expect.element(page.getByText("The header")).toBeVisible();
     expect([reported, page.getByText("The fallback").elements()]).toEqual([0, []]);
   });
 });
