@@ -293,8 +293,9 @@ questions with their defaults.
   4. reads what is live, and refuses when the Worker has no live version (the bootstrap comes first), or when its
      workers.dev address or preview URLs are on or cannot be read (finish the bootstrap first). wrangler has no command
      that reads these two, so the deploy reads them as wrangler's deploy does, from Cloudflare's API with wrangler's
-     own login (`wrangler auth token --json`), and the container applications the same way; the credentials stay in
-     its process, in no argument, file or line printed;
+     own login (`wrangler auth token --json`, asked again for the reads after the upload, since a login can expire
+     during a long deploy), and the container applications the same way; the credentials stay in its process, in no
+     argument, file or line printed;
   5. prints the account, the live versions, the hostname with those two settings, the tag and its commit, the container
      application and what the deploy does to it, and asks `Deploy vX.Y.Z to <host>? [y/N]`;
   6. checks that no cloud work waits or runs: it reads every page of the ledger at `https://<host>/api/ledger` with the

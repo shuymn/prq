@@ -30,17 +30,19 @@ const AUD = "sentinel-aud-5e3c0b9a7d1f4e2a";
 const TOKEN = { id: "sentinel-client-id.access", secret: "sentinel-client-secret-77aa" };
 // wrangler's credentials as the stand-in's `auth token --json` gives them: a token, or a global API key and its email.
 const API_TOKEN = "sentinel-api-token-6b2f9e";
+// The token once wrangler has refreshed its login, which an `auth token` behavior of "refreshed" gives.
+const API_TOKEN_REFRESHED = "sentinel-api-token-refreshed-3a7c51";
 const API_KEY = { key: "sentinel-api-key-0d4c81", email: "owner@sentinel-mail.example" };
 // Whether a stand-in's environment holds any of them, as each stand-in records it.
-const CREDENTIAL_IN_ENV = `Object.values(process.env).some((value) => [${JSON.stringify(API_TOKEN)}, ${JSON.stringify(API_KEY.key)}].some((secret) => value?.includes(secret)))`;
+const CREDENTIAL_IN_ENV = `Object.values(process.env).some((value) => [${JSON.stringify(API_TOKEN)}, ${JSON.stringify(API_TOKEN_REFRESHED)}, ${JSON.stringify(API_KEY.key)}].some((secret) => value?.includes(secret)))`;
 const APPLICATION = "prq-workspace";
 // The tag's Worker configuration: what the deploy checks of it.
 const WORKER_CONFIG = '{ "name": "prq", "workers_dev": false, "preview_urls": false }\n';
 
-// The stand-in for wrangler. Its state (FAKE_WRANGLER_STATE): the live versions, each version's tag, the Worker's
-// workers.dev and preview URLs (subdomain, which a deploy sets from its configuration once it is done, or to
-// subdomainAfterDeploy), the credentials
-// `auth token` gives (auth), the container applications, how many reads of a changed application still find its rollout active, whether a deploy changes the
+// The stand-in for wrangler. Its state (FAKE_WRANGLER_STATE): the live versions, each version's tag, how a version's
+// view lists its bindings (inventory), the Worker's workers.dev and preview URLs (subdomain, which a deploy sets from
+// its configuration once it is done, or to subdomainAfterDeploy), the credentials `auth token` gives (auth; its
+// behavior "refreshed" gives the refreshed token), the container applications, how many reads of a changed application still find its rollout active, whether a deploy changes the
 // image, the pages of instances it lists (by default an instance at the application's version once its rollout is
 // done, then an inactive Durable Object), a behavior per call ("fail", "hang", or for deploy "fail-after-upload" and
 // "hang-after-upload"), and the behaviors a deploy sets once it has uploaded (afterDeploy). Each call appends its arguments,
@@ -76,7 +78,7 @@ if (behavior === "hang") {
   console.error("✘ [ERROR] A request to the Cloudflare API failed. [code: 10000]");
   process.exit(1);
 } else if (call === "auth token") {
-  json(state.auth === "api_key" ? { type: "api_key", ...${JSON.stringify(API_KEY)} } : { type: "oauth", token: ${JSON.stringify(API_TOKEN)} });
+  json(state.auth === "api_key" ? { type: "api_key", ...${JSON.stringify(API_KEY)} } : { type: "oauth", token: behavior === "refreshed" ? ${JSON.stringify(API_TOKEN_REFRESHED)} : ${JSON.stringify(API_TOKEN)} });
 } else if (call === "whoami") {
   json({ loggedIn: true, accounts: [{ id: process.env.CLOUDFLARE_ACCOUNT_ID, name: "Synthetic Account" }] });
 } else if (call === "deployments status") {
@@ -251,17 +253,27 @@ const APP = {
 };
 
 // The stand-in for Cloudflare's API, from the stand-in for wrangler's state: the Worker's settings (none without a
-// live Worker) and every container application. A behavior "api workers" or "api applications" of "fail" answers 500.
+// live Worker) and every container application, to the credentials `auth token` gives now alone (others answer 401,
+// as an expired login does). A behavior "api workers" or "api applications" of "fail" answers 500.
 const ApiState = v.looseObject({
+  auth: v.picklist(["oauth", "api_key"]),
   deployment: v.nullable(v.array(v.string())),
   applications: v.array(v.unknown()),
   subdomain: v.unknown(),
   behavior: v.record(v.string(), v.string()),
 });
 
-function cloudflare(url: string): [number, unknown] {
+function cloudflare(url: string, headers: IncomingHttpHeaders): [number, unknown] {
   const state = v.parse(ApiState, JSON.parse(readFileSync(join(root, "wrangler-state.json"), "utf8")));
   const failed = (name: string) => state.behavior[name] === "fail";
+  const token = state.behavior["auth token"] === "refreshed" ? API_TOKEN_REFRESHED : API_TOKEN;
+  const signedIn =
+    state.auth === "api_key"
+      ? headers["x-auth-key"] === API_KEY.key && headers["x-auth-email"] === API_KEY.email
+      : headers.authorization === `Bearer ${token}`;
+  if (!signedIn) {
+    return [401, { success: false, errors: [{ code: 10000, message: "Authentication error" }] }];
+  }
   const prefix = `/client/v4/accounts/${ACCOUNT}`;
   if (url === `${prefix}/workers/workers/prq`) {
     if (failed("api workers")) {
@@ -320,7 +332,7 @@ beforeAll(async () => {
   server = createServer((request, response) => {
     if (request.url?.startsWith("/client/v4/") === true) {
       apiRequests.push({ method: request.method ?? "", url: request.url, headers: request.headers });
-      const [status, body] = cloudflare(request.url);
+      const [status, body] = cloudflare(request.url, request.headers);
       response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
       return;
     }
@@ -477,7 +489,16 @@ function start(args: string[], { terminal = true, answers = [] as string[] } = {
     child.on("close", (code, signal) => resolve({ code, signal, output: output.replaceAll("\r\n", "\n") }));
   }).then((outcome) => {
     child.stdin.destroy();
-    for (const secret of [TEAM, "sentinel-team", AUD, TOKEN.secret, API_TOKEN, API_KEY.key, API_KEY.email]) {
+    for (const secret of [
+      TEAM,
+      "sentinel-team",
+      AUD,
+      TOKEN.secret,
+      API_TOKEN,
+      API_TOKEN_REFRESHED,
+      API_KEY.key,
+      API_KEY.email,
+    ]) {
       expect(outcome.output).not.toContain(secret);
     }
     return outcome;
@@ -973,6 +994,21 @@ describe("deploy <tag>", () => {
     expect(result.output).toContain(`deploy: ${line}\n`);
     expect(await deployCalls()).toEqual([]);
     expect((await onlyRecord()).data.outcome).toBe("refused: the state before could not be read");
+  });
+
+  it("reads what is live after the upload with wrangler's login asked again, as wrangler refreshed it", async () => {
+    // The token read before the upload has expired by its end: the API takes the refreshed one alone.
+    await released({ afterDeploy: { "auth token": "refreshed" } });
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(0);
+    expect(apiRequests.map(({ url, headers }) => `${url} ${headers.authorization}`)).toEqual([
+      `/client/v4/accounts/${ACCOUNT}/workers/workers/prq Bearer ${API_TOKEN}`,
+      `/client/v4/accounts/${ACCOUNT}/containers/applications Bearer ${API_TOKEN}`,
+      `/client/v4/accounts/${ACCOUNT}/workers/workers/prq Bearer ${API_TOKEN_REFRESHED}`,
+    ]);
+    expect((await onlyRecord()).data.readBack).toMatchObject({ state: "complete" });
   });
 
   it("deploys nothing when the owner does not confirm", async () => {

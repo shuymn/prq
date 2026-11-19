@@ -368,7 +368,8 @@ async function liveDeployment(accountId: string): Promise<Deployment | null> {
 }
 
 // The headers of a read with wrangler's login: its credentials, from `wrangler auth token --json`, held in this
-// process alone (in no argument, other process's environment, file or line printed), read once.
+// process alone (in no argument, other process's environment, file or line printed), read once before the upload and
+// once after it.
 let credentials: Promise<Record<string, string>> | null = null;
 
 function authHeaders(accountId: string): Promise<Record<string, string>> {
@@ -1170,6 +1171,8 @@ async function release(tag: string, flags: Flags): Promise<number> {
       : `the upload failed (exit ${uploaded.code ?? uploaded.signal ?? "unknown"})`;
   }
   await record.save();
+  // The login read before the upload can have expired since (wrangler refreshes it when asked again).
+  credentials = null;
   record.data.after = await readState(accountId, before.application?.id ?? null);
   if (!succeeded(uploaded)) {
     await record.save();
