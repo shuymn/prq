@@ -170,6 +170,27 @@ describe("the prompts", () => {
     await expect.element(editor("Analysis prompt").getByText("Saved at 10:02")).toBeVisible();
     expect(draftOf("Analysis prompt")).toBe("A2");
   });
+
+  test("a save whose answer was lost leaves the later draft unsaved, though it is the text saved before: the read on coming back leaves it (M1)", async () => {
+    const { fetch, screen, next } = await settings(instructions([REVIEW], "A0"));
+    await userEvent.fill(field("Analysis prompt").element(), "A1");
+    await userEvent.click(editor("Analysis prompt").getByRole("button", { name: "Save prompt" }));
+    const save = await next("PUT", "/api/prompts/analysis");
+    await userEvent.fill(field("Analysis prompt").element(), "A0");
+    save.fail();
+    await expect
+      .element(
+        editor("Analysis prompt").getByText("Save failed: the server did not respond. Your text is kept; save again."),
+      )
+      .toBeVisible();
+    await screen.unmount();
+
+    await openPage(fetch);
+    await expect.element(field("Analysis prompt")).toHaveValue("A0");
+    (await next("GET", "/api/instructions")).respond(instructions([REVIEW, YOMIYASU], "A1"));
+    await until(() => document.querySelectorAll("[data-component=SkillRow]").length === 2);
+    expect(draftOf("Analysis prompt")).toBe("A0");
+  });
 });
 
 describe("one request per operation", () => {

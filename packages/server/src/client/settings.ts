@@ -30,9 +30,11 @@ const PREVIEW_ANSWER_MS = ROUTE_CALL_MS + 30_000 + MARGIN_MS;
 const CONFIRM_ANSWER_MS = 3 * ROUTE_CALL_MS + 60_000 + MARGIN_MS;
 
 type Editor = {
-  // The host's text, and the text it was read or saved as: it is dirty while they differ.
+  // The host's text, and the text it was read or saved as: it is dirty while they differ. A save that failed leaves
+  // what the server holds unknown (it may have stored the text and lost the answer): the base is null, and the editor
+  // stays dirty until a save succeeds.
   draft: string;
-  base: string;
+  base: string | null;
   status: "idle" | "saving" | "saved" | "failed";
   savedAt: number | null;
 };
@@ -283,7 +285,7 @@ export class SettingsStore {
       this.#editor(kind, { base: text, status: "saved", savedAt: saved.savedAt });
       announce(`${PROMPT_TITLES[kind]} saved.`, "polite");
     } else {
-      this.#editor(kind, { status: "failed" });
+      this.#editor(kind, { base: null, status: "failed" });
       announce(`${PROMPT_TITLES[kind]}: save failed.`, "assertive");
     }
   };
