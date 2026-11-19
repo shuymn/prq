@@ -221,7 +221,7 @@ describe("the PR list's repositories", () => {
     await expect.poll(menuItems).toEqual(["All repositories", "one/app", "two/app"]);
   });
 
-  test("a menu longer than the window stays in it and scrolls to its last repository, which can be chosen", async () => {
+  test("a menu longer than the window reaches its edge less gap.tight, scrolls under the wheel, and its last repository can be chosen, which closes it and returns focus to the trigger", async () => {
     const { fetch } = await list(hubOf(view({ owners: 1 })));
     (await fetch.request(0)).respond({ rows: ROWS, nextCursor: null });
     await repoTrigger().click();
@@ -229,13 +229,22 @@ describe("the PR list's repositories", () => {
     (await fetch.request(1)).respond({ rows: repositories, nextCursor: null });
     const last = page.getByRole("menuitemradio", { name: "repository-25" });
     await expect.element(last).toBeInTheDocument();
-    expect(document.querySelector('[data-component="RepoMenu"]')?.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-      innerHeight,
-    );
+    const menu = document.querySelector<HTMLElement>('[data-component="RepoMenu"]');
+    const gapTight = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--gap-tight"));
+    expect(menu?.getBoundingClientRect().bottom).toBeCloseTo(innerHeight - gapTight, 0);
+
+    expect(menu?.scrollTop).toBe(0);
+    await userEvent.wheel(page.getByRole("menuitemradio", { name: "repository-1", exact: true }), {
+      delta: { y: 200 },
+    });
+    await expect.poll(() => menu?.scrollTop).toBeGreaterThan(0);
 
     await last.click();
-    await expect.element(page.getByRole("button", { name: "repository-25" })).toBeVisible();
+    const trigger = page.getByRole("button", { name: "repository-25" });
+    await expect.element(trigger).toBeVisible();
     expect(path(await fetch.request(2))).toBe("/api/ledger?state=open&repo=shuymn%2Frepository-25");
+    expect(menu?.matches(":popover-open")).toBe(false);
+    await expect.element(trigger).toHaveFocus();
   });
 
   test("opening the menu reads every page of repositories", async () => {
