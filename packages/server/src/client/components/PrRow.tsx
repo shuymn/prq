@@ -1,22 +1,18 @@
 import "./PrRow.css";
-import type { Problem } from "@prq/protocol";
+import type { LatestEvent, Problem } from "@prq/protocol";
 import type { ComponentProps } from "react";
 
 import { Icon } from "./Icon.tsx";
-import { PR_STATE_ICONS, type PrState } from "./PrStateLabel.tsx";
+import { PR_STATE_ICONS, PR_STATE_LABELS, type PrState } from "./PrStateLabel.tsx";
 import { RelativeTime } from "./RelativeTime.tsx";
 import { Status } from "./Status.tsx";
 
-export type PrEvent = "summary" | "answer" | "push" | "question";
-
-const EVENTS: Record<PrEvent, string> = {
+const EVENTS: Record<LatestEvent["kind"], string> = {
   summary: "Summary",
   answer: "Answer",
   push: "Push received",
   question: "Question sent",
 };
-
-const STATE_NAMES: Record<PrState, string> = { open: "Open", merged: "Merged", closed: "Closed" };
 
 // A problem as the Status column shows it (design/components.md, PR list).
 const PROBLEMS: Record<Problem, ComponentProps<typeof Status>> = {
@@ -46,8 +42,7 @@ export function PrRow({
   repository,
   number,
   state,
-  event,
-  eventTime,
+  latestEvent,
   problem,
   href,
 }: {
@@ -55,8 +50,7 @@ export function PrRow({
   repository: string;
   number: number;
   state: PrState;
-  event: PrEvent | null;
-  eventTime: number | null;
+  latestEvent: LatestEvent | null;
   problem: Problem | null;
   href: string;
 }) {
@@ -67,7 +61,7 @@ export function PrRow({
       </td>
       <td className="pr-cell">
         <span className="state-icon" data-state={state}>
-          <Icon name={PR_STATE_ICONS[state]} label={STATE_NAMES[state]} />
+          <Icon name={PR_STATE_ICONS[state]} label={PR_STATE_LABELS[state]} />
         </span>
         <a className="title" href={href}>
           {title}
@@ -76,8 +70,12 @@ export function PrRow({
       </td>
       <td className="problem-cell">{problem !== null && <Status {...PROBLEMS[problem]} />}</td>
       <td className="event-cell">
-        {event !== null && <span className="event">{EVENTS[event]}</span>}
-        {eventTime !== null && <RelativeTime at={eventTime} />}
+        {latestEvent !== null && (
+          <>
+            <span className="event">{EVENTS[latestEvent.kind]}</span>
+            <RelativeTime at={latestEvent.at} />
+          </>
+        )}
       </td>
     </tr>
   );

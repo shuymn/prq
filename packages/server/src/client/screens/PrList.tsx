@@ -92,9 +92,8 @@ export function PrList({
   repoItems,
   onAttention,
   onState,
-  onRepoOpen,
+  onRepoRead,
   onRepo,
-  onRepoRetry,
   onRetry,
   onLoadMore,
 }: {
@@ -110,9 +109,9 @@ export function PrList({
   repoItems: RepoItems;
   onAttention?: (() => void) | undefined;
   onState?: ((state: "open" | "all") => void) | undefined;
-  onRepoOpen?: (() => void) | undefined;
+  // Reads the repositories, on each opening of the menu and on its Try again.
+  onRepoRead?: (() => void) | undefined;
   onRepo?: ((repo: string | null) => void) | undefined;
-  onRepoRetry?: (() => void) | undefined;
   onRetry?: (() => void) | undefined;
   onLoadMore?: (() => void) | undefined;
 }) {
@@ -134,14 +133,7 @@ export function PrList({
               onClick={onAttention}
             />
           )}
-          <RepoFilter
-            label={repoLabel}
-            selected={repo}
-            items={repoItems}
-            onOpen={onRepoOpen}
-            onSelect={onRepo}
-            onRetry={onRepoRetry}
-          />
+          <RepoFilter label={repoLabel} selected={repo} items={repoItems} onRead={onRepoRead} onSelect={onRepo} />
           <SegmentedControl
             label="State"
             first="Open"

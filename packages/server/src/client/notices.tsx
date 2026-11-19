@@ -20,26 +20,28 @@ export function useAssetFailed(): boolean {
 
 const reload = () => location.reload();
 
-export function BuildNotice({ serverVersion, assetFailed }: { serverVersion: string | null; assetFailed: boolean }) {
+// The notice for what is known, a version mismatch before a failed asset, or none.
+function buildNotice(serverVersion: string | null, assetFailed: boolean): { title: string; text: string } | null {
   if (serverVersion !== null && serverVersion !== __PRQ_VERSION__) {
-    return (
-      <Notice
-        tone="info"
-        title="A new version is available"
-        text="This tab still runs the previous version. Reload to update it."
-        actions={<Button variant="secondary" size="sm" label="Reload" onClick={reload} />}
-      />
-    );
+    return {
+      title: "A new version is available",
+      text: "This tab still runs the previous version. Reload to update it.",
+    };
   }
-  if (assetFailed) {
-    return (
-      <Notice
-        tone="info"
-        title="Couldn't load part of this page."
-        text="Try reloading."
-        actions={<Button variant="secondary" size="sm" label="Reload" onClick={reload} />}
-      />
-    );
+  return assetFailed ? { title: "Couldn't load part of this page.", text: "Try reloading." } : null;
+}
+
+export function BuildNotice({ serverVersion, assetFailed }: { serverVersion: string | null; assetFailed: boolean }) {
+  const notice = buildNotice(serverVersion, assetFailed);
+  if (notice === null) {
+    return null;
   }
-  return null;
+  return (
+    <Notice
+      tone="info"
+      title={notice.title}
+      text={notice.text}
+      actions={<Button variant="secondary" size="sm" label="Reload" onClick={reload} />}
+    />
+  );
 }

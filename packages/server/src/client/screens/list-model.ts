@@ -20,8 +20,7 @@ function listRow(row: LedgerRow, owners: number | undefined): ListRow {
     repository: repositoryName(fullName, owners),
     number: pr.number,
     state: details?.state ?? "open",
-    event: latestEvent?.kind ?? null,
-    eventTime: latestEvent?.at ?? null,
+    latestEvent,
     problem,
     href: `/pr/${fullName}/${pr.number}`,
   };

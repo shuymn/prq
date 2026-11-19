@@ -25,6 +25,7 @@ import { Sha } from "../components/Sha.tsx";
 import { Skeleton } from "../components/Skeleton.tsx";
 import { Spinner } from "../components/Spinner.tsx";
 import { Status, type StatusState } from "../components/Status.tsx";
+import { Frame } from "../frame.tsx";
 import { BuildNotice } from "../notices.tsx";
 import { listBody } from "../screens/list-model.ts";
 import { PrList } from "../screens/PrList.tsx";
@@ -80,27 +81,6 @@ function controlEntries(): Entry[] {
   return entries;
 }
 
-// The page as the app renders it: the header with the pool's status, then the screen.
-function Page({ view, children }: { view: HubView | null; children: ReactNode }) {
-  const pool =
-    view === null ? (
-      <PoolStatus form="button" state="loading" />
-    ) : (
-      <PoolStatus
-        form="button"
-        state={view.localAgentPresent ? "local" : "cloud-only"}
-        agents={view.presentAgents}
-        jobs={view.jobs}
-      />
-    );
-  return (
-    <div className="app" data-layout="page">
-      <AppHeader version={VERSION} pool={pool} />
-      <main>{children}</main>
-    </div>
-  );
-}
-
 // The PR list over a pass that completed with these rows (null: still loading), under Open or All.
 function ListState({
   view,
@@ -116,7 +96,7 @@ function ListState({
   const filter = { attention: false, state, repo: null } as const;
   const body = listBody({ rows, filter, more: false, loadingMore: false, failure: null }, view.owners);
   return (
-    <Page view={view}>
+    <Frame view={view} version={VERSION} layout="page">
       <PrList
         notice={notice}
         body={body}
@@ -128,7 +108,7 @@ function ListState({
         repo={null}
         repoItems={{ state: "loading" }}
       />
-    </Page>
+    </Frame>
   );
 }
 
@@ -203,8 +183,7 @@ export const REGISTRY: Entry[] = [
             repository="prq"
             number={42}
             state="open"
-            event="answer"
-            eventTime={Date.now() - 3 * 60_000}
+            latestEvent={{ kind: "answer", at: Date.now() - 3 * 60_000 }}
             problem="answer_failed"
             href="/pr/shuymn/prq/42"
           />

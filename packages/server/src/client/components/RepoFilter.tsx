@@ -28,16 +28,15 @@ export function RepoFilter({
   label,
   selected,
   items,
-  onOpen,
+  onRead,
   onSelect,
-  onRetry,
 }: {
   label: string;
   selected: string | null;
   items: RepoItems;
-  onOpen?: (() => void) | undefined;
+  // Reads the repositories: on each opening of the menu, and on its Try again.
+  onRead?: (() => void) | undefined;
   onSelect?: ((repo: string | null) => void) | undefined;
-  onRetry?: (() => void) | undefined;
 }) {
   const menuId = useId();
   const triggerId = useId();
@@ -75,7 +74,6 @@ export function RepoFilter({
     if (expanded) {
       itemsOf(menu.current)[0]?.focus();
     } else {
-      enter.current = true;
       trigger.current?.click();
     }
   };
@@ -90,7 +88,7 @@ export function RepoFilter({
     setExpanded(open);
     keyboardRead.current = open && enter.current;
     if (open) {
-      onOpen?.();
+      onRead?.();
       if (enter.current) {
         itemsOf(menu.current)[0]?.focus();
       } else if (fromPointer.current) {
@@ -164,7 +162,7 @@ export function RepoFilter({
                 label="Try again"
                 onClick={(event) => {
                   keyboardRead.current = event.detail === 0;
-                  onRetry?.();
+                  onRead?.();
                 }}
               />
             }

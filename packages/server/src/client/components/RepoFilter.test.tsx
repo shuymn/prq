@@ -20,21 +20,24 @@ const item = (name: string) => page.getByRole("menuitemradio", { name });
 const menuOpen = () => document.querySelector(".menu")?.matches(":popover-open") ?? false;
 
 describe("the repository menu", () => {
-  test("opened by keyboard, focuses its first item; the arrows move; Escape closes it and returns focus", async () => {
-    await render(<RepoFilter label={ALL_REPOSITORIES} selected={null} items={ITEMS} />);
-    trigger().element().focus();
-    await userEvent.keyboard("{Enter}");
-    await expect.element(item(ALL_REPOSITORIES)).toHaveFocus();
-    await userEvent.keyboard("{ArrowDown}");
-    await expect.element(item("kopje")).toHaveFocus();
-    await userEvent.keyboard("{ArrowDown}");
-    await expect.element(item("prq")).toHaveFocus();
-    await userEvent.keyboard("{ArrowUp}");
-    await expect.element(item("kopje")).toHaveFocus();
-    await userEvent.keyboard("{Escape}");
-    expect(menuOpen()).toBe(false);
-    await expect.element(trigger()).toHaveFocus();
-  });
+  test.each(["{Enter}", "{ArrowDown}"])(
+    "opened by keyboard (%s), focuses its first item; the arrows move; Escape closes it and returns focus",
+    async (key) => {
+      await render(<RepoFilter label={ALL_REPOSITORIES} selected={null} items={ITEMS} />);
+      trigger().element().focus();
+      await userEvent.keyboard(key);
+      await expect.element(item(ALL_REPOSITORIES)).toHaveFocus();
+      await userEvent.keyboard("{ArrowDown}");
+      await expect.element(item("kopje")).toHaveFocus();
+      await userEvent.keyboard("{ArrowDown}");
+      await expect.element(item("prq")).toHaveFocus();
+      await userEvent.keyboard("{ArrowUp}");
+      await expect.element(item("kopje")).toHaveFocus();
+      await userEvent.keyboard("{Escape}");
+      expect(menuOpen()).toBe(false);
+      await expect.element(trigger()).toHaveFocus();
+    },
+  );
 
   test("opened by pointer, leaves focus on its button", async () => {
     await render(<RepoFilter label={ALL_REPOSITORIES} selected={null} items={ITEMS} />);

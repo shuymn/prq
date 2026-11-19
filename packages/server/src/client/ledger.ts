@@ -4,10 +4,10 @@
 // cursor. The depth only grows until the filter changes, which resets it to one: a continuation (the next page, read
 // into the rows shown) raises it to the pages it reaches for, so a pass that replaces another reads as deep. A new
 // generation (a filter change, a refresh the Hub's view asks for, Try again) aborts the requests in flight and discards
-// whatever they bring: a result is adopted only while its generation is current.
+// whatever they bring: a result is adopted only while its generation's signal is not aborted.
 
 import { type HubView, LedgerPage, LedgerQuery, type LedgerRow } from "@prq/protocol";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type * as v from "valibot";
 
 import { type Fetch, readJson } from "./reads.ts";
@@ -54,7 +54,6 @@ export class LedgerReader {
   readonly #fetch: Fetch;
   #filter: ListFilter;
   #depth = 1;
-  #generation = 0;
   #controller = new AbortController();
   #cursor: string | null = null;
   #pages = 0;
@@ -87,22 +86,21 @@ export class LedgerReader {
   refresh(): void {
     this.#controller.abort();
     this.#controller = new AbortController();
-    const generation = ++this.#generation;
     this.#cursor = null;
     if (this.#snapshot.more || this.#snapshot.loadingMore) {
       this.#update({ more: false, loadingMore: false });
     }
-    void this.#pass(generation, this.#controller.signal, this.#filter, this.#depth);
+    void this.#pass(this.#controller.signal, this.#filter, this.#depth);
   }
 
-  async #pass(generation: number, signal: AbortSignal, filter: ListFilter, depth: number): Promise<void> {
+  async #pass(signal: AbortSignal, filter: ListFilter, depth: number): Promise<void> {
     const rows: LedgerRow[] = [];
     let cursor: string | null = null;
     let pages = 0;
     try {
       do {
         const page: LedgerPage = await readJson(this.#fetch, pageUrl(filter, cursor), LedgerPage, signal);
-        if (generation !== this.#generation) {
+        if (signal.aborted) {
           return;
         }
         rows.push(...page.rows);
@@ -110,7 +108,7 @@ export class LedgerReader {
         pages += 1;
       } while (cursor !== null && pages < depth);
     } catch {
-      if (generation === this.#generation) {
+      if (!signal.aborted) {
         this.#update({ failure: this.#snapshot.rows === null ? "load" : "refresh" });
       }
       return;
@@ -126,13 +124,12 @@ export class LedgerReader {
     if (cursor === null || this.#snapshot.loadingMore || this.#snapshot.failure !== null) {
       return;
     }
-    const generation = this.#generation;
-    const filter = this.#filter;
+    const signal = this.#controller.signal;
     this.#depth = Math.max(this.#depth, this.#pages + 1);
     this.#update({ loadingMore: true });
-    readJson(this.#fetch, pageUrl(filter, cursor), LedgerPage, this.#controller.signal).then(
+    readJson(this.#fetch, pageUrl(this.#filter, cursor), LedgerPage, signal).then(
       (page) => {
-        if (generation !== this.#generation) {
+        if (signal.aborted) {
           return;
         }
         this.#cursor = page.nextCursor;
@@ -144,7 +141,7 @@ export class LedgerReader {
         });
       },
       () => {
-        if (generation === this.#generation) {
+        if (!signal.aborted) {
           this.#update({ loadingMore: false, failure: "refresh" });
         }
       },
@@ -163,33 +160,32 @@ export class LedgerReader {
   // A change of the Hub's view or socket: the rows are read again when ledgerVersion or presence changed, when the
   // socket reopened, or when the first view arrives after a pass began (which may predate an entry). Any other change
   // of the view (the counts, a second agent's presence) reads nothing.
-  hubChanged(signal: HubSignal): void {
+  hubChanged(hub: HubSignal): void {
     const seen = this.#seen;
-    this.#seen = signal;
+    this.#seen = hub;
     if (seen === null) {
       return;
     }
-    const reopened = signal.opens > seen.opens && seen.opens > 0;
-    const firstView = seen.view === null && signal.view !== null;
+    const reopened = hub.opens > seen.opens && seen.opens > 0;
+    const firstView = seen.view === null && hub.view !== null;
     const changed =
       seen.view !== null &&
-      signal.view !== null &&
-      (seen.view.ledgerVersion !== signal.view.ledgerVersion ||
-        seen.view.localAgentPresent !== signal.view.localAgentPresent);
+      hub.view !== null &&
+      (seen.view.ledgerVersion !== hub.view.ledgerVersion ||
+        seen.view.localAgentPresent !== hub.view.localAgentPresent);
     if (reopened || firstView || changed) {
       this.refresh();
     }
   }
 
   // The first pass, with the Hub as it is now.
-  start(signal: HubSignal): void {
-    this.#seen = signal;
+  start(hub: HubSignal): void {
+    this.#seen = hub;
     this.refresh();
   }
 
   // Ends the generation: whatever is in flight is aborted and discarded.
   stop(): void {
-    this.#generation += 1;
     this.#controller.abort();
   }
 }
@@ -199,17 +195,8 @@ export class LedgerReader {
 export function useLedger(fetcher: Fetch, filter: ListFilter, hub: HubSignal): [LedgerSnapshot, LedgerReader] {
   const [reader] = useState(() => new LedgerReader(fetcher, filter));
   const snapshot = useSyncExternalStore(reader.subscribe, reader.snapshot);
-  const ledgerVersion = hub.view?.ledgerVersion;
-  const localAgentPresent = hub.view?.localAgentPresent;
-  const signal = useMemo(
-    (): HubSignal =>
-      ledgerVersion === undefined || localAgentPresent === undefined
-        ? { view: null, opens: hub.opens }
-        : { view: { ledgerVersion, localAgentPresent }, opens: hub.opens },
-    [ledgerVersion, localAgentPresent, hub.opens],
-  );
   // The Hub as it was at mount, which the first pass starts from.
-  const [initial] = useState(signal);
+  const [initial] = useState(hub);
   // The effects run in order: the first pass, then the filter and the Hub, which change nothing at mount.
   useEffect(() => {
     reader.start(initial);
@@ -219,7 +206,7 @@ export function useLedger(fetcher: Fetch, filter: ListFilter, hub: HubSignal): [
     reader.setFilter(filter);
   }, [reader, filter]);
   useEffect(() => {
-    reader.hubChanged(signal);
-  }, [reader, signal]);
+    reader.hubChanged(hub);
+  }, [reader, hub]);
   return [snapshot, reader];
 }

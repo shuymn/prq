@@ -91,9 +91,8 @@ export function PrListScreen({ hub, notice }: { hub: Hub; notice?: ReactNode }) 
       repoItems={repoItems}
       onAttention={() => choose({ attention: !attention })}
       onState={(state) => choose({ state, attention: false })}
-      onRepoOpen={readRepos}
+      onRepoRead={readRepos}
       onRepo={(repo) => choose({ repo, attention: false })}
-      onRepoRetry={readRepos}
       onRetry={() => reader.refresh()}
       onLoadMore={loadMore}
     />

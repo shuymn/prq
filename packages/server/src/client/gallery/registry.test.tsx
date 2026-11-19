@@ -79,18 +79,23 @@ describe("the gallery's registry", () => {
   });
 });
 
-const entry = (name: string) => {
+const renderOf = (name: string) => {
   const found = REGISTRY.find((candidate) => candidate.name === name);
   if (found === undefined) {
     throw new Error(`no gallery entry ${name}`);
   }
-  return found.render();
+  return found.render;
 };
+const entry = (name: string) => renderOf(name)();
 
 const rows = () => page.getByRole("table").getByRole("row");
+const statusState = (label: string) =>
+  page.getByText(label, { exact: true }).element().closest("[data-component=Status]")?.getAttribute("data-state");
 
 describe("the PR list's states", () => {
-  test("list.default: the filters, the header and one row for each problem, repositories without their owner", async () => {
+  test("list.default, the frame of list.waiting-agent and list.failed: the filters, the header, one row for each problem, the waiting one a wait and the failed one a fault, repositories without their owner", async () => {
+    expect(renderOf("list.waiting-agent")).toBe(renderOf("list.default"));
+    expect(renderOf("list.failed")).toBe(renderOf("list.default"));
     await render(entry("list.default"));
     await expect.element(page.getByRole("button", { name: "Needs attention · 3" })).toBeVisible();
     await expect.element(page.getByRole("button", { name: ALL_REPOSITORIES })).toBeVisible();
@@ -113,6 +118,10 @@ describe("the PR list's states", () => {
         count: 1,
       });
     }
+    expect({ waiting: statusState("Waiting for a local agent"), failed: statusState("Answer failed") }).toEqual({
+      waiting: "waiting",
+      failed: "failed",
+    });
     expect(page.getByText("shuymn/").elements()).toEqual([]);
     const cells = rows().nth(2).getByRole("cell");
     expect(cells.elements().map((cell) => cell.textContent)).toEqual([
@@ -141,20 +150,6 @@ describe("the PR list's states", () => {
         "Summary2 days ago",
         "Answer3 days ago",
       ]);
-  });
-
-  test("list.waiting-agent: the waiting row as a wait, not a fault", async () => {
-    await render(entry("list.waiting-agent"));
-    const status = page.getByText("Waiting for a local agent");
-    await expect.element(status).toBeVisible();
-    expect(status.element().closest("[data-component=Status]")?.getAttribute("data-state")).toBe("waiting");
-  });
-
-  test("list.failed: the failed row says what failed, as a fault", async () => {
-    await render(entry("list.failed"));
-    const status = page.getByText("Answer failed");
-    await expect.element(status).toBeVisible();
-    expect(status.element().closest("[data-component=Status]")?.getAttribute("data-state")).toBe("failed");
   });
 
   test("list.all: All chosen, merged and closed pull requests among the open ones", async () => {

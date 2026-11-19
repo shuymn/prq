@@ -4,6 +4,8 @@
 import { HubView, LedgerRow, type Problem } from "@prq/protocol";
 import * as v from "valibot";
 
+import type { PrState } from "../components/PrStateLabel.tsx";
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -13,7 +15,7 @@ type Spec = {
   repo: string;
   number: number;
   title: string;
-  state?: "open" | "closed" | "merged";
+  state?: PrState;
   kind: "push" | "question" | "summary" | "answer";
   ago: number;
   problem?: Problem;
