@@ -52,6 +52,7 @@
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "@vitest/browser-playwright": "catalog:",
+    "ci-info": "catalog:",
     "fast-check": "catalog:",
     "playwright": "catalog:",
     "style-dictionary": "catalog:",

@@ -80,6 +80,8 @@ catalog:
   # The CLI's test harness, which runs the Worker (the version the vitest plugin resolves), and the server's secrets
   # command, which puts the production secrets on the Worker.
   wrangler: 4.161.0
+  # What the deploy refuses to run in: an environment wrangler takes as CI, by the ci-info it bundles (this version).
+  ci-info: 4.4.0
 
   # Lint, format, unused files, dependencies and exports (knip.jsonc), commit messages, and the Git hooks.
   "@commitlint/cli": 21.2.4

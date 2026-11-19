@@ -37,6 +37,7 @@ import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 
 import { LedgerPage } from "@prq/protocol";
+import { isCI, name as ciName } from "ci-info";
 import * as v from "valibot";
 import { unstable_readConfig } from "wrangler";
 
@@ -88,6 +89,20 @@ const PROVISIONING_MS = 30 * 60_000;
 // The most ledger pages the idle check reads.
 const LEDGER_PAGES = 1_000;
 const LEDGER_REQUEST_MS = 30_000;
+
+// The variables ci-info, which wrangler bundles, takes as CI besides each CI service's own (ci-info's vendors.json),
+// unless CI is "false".
+const CI_VARIABLES = [
+  "CI",
+  "BUILD_ID",
+  "BUILD_NUMBER",
+  "CI_APP_ID",
+  "CI_BUILD_ID",
+  "CI_BUILD_NUMBER",
+  "CI_NAME",
+  "CONTINUOUS_INTEGRATION",
+  "RUN_ID",
+];
 
 function setting(name: string, fallback: number): number {
   const text = process.env[name] ?? "";
@@ -1062,9 +1077,25 @@ async function bootstrap(resume: boolean): Promise<number> {
   return 0;
 }
 
+// wrangler takes an environment ci-info marks as CI as one with nobody to ask, and answers its own questions (whether to
+// replace a DNS record or another Worker's domain) with their defaults: the deploy runs from the owner's terminal alone.
+function notInCi(): void {
+  if (!isCI) {
+    return;
+  }
+  const marks = [
+    ...CI_VARIABLES.filter((name) => (process.env[name] ?? "") !== ""),
+    ...(ciName === null ? [] : [`the variables of ${ciName}`]),
+  ];
+  throw new Refusal(
+    `the environment marks this run as CI (${marks.join(", ")}), where wrangler answers its own questions: deploy from a terminal of your own`,
+  );
+}
+
 async function main(args: readonly string[]): Promise<number> {
   const [first = "", ...rest] = args;
   if (first === "--bootstrap" && (rest.length === 0 || (rest.length === 1 && rest[0] === "--resume"))) {
+    notInCi();
     return bootstrap(rest.length === 1);
   }
   if (first === "--read-back" && rest.length === 1 && rest[0] !== undefined) {
@@ -1072,6 +1103,7 @@ async function main(args: readonly string[]): Promise<number> {
   }
   const known = ["--ignore-running", "--immediate", "--keep-image"];
   if (TAG.test(first) && rest.every((arg) => known.includes(arg)) && new Set(rest).size === rest.length) {
+    notInCi();
     return release(first, {
       ignoreRunning: rest.includes("--ignore-running"),
       immediate: rest.includes("--immediate"),

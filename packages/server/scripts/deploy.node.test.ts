@@ -611,6 +611,26 @@ async function otherAccount(): Promise<void> {
   env["PRQ_DEPLOY_WRANGLER_CONFIG"] = other;
 }
 
+describe("an environment marked as CI", () => {
+  it.each([
+    ["the bootstrap", ["--bootstrap"], { CI: "true" }, "CI"],
+    ["its resume", ["--bootstrap", "--resume"], { BUILD_NUMBER: "17" }, "BUILD_NUMBER"],
+    ["a release", [TAG], { GITHUB_ACTIONS: "true" }, "the variables of GitHub Actions"],
+  ])("refuses %s before any call", async (_what, args, marks, named) => {
+    await bootstrapped();
+    Object.assign(env, marks);
+
+    const result = await deploy(args, { answers: ["y", "none"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(
+      `deploy: the environment marks this run as CI (${named}), where wrangler answers its own questions: deploy from a terminal of your own`,
+    );
+    expect(await wranglerCalls()).toEqual([]);
+    expect(await toolCalls()).toEqual([]);
+  });
+});
+
 describe("the account", () => {
   const REFUSAL =
     "deploy: the wrangler configuration's account_id names another account than target.env's, and wrangler would use it";
