@@ -200,11 +200,17 @@ describe("a pass superseded while it pages", () => {
     await replaced.answered.promise;
     expect(await shownRows(page)).toEqual(shown);
 
-    // A local agent arrives before that pass reaches its second page: presence changes, and another pass replaces it.
+    // A local agent arrives before that pass reaches its second page: presence changes, and another pass replaces it,
+    // whose second page the door holds. Until it answers, the rows are those shown before.
+    const winning = { kind: "hold", answered: latch(), release: latch() } as const;
+    stack.access().doorPlan((path) => path.includes("cursor="), winning);
     await agentWait("laptop");
     await pool(page, "1 local agent").waitFor();
+    await winning.answered.promise;
+    expect(await shownRows(page)).toEqual(shown);
     second.release.open();
     replaced.release.open();
+    winning.release.open();
 
     const fresh = await freshRead();
     expect(fresh.pages).toHaveLength(2);
