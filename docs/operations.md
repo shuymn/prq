@@ -341,12 +341,13 @@ the deploy did to the container application:
   answer `y` once the dashboard (Workers & Pages → Containers → `prq-workspace`) shows it ready, or `n`, which records
   the provisioning unverified.
 - _changed_ (a new image): it reads the application and every page of its instances every 10 seconds until the
-  application, still with the image this deploy pushed, has no active rollout, and every active instance reports the
-  application's version (one with no version does not), none provisioning or failed. A Durable Object with no instance
-  is listed as inactive and counted apart. It stops reading 30 minutes after it began; a read under way then finishes
-  first, within wrangler's wait of 5 minutes.
-- _unchanged_, or _kept_ with `--keep-image`: complete once the version is live, unless the application still has an
-  active rollout (as after a retry whose image was the same), which is then read as a changed one is.
+  application, still with the image and version read right after the upload, has no active rollout, and every active
+  instance reports that version (one with no version does not), none provisioning or failed. A Durable Object with no
+  instance is listed as inactive and counted apart. It stops reading 30 minutes after it began; a read under way then
+  finishes first, within wrangler's wait of 5 minutes.
+- _unchanged_, or _kept_ with `--keep-image`: complete once the version is live, unless the record shows an active
+  rollout (as after a retry whose image was the same), now or in an earlier read, which is then read as a changed one
+  is, also once the rollout has cleared.
 
 It exits 0 once the read-back is complete. When the upload failed it exits with wrangler's code, 1 when it was stopped
 at its bound. Otherwise it exits 2 with `verification incomplete`, the reason, and the command that resumes it,

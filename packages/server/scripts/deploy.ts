@@ -777,9 +777,13 @@ function instanceCounts(rows: readonly Instance[], appVersion: number | null) {
 }
 
 // Polls an application until its rollout is complete, for at most the rollout's time (a read under way then finishes
-// first, within wrangler's wait): the image this deploy set (when it set one), no active rollout, and every active
-// instance at the application's version, none starting or failed.
-async function pollRollout(record: Saved, expectedImage: string | null, id: string): Promise<number> {
+// first, within wrangler's wait): the image and version read right after the upload (when they were), no active
+// rollout, and every active instance at that version, none starting or failed.
+async function pollRollout(
+  record: Saved,
+  expected: { image: string | null; version: number | null },
+  id: string,
+): Promise<number> {
   const { accountId } = record.data;
   const rounds = record.data.readBack?.rounds ?? [];
   const deadline = Date.now() + rolloutMs;
@@ -803,15 +807,23 @@ async function pollRollout(record: Saved, expectedImage: string | null, id: stri
         const reason = late() ? notComplete : `the rollout could not be read: ${error.lines.join("; ")}`;
         return await settle(record, "incomplete", reason, { rounds });
       }
-      const counts = instanceCounts(listed, app.version);
+      const counts = instanceCounts(listed, expected.version ?? app.version);
       const instancesLine = `${counts.active} active (${counts.behind} at another version or none, ${counts.unsettled} not settled), ${counts.inactive} inactive`;
       rounds.push({ at: now(), application: app, instances: instancesLine });
       print(`rollout: ${applicationLine(app)}; instances: ${instancesLine}`);
-      if (expectedImage !== null && app.image !== expectedImage) {
+      if (expected.image !== null && app.image !== expected.image) {
         return await settle(
           record,
           "incomplete",
-          `the application's image is ${app.image ?? "unknown"}, not ${expectedImage}`,
+          `the application's image is ${app.image ?? "unknown"}, not ${expected.image}`,
+          { rounds },
+        );
+      }
+      if (expected.version !== null && app.version !== expected.version) {
+        return await settle(
+          record,
+          "incomplete",
+          `the application's version is ${app.version ?? "unknown"}, not ${expected.version}`,
           { rounds },
         );
       }
@@ -886,23 +898,34 @@ async function readBack(record: Saved): Promise<number> {
     return settle(record, "incomplete", `the Worker has ${endpointsLine(ingress)} after the deploy`);
   }
   const app = state?.application ?? null;
+  // The image and version read right after the upload: the ones this deploy set, or left.
+  const expected = {
+    image: after?.application?.image ?? app?.image ?? null,
+    version: after?.application?.version ?? app?.version ?? null,
+  };
   switch (application) {
     case "created":
       return provisioning(record);
     case "changed":
-      // The image read right after the upload is the one this deploy set.
       return app === null
         ? settle(record, "incomplete", "the application could not be read")
-        : pollRollout(record, after?.application?.image ?? app.image, app.id);
+        : pollRollout(record, expected, app.id);
     case "unchanged":
-    case "kept":
-      // A rollout still under way (as after a retry whose image was the same) is followed as a changed one is.
+    case "kept": {
       if (app === null) {
         return settle(record, "incomplete", "the application could not be read");
       }
-      return app.activeRollout === null
+      // A rollout the record found under way, now or in an earlier read (as after a retry whose image was the same), is
+      // followed as a changed one is, also once it has cleared: its instances can still be at another version.
+      const reads = [
+        app,
+        after?.application,
+        ...(record.data.readBack?.rounds ?? []).map((round) => round.application),
+      ];
+      return reads.every((each) => (each?.activeRollout ?? null) === null)
         ? settle(record, "complete", `version ${versionId} is live, and the application's image is unchanged`)
-        : pollRollout(record, app.image, app.id);
+        : pollRollout(record, expected, app.id);
+    }
     default:
       return settle(record, "incomplete", `the container application ${APPLICATION} was not found after the upload`);
   }

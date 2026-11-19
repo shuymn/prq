@@ -1337,6 +1337,48 @@ describe("deploy <tag>", () => {
     expect((await record(dir)).readBack).toMatchObject({ state: "complete" });
   });
 
+  it("reads an unchanged application's instances on --read-back once a rollout it found has cleared", async () => {
+    // A retry whose image was the same, while the earlier deploy's rollout is under way; the owner stops its poll.
+    await released({ rolloutReads: 1_000_000 });
+    const { result } = start([TAG], { answers: ["y"] });
+    const deployPid = await until(async () => {
+      const reads = (await wranglerCalls()).filter((call) => call.call === "containers info");
+      return reads.length >= 3 ? reads.at(-1)?.ppid : undefined;
+    });
+    process.kill(deployPid, "SIGINT");
+    expect((await result).code).toBe(2);
+    const { dir, data } = await onlyRecord();
+    expect(data).toMatchObject({ application: "unchanged", readBack: { state: "incomplete" } });
+
+    // The rollout has cleared, and an active instance still reports the application's earlier version.
+    await changeState({ rolloutReads: 0, instancePages: [[{ state: "running", version: APP.version - 1 }]] });
+    env["PRQ_DEPLOY_ROLLOUT_MS"] = "3000";
+    const behind = await deploy(["--read-back", dir], { terminal: false });
+    expect(behind.code).toBe(2);
+    expect(behind.output).toContain("instances: 1 active (1 at another version or none, 0 not settled), 0 inactive");
+    expect((await record(dir)).readBack).toMatchObject({
+      state: "incomplete",
+      reason: "the rollout was not complete within 3 s",
+    });
+
+    // The application has moved to another version since the upload, its instances with it.
+    await changeState({ applications: [{ ...APP, version: APP.version + 1 }], instancePages: null });
+    const moved = await deploy(["--read-back", dir], { terminal: false });
+    expect(moved.code).toBe(2);
+    expect((await record(dir)).readBack).toMatchObject({
+      state: "incomplete",
+      reason: `the application's version is ${APP.version + 1}, not ${APP.version}`,
+    });
+
+    await changeState({ applications: [{ ...APP }] });
+    const done = await deploy(["--read-back", dir], { terminal: false });
+    expect(done.code).toBe(0);
+    expect((await record(dir)).readBack).toMatchObject({
+      state: "complete",
+      reason: `the application's rollout of version ${APP.version} is complete`,
+    });
+  });
+
   it("stops the upload with all it started at the end of its bound, and records it", async () => {
     await released({ behavior: { deploy: "hang" } });
     env["PRQ_DEPLOY_STEP_MS"] = "8000";
