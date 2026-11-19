@@ -1,0 +1,21 @@
+@layer screens {
+  .not-found {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-page);
+    box-sizing: border-box;
+    inline-size: 100%;
+    max-inline-size: var(--size-page);
+    margin-inline: auto;
+    padding-block: var(--inset-page);
+
+    & h1:focus {
+      outline: none;
+    }
+  }
+
+  [data-layout="panel"] .not-found {
+    padding: var(--inset-panel);
+    gap: var(--gap-section);
+  }
+}
