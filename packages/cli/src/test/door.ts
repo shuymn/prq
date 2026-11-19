@@ -4,9 +4,10 @@
 // ways and either side's close passed on, with any Cf-Access-Jwt-Assertion the browser sent replaced by the harness's.
 //
 // A test can plan what happens to the next request a path matches (DoorPlan): gate it before it is forwarded, or hold
-// the Worker's answer before it is passed on, each until the test releases it. And it can have the door serve a
-// directory (serve()) in place of the Worker's static assets, as an earlier deploy's would be: every path outside the
-// Worker's routes is then a file of the directory, or its index.html.
+// the Worker's answer before it is passed on, each until the test releases it. It can cut the open WebSockets of a
+// route (cut()), both sides at once, as a network failure would. And it can have the door serve a directory (serve())
+// in place of the Worker's static assets, as an earlier deploy's would be: every path outside the Worker's routes is
+// then a file of the directory, or its index.html.
 //
 // Each forward is bounded: from its arrival, the browser has its answer's headers or switched protocols within
 // DOOR_ANSWER_MS, a gate's or a hold's wait included, else it gets 504 and the upstream request is dropped. A Worker that
@@ -67,6 +68,8 @@ export type Door = {
   log: DoorEntry[];
   // The next request whose path (with its query) matches takes the plan, once; plans are tried in the order given.
   plan(match: (path: string) => boolean, plan: DoorPlan): void;
+  // Ends every open WebSocket whose path (with its query) matches, the browser's side and the Worker's; how many.
+  cut(match: (path: string) => boolean): number;
   // Serves this directory in place of the Worker's static assets, until called with null.
   serve(dir: string | null): void;
   // Drops the plans no request took and stops serving a directory.
@@ -160,6 +163,8 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
 
   const log: DoorEntry[] = [];
   const plans: { match: (path: string) => boolean; plan: DoorPlan }[] = [];
+  // The WebSockets open through the door, by the browser's path, each with what ends both its sides.
+  const open = new Set<{ path: string; end: () => void }>();
   let staticDir: string | null = null;
 
   function planFor(path: string, upgrade: boolean): DoorPlan | undefined {
@@ -306,10 +311,14 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
       // Each side's end ends the other's writing; a close or an error on either side ends both.
       upstreamSocket.pipe(socket);
       socket.pipe(upstreamSocket);
+      const entry = { path: req.url ?? "/", end: () => {} };
       const end = () => {
+        open.delete(entry);
         socket.destroy();
         upstreamSocket.destroy();
       };
+      entry.end = end;
+      open.add(entry);
       upstreamSocket.once("close", end);
       upstreamSocket.on("error", end);
       socket.once("close", end);
@@ -335,6 +344,13 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
     log,
     plan(match, plan) {
       plans.push({ match, plan });
+    },
+    cut(match) {
+      const cut = [...open].filter((entry) => match(entry.path));
+      for (const entry of cut) {
+        entry.end();
+      }
+      return cut.length;
     },
     serve(dir) {
       staticDir = dir;
