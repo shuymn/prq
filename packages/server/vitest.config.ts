@@ -71,6 +71,8 @@ export default defineConfig(async () => {
           // its components with the design tokens, its reads against a fetch the test controls, and the gallery. The
           // UI's build configuration gives it its root (src/client), plugins and defines.
           extends: "./vite.config.ts",
+          // Optimized before the first test file loads: found during a run, Vite reloads the page under the tests.
+          optimizeDeps: { include: ["@cloudflare/ai-chat/react", "agents/react"] },
           test: {
             name: "client",
             include: ["src/client/**/*.test.{ts,tsx}"],

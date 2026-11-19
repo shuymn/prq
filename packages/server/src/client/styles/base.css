@@ -24,3 +24,15 @@
     font-size-adjust: from-font;
   }
 }
+
+@layer base {
+  /* The live regions (announce.ts): read by assistive technology, not shown. */
+  .announcer {
+    position: absolute;
+    inline-size: var(--border-width-thin);
+    block-size: var(--border-width-thin);
+    overflow: hidden;
+    clip-path: inset(var(--border-width-thin));
+    white-space: nowrap;
+  }
+}

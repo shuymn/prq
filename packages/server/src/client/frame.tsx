@@ -4,6 +4,7 @@
 import type { HubView } from "@prq/protocol";
 import type { ReactNode } from "react";
 
+import { useAnnouncements } from "./announce.ts";
 import { AppHeader } from "./components/AppHeader.tsx";
 import { PoolStatus } from "./components/PoolStatus.tsx";
 import type { Layout } from "./layout.ts";
@@ -23,21 +24,40 @@ function Pool({ view }: { view: HubView | null }) {
   );
 }
 
+// The app's live regions: each announcement is a new line, so the same text is read again.
+function Announcer() {
+  const { polite, assertive } = useAnnouncements();
+  return (
+    <>
+      <div className="announcer" aria-live="polite">
+        <p key={polite.count}>{polite.text}</p>
+      </div>
+      <div className="announcer" aria-live="assertive">
+        <p key={assertive.count}>{assertive.text}</p>
+      </div>
+    </>
+  );
+}
+
+// The panel's PR detail has no header: the panel is the pull request's (docs/ui.md).
 export function Frame({
   view,
   version,
   layout,
+  header = true,
   children,
 }: {
   view: HubView | null;
   version: string;
   layout: Layout;
+  header?: boolean | undefined;
   children: ReactNode;
 }) {
   return (
     <div className="app" data-layout={layout}>
-      <AppHeader version={version} pool={<Pool view={view} />} />
+      {header && <AppHeader version={version} pool={<Pool view={view} />} />}
       <main>{children}</main>
+      <Announcer />
     </div>
   );
 }

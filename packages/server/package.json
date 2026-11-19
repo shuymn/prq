@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "catalog:",
+    "@ai-sdk/react": "catalog:",
     "@ai-sdk/valibot": "catalog:",
     "@cloudflare/ai-chat": "catalog:",
     "@fontsource/inter": "catalog:",
@@ -38,7 +39,8 @@
     "remark-gfm": "catalog:",
     "universal-github-app-jwt": "catalog:",
     "valibot": "catalog:",
-    "yaml": "catalog:"
+    "yaml": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "catalog:",

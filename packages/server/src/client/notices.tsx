@@ -1,6 +1,7 @@
-// What the page says about the build it runs (plan §1.12): a server version other than this build's shows the new
-// version notice; a part of the page that failed to load shows the asset notice, only while no version mismatch is
-// known. Either sits first in the content, blocks nothing and offers Reload.
+// What the page says about the build it runs (plan §1.12): a server version other than this build's, from either
+// socket, shows the new version notice; a part of the page that failed to load shows the asset notice, only while no
+// version mismatch is known. Either sits first in the content, blocks nothing and offers Reload, which loses a question
+// history has yet to hold.
 
 import { useEffect, useState } from "react";
 
@@ -21,8 +22,11 @@ export function useAssetFailed(): boolean {
 const reload = () => location.reload();
 
 // The notice for what is known, a version mismatch before a failed asset, or none.
-function buildNotice(serverVersion: string | null, assetFailed: boolean): { title: string; text: string } | null {
-  if (serverVersion !== null && serverVersion !== __PRQ_VERSION__) {
+function buildNotice(
+  serverVersions: readonly (string | null)[],
+  assetFailed: boolean,
+): { title: string; text: string } | null {
+  if (serverVersions.some((version) => version !== null && version !== __PRQ_VERSION__)) {
     return {
       title: "A new version is available",
       text: "This tab still runs the previous version. Reload to update it.",
@@ -31,8 +35,18 @@ function buildNotice(serverVersion: string | null, assetFailed: boolean): { titl
   return assetFailed ? { title: "Couldn't load part of this page.", text: "Try reloading." } : null;
 }
 
-export function BuildNotice({ serverVersion, assetFailed }: { serverVersion: string | null; assetFailed: boolean }) {
-  const notice = buildNotice(serverVersion, assetFailed);
+const UNSENT = "Reloading loses your unsent question.";
+
+export function BuildNotice({
+  serverVersions,
+  assetFailed,
+  unsent = false,
+}: {
+  serverVersions: readonly (string | null)[];
+  assetFailed: boolean;
+  unsent?: boolean | undefined;
+}) {
+  const notice = buildNotice(serverVersions, assetFailed);
   if (notice === null) {
     return null;
   }
@@ -40,7 +54,7 @@ export function BuildNotice({ serverVersion, assetFailed }: { serverVersion: str
     <Notice
       tone="info"
       title={notice.title}
-      text={notice.text}
+      text={unsent ? `${notice.text} ${UNSENT}` : notice.text}
       actions={<Button variant="secondary" size="sm" label="Reload" onClick={reload} />}
     />
   );

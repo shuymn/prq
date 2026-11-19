@@ -9,6 +9,9 @@ catalogs:
     '@ai-sdk/openai-compatible':
       specifier: 3.0.92
       version: 3.0.92
+    '@ai-sdk/react':
+      specifier: 4.0.176
+      version: 4.0.176
     '@ai-sdk/valibot':
       specifier: 3.0.81
       version: 3.0.81
@@ -147,6 +150,9 @@ catalogs:
     yaml:
       specifier: 2.9.1
       version: 2.9.1
+    zod:
+      specifier: 4.6.6
+      version: 4.6.6
 
 importers:
 
@@ -223,6 +229,9 @@ importers:
       '@ai-sdk/openai-compatible':
         specifier: 'catalog:'
         version: 3.0.92(zod@4.6.6)
+      '@ai-sdk/react':
+        specifier: 'catalog:'
+        version: 4.0.176(react@19.3.1)(zod@4.6.6)
       '@ai-sdk/valibot':
         specifier: 'catalog:'
         version: 3.0.81(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(valibot@1.5.0(typescript@7.0.2))(zod@4.6.6)
@@ -295,6 +304,9 @@ importers:
       yaml:
         specifier: 'catalog:'
         version: 2.9.1
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.6
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: 'catalog:'
@@ -3842,7 +3854,6 @@ snapshots:
       cross-spawn: 7.0.6
       pkce-challenge: 5.0.1
       zod: 4.6.6
-    optional: true
 
   '@ai-sdk/openai-compatible@3.0.92(zod@4.6.6)':
     dependencies:
@@ -3873,7 +3884,6 @@ snapshots:
       throttleit: 2.1.0
     transitivePeerDependencies:
       - zod
-    optional: true
 
   '@ai-sdk/valibot@3.0.81(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(valibot@1.5.0(typescript@7.0.2))(zod@4.6.6)':
     dependencies:
@@ -6843,14 +6853,12 @@ snapshots:
       dequal: 2.0.3
       react: 19.3.1
       use-sync-external-store: 1.7.0(react@19.3.1)
-    optional: true
 
   thingies@2.6.1(tslib@2.9.1):
     dependencies:
       tslib: 2.9.1
 
-  throttleit@2.1.0:
-    optional: true
+  throttleit@2.1.0: {}
 
   tinybench@6.2.3: {}
 
@@ -6965,7 +6973,6 @@ snapshots:
   use-sync-external-store@1.7.0(react@19.3.1):
     dependencies:
       react: 19.3.1
-    optional: true
 
   util-deprecate@1.0.2: {}
 

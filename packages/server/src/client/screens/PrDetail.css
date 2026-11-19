@@ -1,0 +1,84 @@
+@layer screens {
+  /* The detail's body: the main column and the rail, a page gap apart, centred at the detail's width. */
+  .pr-detail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--size-rail);
+    align-items: start;
+    gap: var(--gap-page);
+    box-sizing: border-box;
+    inline-size: 100%;
+    max-inline-size: var(--size-detail);
+    margin-inline: auto;
+    padding-block: var(--inset-page);
+
+    & h2 {
+      margin: 0;
+      font: var(--text-heading);
+      font-size-adjust: from-font;
+      color: var(--color-fg-default);
+    }
+
+    & .main {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-section);
+      min-inline-size: 0;
+    }
+
+    & .conversation {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-group);
+    }
+
+    & .none {
+      margin: 0;
+      color: var(--color-fg-muted);
+    }
+
+    & .skeleton {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-group);
+
+      & [data-component="Skeleton"][data-shape="block"] {
+        inline-size: 100%;
+      }
+    }
+
+    /* The rail: the versions, then the jobs, each under its heading. */
+    & .rail {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-section);
+
+      & section {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-group);
+      }
+
+      & .skeleton [data-component="Skeleton"] {
+        inline-size: 100%;
+      }
+    }
+
+    & .versions {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-related);
+    }
+
+    & .jobs {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-group);
+    }
+  }
+
+  /* The panel: one column at the panel's inset, the header compact and the summary in its disclosure. */
+  [data-layout="panel"] .pr-detail {
+    display: block;
+    padding: var(--inset-panel);
+  }
+}

@@ -15,23 +15,11 @@ import { REGISTRY } from "./registry.tsx";
 
 const design = designNames(componentsMd, screensMd);
 
-// What the UI has yet to build, by component and by state ID prefix (plan §4: the detail and the connection banner in
-// PR 3 and 4, the pool's button and popover in PR 5, the settings in PR 5 and 6). A pending item must name something
-// the design has.
+// What the UI has yet to build, by component and by state ID (plan §4: Retry and the states that show it in PR 4, the
+// pool's button, popover and line in PR 5, the settings in PR 6). A pending item must name something the design has.
 const PENDING_COMPONENTS = [
-  "ConnectionBanner",
   "PoolStatus",
   "PoolPopover",
-  "Disclosure",
-  "PrHeader",
-  "CodeBlock",
-  "Markdown",
-  "Summary",
-  "VersionItem",
-  "VersionMenu",
-  "JobRow",
-  "Message",
-  "Composer",
   "TextField",
   "TextArea",
   "PromptEditor",
@@ -40,7 +28,15 @@ const PENDING_COMPONENTS = [
   "SkillReview",
   "Dialog",
 ];
-const PENDING_STATES = ["detail.", "pool.", "settings.", "panel."];
+const PENDING_STATES = [
+  "detail.stalled",
+  "detail.failed",
+  "panel.failed",
+  "panel.waiting-agent",
+  "panel.unavailable",
+  "pool.",
+  "settings.",
+];
 
 // Components the design keeps for its own frames, "design-only, not in code" (design/components.md).
 const DESIGN_ONLY = ["Note"];
@@ -237,5 +233,143 @@ describe("the EmptyStates outside the gallery's states", () => {
     );
     await expect.element(page.getByRole("heading", { name: title })).toBeVisible();
     await expect.element(page.getByText(text)).toBeVisible();
+  });
+});
+
+// The text of the first element a selector finds in the rendered entry.
+const textOf = (selector: string) => document.querySelector(selector)?.textContent ?? null;
+const visible = async (text: string) => {
+  await expect.element(page.getByText(text, { exact: true })).toBeVisible();
+};
+const none = (name: string) => expect(page.getByRole("button", { name }).elements()).toEqual([]);
+
+describe("the PR detail's states", () => {
+  // What tells each state apart, without Retry (plan P3.15).
+  const checks: Record<string, () => Promise<void>> = {
+    "detail.default": async () => {
+      expect(
+        [...document.querySelectorAll("[data-component=Message] .question")].map((node) => node.textContent),
+      ).toEqual([
+        "Why does a retry issue a new claim ID instead of reusing the old one?",
+        "Can I retry before the 60-minute stalled mark?",
+      ]);
+      expect(textOf("[data-component=Summary] .meta")).toBe("deepseek-chat · 12,480 tokens");
+      expect(page.getByRole("complementary").getByRole("button").elements()).toHaveLength(3);
+    },
+    "detail.empty": async () => {
+      expect(textOf("[data-component=Summary] > [data-component=Status]")).toMatch(
+        /^Waiting for a local agent since \d\d:\d\d — continues when it returns$/,
+      );
+      await visible("No questions yet. Ask about this pull request below.");
+    },
+    "detail.loading": async () => {
+      expect(document.querySelector("[data-component=Summary]")?.getAttribute("aria-busy")).toBe("true");
+      expect(document.querySelectorAll(".conversation [data-component=Skeleton]").length).toBeGreaterThan(0);
+    },
+    "detail.streaming": async () => {
+      await visible("Answering");
+      expect(textOf("[data-component=Message] .running")).toMatch(/^Answeringcloud · started \d\d:\d\d$/);
+      none("Retry");
+    },
+    "detail.summary-streaming": async () => {
+      expect(textOf("[data-component=Summary] .progress")).toBe("Summarizing c4d5e6f");
+      await visible(
+        "Jobs that an agent claimed but never finished can now be retried from the UI. A retry puts the job back to pending and issues a new claim ID, so a late result from the old claim is dropped.",
+      );
+    },
+    "detail.waiting-agent": async () => {
+      expect(textOf("[data-component=Message][data-state=waiting-agent] [data-component=Status]")).toMatch(
+        /^Waiting for a local agent since \d\d:\d\d — continues when it returns$/,
+      );
+      // The composer still takes questions.
+      await expect.element(page.getByRole("textbox", { name: "Question" })).not.toHaveAttribute("aria-disabled");
+    },
+    "detail.running": async () => {
+      expect(textOf("[data-component=Summary] .progress")).toBe("Summarizing c4d5e6f");
+      expect(textOf("[data-component=JobRow][data-state=running] .meta")).toMatch(
+        /^agent-7f3a · running since \d\d:\d\d$/,
+      );
+      none("Retry");
+    },
+    "detail.queued": async () => {
+      await visible("Queued behind the running answer");
+      await visible("Answering");
+    },
+    "detail.disconnected": async () => {
+      await visible("Reconnecting… Showing the last known content.");
+      await visible("Reconnecting. You can send once the connection is back.");
+    },
+    "detail.reconnect-failed": async () => {
+      await visible("Can't reconnect. Try reloading the page.");
+      await expect.element(page.getByRole("button", { name: "Reload" })).toBeVisible();
+      await visible("Disconnected. You can send once the connection is back.");
+    },
+    "detail.earlier-version": async () => {
+      expect(textOf("[data-component=Composer] .context")).toBe("Questions are answered at e4f5a6b (latest)");
+      expect(textOf("[data-component=VersionMenu] .trigger code")).toBe("a1b2c3d");
+    },
+    "detail.send-failed": async () => {
+      await visible("Not sent");
+      await expect.element(page.getByRole("button", { name: "Try again" })).toBeVisible();
+      await expect.element(page.getByRole("button", { name: "Discard" })).toBeVisible();
+      await visible("You can send once the question above is sent or discarded.");
+      expect(textOf("[data-component=Notice] .text")).toMatch(/Reloading loses your unsent question\.$/);
+    },
+    "panel.default": async () => {
+      expect(document.querySelector("[data-component=AppHeader]")).toBeNull();
+      expect(document.querySelector("[data-component=PrHeader]")?.getAttribute("data-density")).toBe("compact");
+      expect(document.querySelector("[data-component=Disclosure]")?.getAttribute("data-open")).toBe("true");
+      expect(textOf("[data-component=Message] .answered-at")).toBe("Answered at e4f5a6b");
+    },
+    "panel.version-menu": async () => {
+      await expect.element(page.getByRole("menuitemradio", { name: /^e4f5a6b/ })).toBeVisible();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: /^e4f5a6b/ }))
+        .toHaveAttribute("aria-checked", "true");
+    },
+    "panel.streaming": async () => {
+      await visible("Answering");
+      none("Retry");
+    },
+    "panel.summary-streaming": async () => {
+      await visible("Writing");
+      expect(textOf("[data-component=Summary] .meta")).toBe("deepseek-chat");
+      expect(textOf("[data-component=Composer] .context")).toBe("Questions are answered at e4f5a6b (latest)");
+    },
+    "panel.disconnected": async () => {
+      await visible("Reconnecting… Showing the last known content.");
+      await expect.element(page.getByRole("textbox", { name: "Question" })).toHaveAttribute("aria-disabled", "true");
+    },
+    "panel.reconnect-failed": async () => {
+      await visible("Can't reconnect. Try reloading the page.");
+      await expect.element(page.getByRole("button", { name: "Reload" })).toBeVisible();
+    },
+    "panel.new-version": async () => {
+      await visible("A new version is available");
+      const notice = document.querySelector("[data-component=Notice]");
+      const header = document.querySelector("[data-component=PrHeader]");
+      expect(
+        notice !== null && header !== null && notice.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    },
+    "panel.send-failed": async () => {
+      await visible("Couldn't confirm it was sent");
+      expect(textOf("[data-component=Notice] .text")).toMatch(/Reloading loses your unsent question\.$/);
+    },
+  };
+
+  test("each state has a check, and only the states the registry has", () => {
+    expect(Object.keys(checks).toSorted()).toEqual(
+      REGISTRY.map((candidate) => candidate.name)
+        .filter((name) => name.startsWith("detail.") || name.startsWith("panel."))
+        .toSorted(),
+    );
+  });
+
+  test.each(Object.keys(checks))("%s shows what tells it apart", async (name) => {
+    const check = checks[name];
+    expect(check).toBeDefined();
+    await render(entry(name));
+    await check?.();
   });
 });
