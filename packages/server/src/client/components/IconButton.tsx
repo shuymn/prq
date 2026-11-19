@@ -42,8 +42,21 @@ export function IconButton({
   );
 }
 
-// An icon button that is a link to another site, opened in a new tab ("Open on GitHub" in the compact PrHeader).
-export function IconButtonLink({ icon, label, href }: { icon: IconName; label: string; href: string }) {
+// An icon button that is a link: to a page of the UI, marked while it is the current page (Settings in the
+// AppHeader), or to another site, opened in a new tab ("Open on GitHub" in the compact PrHeader).
+export function IconButtonLink({
+  icon,
+  label,
+  href,
+  external = false,
+  current = false,
+}: {
+  icon: IconName;
+  label: string;
+  href: string;
+  external?: boolean | undefined;
+  current?: boolean | undefined;
+}) {
   return (
     <a
       data-component="IconButton"
@@ -51,9 +64,10 @@ export function IconButtonLink({ icon, label, href }: { icon: IconName; label: s
       data-size="md"
       data-state="rest"
       aria-label={label}
+      aria-current={current ? "page" : undefined}
       href={href}
-      target="_blank"
-      rel="noreferrer"
+      target={external ? "_blank" : undefined}
+      rel={external ? "noreferrer" : undefined}
     >
       <Icon name={icon} />
     </a>

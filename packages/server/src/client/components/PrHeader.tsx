@@ -43,7 +43,7 @@ export function PrHeader({
       {density === "full" ? (
         <ButtonLink variant="secondary" size="md" label="Open on GitHub" href={url} external />
       ) : (
-        <IconButtonLink icon="link-external" label="Open on GitHub" href={url} />
+        <IconButtonLink icon="link-external" label="Open on GitHub" href={url} external />
       )}
     </header>
   );
