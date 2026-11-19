@@ -1,6 +1,6 @@
 // The PR list in Chrome against the real Worker in wrangler's local runtime, through the Access stand-in's browser door
-// (plan P2.1–P2.4, P2.7–P2.9): what the list reads and when, a pass superseded while it pages, the repository menu, the
-// version notice under an earlier deploy's bundle, and the paths that are no page.
+// (plan P2.1–P2.4, P2.7–P2.9, P5.1, P5.2): what the list reads and when, a pass superseded while it pages, the
+// repository menu, the agent pool, the version notice under an earlier deploy's bundle, and the paths that are no page.
 
 import { LedgerPage, MAX_TITLE_CHARS, MAX_URL_CHARS, type PrRef } from "@prq/protocol";
 import type { Page } from "playwright";
@@ -229,6 +229,42 @@ describe("the repository menu", () => {
       `[...document.querySelectorAll('[data-component="PrRow"] .repo-cell')].map((cell) => cell.textContent)`,
     );
     expect(repositories).toEqual(["kopje", "prq"]);
+  });
+});
+
+describe("the agent pool", () => {
+  test("opening the popover reads the agents once, listing one holding a claim and one in a wait; a contact with it closed reads nothing (P5.1, P5.2)", async () => {
+    const worker = stack.worker();
+    // desk is present when the push comes, so the session is local, and desk claims its analysis.
+    expect((await stack.run(["wait", "--agent-id", "desk", "--timeout", "0"])).code).toBe(2);
+    await push(worker, pr("prq", 1), sha("a"));
+    expect((await stack.run(["claim", "--agent-id", "desk"])).code).toBe(0);
+    stack.start(["wait", "--agent-id", "laptop", "--timeout", "60"]);
+    await stack.waiting("laptop");
+    const agentReads = () => stack.access().door.log.filter((entry) => entry.path.startsWith("/api/agents"));
+
+    const page = browser.page();
+    await page.goto(door("/"));
+    await pool(page, "2 local agents").waitFor();
+    const status = page.locator('button[data-component="PoolStatus"]');
+    await status.click();
+    const agents = page.locator('[data-component="PoolPopover"] .agent-text');
+    await agents.nth(1).waitFor();
+    expect(await agents.allTextContents()).toEqual([
+      "deskHolding a job · seen now",
+      "laptopWaiting for work · seen now",
+    ]);
+    expect(agentReads()).toMatchObject([{ path: "/api/agents", status: 200 }]);
+
+    await page.keyboard.press("Escape");
+    await page.locator('[data-component="PoolPopover"]').waitFor({ state: "hidden" });
+    await vi.waitFor(async () => expect(await status.getAttribute("aria-expanded")).toBe("false"));
+    // desk's wait returns its own claimed job at once: a contact.
+    expect((await stack.run(["wait", "--agent-id", "desk", "--timeout", "0"])).code).toBe(0);
+    // A stored entry's view comes after any the contact made; with the popover closed, neither reads the agents.
+    await push(worker, pr("prq", 2), sha("b"));
+    await page.locator('a.title[href="/pr/shuymn/prq/2"]').waitFor();
+    expect(agentReads()).toHaveLength(1);
   });
 });
 
