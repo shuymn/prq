@@ -9,10 +9,10 @@
 // process.
 
 import { randomBytes } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 
@@ -618,19 +618,23 @@ async function idleCheck(host: string, ignoreRunning: boolean): Promise<string> 
   }
 }
 
-// The environment of the clone's steps: this process's, less the build's overrides.
-function stepEnv(): NodeJS.ProcessEnv {
+// The environment of the clone's steps: this process's, less the build's overrides, with path (the pinned tools first)
+// as its PATH when given.
+function stepEnv(path?: string): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const name of BUILD_OVERRIDES) {
     delete env[name];
+  }
+  if (path !== undefined) {
+    env["PATH"] = path;
   }
   return env;
 }
 
 // A step in the clone, its output shown, refused when it fails.
-async function step(name: string, command: string, args: readonly string[], cwd: string): Promise<void> {
+async function step(name: string, command: string, args: readonly string[], cwd: string, path?: string): Promise<void> {
   print(`deploy: ${name}`);
-  const outcome = await run(name, command, args, { cwd, env: stepEnv(), output: "show", timeoutMs: stepMs });
+  const outcome = await run(name, command, args, { cwd, env: stepEnv(path), output: "show", timeoutMs: stepMs });
   if (outcome.timedOut) {
     throw new Refusal(`${name} did not finish within ${Math.round(stepMs / 1000)} s and was stopped`);
   }
@@ -730,9 +734,42 @@ function configCheck(clone: string): void {
   print(`configuration: the Worker ${WORKER}, with workers.dev and preview URLs off and no route`);
 }
 
-// The clone's own wrangler, as its frozen install put it, run by the clone's Node (mise exec).
-function cloneWrangler(clone: string): [string, string[]] {
-  return wranglerArgv("node", () => {
+// The clone's pinned Node and pnpm as mise resolves them there, and a PATH with their directories first. The install,
+// the build and the upload run them directly, not through mise, so mise's configuration (an [env], a MISE_ENV
+// variant's file, a parent directory's) changes none of their environments.
+type Tools = { node: string; pnpm: string; path: string };
+
+async function pinnedTools(clone: string): Promise<Tools> {
+  const which = async (tool: string): Promise<string> => {
+    const name = `mise which ${tool}`;
+    const outcome = await run(name, "mise", ["which", tool], {
+      cwd: clone,
+      env: stepEnv(),
+      output: "keep",
+      timeoutMs: stepMs,
+    });
+    if (!succeeded(outcome)) {
+      throw new Refusal(
+        outcome.timedOut
+          ? `${name} did not finish within ${Math.round(stepMs / 1000)} s and was stopped`
+          : `${name} failed (${exited(outcome)})`,
+      );
+    }
+    const path = outcome.stdout.trim();
+    if (!isAbsolute(path) || (await stat(path).catch(() => null))?.isFile() !== true) {
+      throw new Refusal(`${name} named no file by its absolute path: the clone's ${tool} is not installed`);
+    }
+    return path;
+  };
+  const node = await which("node");
+  const pnpm = await which("pnpm");
+  const path = [dirname(node), dirname(pnpm), ...(process.env["PATH"] ?? "").split(delimiter)];
+  return { node, pnpm, path: path.filter((each) => each !== "").join(delimiter) };
+}
+
+// The clone's own wrangler, as its frozen install put it, run by the clone's Node.
+function cloneWrangler(clone: string, node: string): [string, string[]] {
+  return wranglerArgv(node, () => {
     try {
       return createRequire(join(clone, "packages", "server", "package.json")).resolve("wrangler");
     } catch {
@@ -1005,9 +1042,10 @@ async function release(tag: string, flags: Flags): Promise<number> {
   const sha = await gitOutput(clone, ["rev-parse", "--verify", "HEAD"]);
   await step("mise trust", "mise", ["trust"], clone);
   await step("mise install", "mise", ["install"], clone);
-  await step("pnpm install", "mise", ["exec", "--", "pnpm", "install", "--frozen-lockfile"], clone);
+  const tools = await pinnedTools(clone);
+  await step("pnpm install", tools.pnpm, ["install", "--frozen-lockfile"], clone, tools.path);
   await treeCheck(clone, sha, "before the build");
-  await step("the web UI's build", "mise", ["exec", "--", "pnpm", "--dir", "packages/server", "run", "build"], clone);
+  await step("the web UI's build", tools.pnpm, ["--dir", "packages/server", "run", "build"], clone, tools.path);
   await publicationCheck(clone, {
     PRQ_HOST: host,
     CLOUDFLARE_ACCOUNT_ID: accountId,
@@ -1111,7 +1149,7 @@ async function release(tag: string, flags: Flags): Promise<number> {
   await record.save();
 
   const output = join(dir, "wrangler-output.jsonl");
-  const [program, base] = cloneWrangler(clone);
+  const [program, base] = cloneWrangler(clone, tools.node);
   onInterrupt(async (signal) => {
     record.data.upload = { exit: null, signal, timedOut: false, versionId: await deployedVersion(output) };
     record.data.outcome = `stopped by ${signal} during the upload; what is live is unread`;
@@ -1120,11 +1158,8 @@ async function release(tag: string, flags: Flags): Promise<number> {
   });
   const uploaded = await run(
     "wrangler deploy",
-    "mise",
+    program,
     [
-      "exec",
-      "--",
-      program,
       ...base,
       "deploy",
       `--config=${join(clone, "packages", "server", "wrangler.jsonc")}`,
@@ -1140,7 +1175,7 @@ async function release(tag: string, flags: Flags): Promise<number> {
     ],
     {
       cwd: join(clone, "packages", "server"),
-      env: { ...wranglerEnv(accountId), WRANGLER_OUTPUT_FILE_PATH: output },
+      env: { ...wranglerEnv(accountId), PATH: tools.path, WRANGLER_OUTPUT_FILE_PATH: output },
       output: "show",
       timeoutMs: uploadMs,
       foreground: true,

@@ -38,6 +38,8 @@ const API_TOKEN_REFRESHED = "sentinel-api-token-refreshed-3a7c51";
 const API_KEY = { key: "sentinel-api-key-0d4c81", email: "owner@sentinel-mail.example" };
 // Whether a stand-in's environment holds any of them, as each stand-in records it.
 const CREDENTIAL_IN_ENV = `Object.values(process.env).some((value) => [${JSON.stringify(API_TOKEN)}, ${JSON.stringify(API_TOKEN_REFRESHED)}, ${JSON.stringify(API_KEY.key)}].some((secret) => value?.includes(secret)))`;
+// The names of the variables mise's [env] sets (FAKE_MISE_ENV) that a stand-in's environment holds as mise sets them.
+const FROM_MISE = `Object.entries(JSON.parse(process.env.FAKE_MISE_ENV ?? "{}")).filter(([name, value]) => process.env[name] === value).map(([name]) => name)`;
 const APPLICATION = "prq-workspace";
 // The tag's Worker configuration: what the deploy checks of it.
 const WORKER_CONFIG = '{ "name": "prq", "workers_dev": false, "preview_urls": false }\n';
@@ -64,7 +66,8 @@ for (const name of ["CLOUDFLARE_ACCOUNT_ID", "WRANGLER_OUTPUT_FILE_PATH", "WRANG
   env[name] = process.env[name] ?? null;
 }
 const credentialInEnv = ${CREDENTIAL_IN_ENV};
-appendFileSync(process.env.FAKE_WRANGLER_LOG, JSON.stringify({ call, args, cwd: process.cwd(), ppid: process.ppid, env, names: Object.keys(process.env), config, credentialInEnv }) + "\\n");
+const fromMise = ${FROM_MISE};
+appendFileSync(process.env.FAKE_WRANGLER_LOG, JSON.stringify({ call, args, cwd: process.cwd(), ppid: process.ppid, env, names: Object.keys(process.env), fromMise, config, credentialInEnv }) + "\\n");
 const statePath = process.env.FAKE_WRANGLER_STATE;
 const state = JSON.parse(readFileSync(statePath, "utf8"));
 const save = () => writeFileSync(statePath, JSON.stringify(state));
@@ -158,30 +161,46 @@ if (behavior === "hang") {
 }
 `;
 
-// mise: trust and install recorded, exec runs what follows -- with this terminal and exits as it does.
+// mise: every call recorded. which prints a pinned tool's path: this Node, and the pnpm in pinned/ beside this file, or
+// what FAKE_MISE_WHICH gives the tool in their place (null: it fails; "hang": it never ends). exec runs what follows --
+// with this terminal, in the environment it was given with its [env] (FAKE_MISE_ENV: what it adds and what it
+// replaces), and exits as it does.
 const FAKE_MISE = `#!${process.execPath}
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const args = process.argv.slice(2);
 const credentialInEnv = ${CREDENTIAL_IN_ENV};
 appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "mise", args, cwd: process.cwd(), pid: process.pid, ppid: process.ppid, credentialInEnv }) + "\\n");
 if (args[0] === "exec") {
   const rest = args.slice(args.indexOf("--") + 1);
-  const child = spawn(rest[0], rest.slice(1), { stdio: "inherit" });
+  const child = spawn(rest[0], rest.slice(1), { stdio: "inherit", env: { ...process.env, ...JSON.parse(process.env.FAKE_MISE_ENV ?? "{}") } });
   child.on("exit", (code) => process.exit(code ?? 1));
+} else if (args[0] === "which") {
+  const paths = { node: process.execPath, pnpm: join(dirname(process.argv[1]), "pinned", "pnpm"), ...JSON.parse(process.env.FAKE_MISE_WHICH ?? "{}") };
+  const path = paths[args[1]] ?? null;
+  if (path === "hang") {
+    setInterval(() => {}, 1000);
+  } else if (path === null) {
+    console.error("mise ERROR " + args[1] + " is not a mise bin");
+    process.exit(1);
+  } else {
+    console.log(path);
+  }
 }
 `;
 
-// pnpm: recorded with the build's overrides it was given; FAKE_PNPM_CHANGE names the command ("install" or "build")
-// that changes a tracked file of the clone.
+// pnpm: recorded with its path, the build's overrides it was given and what of mise's [env] it holds; FAKE_PNPM_CHANGE
+// names the command ("install" or "build") that changes a tracked file of the clone.
 const FAKE_PNPM = `#!${process.execPath}
 import { appendFileSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const env = { PRQ_BUILD_VERSION: process.env.PRQ_BUILD_VERSION ?? null, PRQ_BUILD_PREFIX: process.env.PRQ_BUILD_PREFIX ?? null };
 const credentialInEnv = ${CREDENTIAL_IN_ENV};
-appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "pnpm", args, cwd: process.cwd(), env, credentialInEnv }) + "\\n");
+const fromMise = ${FROM_MISE};
+appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "pnpm", path: process.argv[1], args, cwd: process.cwd(), env, fromMise, credentialInEnv }) + "\\n");
 if (process.env.FAKE_PNPM_CHANGE === (args[0] === "install" ? "install" : "build")) {
   writeFileSync("packages/cli/package.json", JSON.stringify({ version: "0.1.0", changed: true }) + "\\n");
 }
@@ -202,16 +221,20 @@ const WranglerCall = v.object({
   ppid: v.number(),
   env: v.record(v.string(), v.nullable(v.string())),
   names: v.array(v.string()),
+  fromMise: v.array(v.string()),
   config: v.nullable(v.string()),
   credentialInEnv: v.boolean(),
 });
 type WranglerCall = v.InferOutput<typeof WranglerCall>;
 const ToolCall = v.object({
   tool: v.string(),
+  path: v.optional(v.string()),
   args: v.array(v.string()),
   cwd: v.string(),
+  pid: v.optional(v.number()),
   ppid: v.optional(v.number()),
   env: v.optional(v.record(v.string(), v.nullable(v.string()))),
+  fromMise: v.optional(v.array(v.string())),
   credentialInEnv: v.boolean(),
 });
 type ToolCall = v.InferOutput<typeof ToolCall>;
@@ -322,10 +345,13 @@ function checkRuns(sha: string): string {
 // One stand-in each, run once here: macOS checks a new executable on its first run, which can take seconds.
 beforeAll(async () => {
   bin = await fixtureRoot("prq-deploy-bin-");
+  await mkdir(join(bin, "pinned"));
+  // pnpm on PATH as well as the pinned one, as a machine with another pnpm has it.
   for (const [name, text] of [
     ["wrangler", FAKE_WRANGLER],
     ["mise", FAKE_MISE],
     ["pnpm", FAKE_PNPM],
+    ["pinned/pnpm", FAKE_PNPM],
     ["gh", FAKE_GH],
   ] as const) {
     await writeFile(join(bin, name), text, { mode: 0o700 });
@@ -937,24 +963,29 @@ describe("deploy <tag>", () => {
     expect(result.code).toBe(0);
     const clone = /clone: (\S+) \(kept\)/.exec(result.output)?.[1] ?? "";
     expect(clone.startsWith(join(root, "tmp", `prq-deploy-${TAG}-`))).toBe(true);
-    const tools = (await toolCalls()).map(({ tool, args, cwd }) => ({ tool, args, cwd }));
-    expect(tools.slice(0, -1)).toEqual([
-      { tool: "gh", args: ["api", `repos/${REPOSITORY}/commits/${commit}/check-runs?check_name=Check`], cwd: clone },
-      { tool: "mise", args: ["trust"], cwd: clone },
-      { tool: "mise", args: ["install"], cwd: clone },
-      { tool: "mise", args: ["exec", "--", "pnpm", "install", "--frozen-lockfile"], cwd: clone },
-      { tool: "pnpm", args: ["install", "--frozen-lockfile"], cwd: clone },
-      { tool: "mise", args: ["exec", "--", "pnpm", "--dir", "packages/server", "run", "build"], cwd: clone },
-      { tool: "pnpm", args: ["--dir", "packages/server", "run", "build"], cwd: clone },
+    // The install and the build by the pinned pnpm mise names, run directly; the upload by the clone's wrangler (the
+    // stand-in here), from its server package, not through mise either.
+    const tools = (await toolCalls()).map(({ tool, path, args, cwd }) => ({ tool, path, args, cwd }));
+    const pnpm = join(bin, "pinned", "pnpm");
+    expect(tools).toEqual([
+      {
+        tool: "gh",
+        path: undefined,
+        args: ["api", `repos/${REPOSITORY}/commits/${commit}/check-runs?check_name=Check`],
+        cwd: clone,
+      },
+      { tool: "mise", path: undefined, args: ["trust"], cwd: clone },
+      { tool: "mise", path: undefined, args: ["install"], cwd: clone },
+      { tool: "mise", path: undefined, args: ["which", "node"], cwd: clone },
+      { tool: "mise", path: undefined, args: ["which", "pnpm"], cwd: clone },
+      { tool: "pnpm", path: pnpm, args: ["install", "--frozen-lockfile"], cwd: clone },
+      { tool: "pnpm", path: pnpm, args: ["--dir", "packages/server", "run", "build"], cwd: clone },
     ]);
     expect(await readFile(join(root, "hook-ran"), "utf8").catch(() => null)).toBeNull();
     expect((await toolCalls()).find((each) => each.args.includes("build") && each.tool === "pnpm")?.env).toEqual({
       PRQ_BUILD_VERSION: null,
       PRQ_BUILD_PREFIX: null,
     });
-    // The upload with the clone's tools, from its server package.
-    expect(tools.at(-1)?.args.slice(0, 4)).toEqual(["exec", "--", join(bin, "wrangler"), "deploy"]);
-    expect(tools.at(-1)?.cwd).toBe(join(clone, "packages", "server"));
     const [call] = await deployCalls();
     const { dir, data } = await onlyRecord();
     expect(call?.args).toEqual([
@@ -1094,6 +1125,64 @@ describe("deploy <tag>", () => {
       expect(call.names).toEqual(expect.arrayContaining(Object.keys(kept)));
       expect(call.names.filter((name) => name in left || name.startsWith("PRQ_"))).toEqual([]);
     }
+  });
+
+  it("runs the install, the build and the upload with the clone's pinned tools, out of mise's configuration", async () => {
+    await released();
+    // mise's [env], as a global or a project's configuration would set it over the environment mise is given: each
+    // step would gain a variable (a build input, another Worker's name) and have one replaced (the locale the terminal
+    // gives, the account the deploy gives wrangler).
+    env["LANG"] = "en_US.UTF-8";
+    env["FAKE_MISE_ENV"] = JSON.stringify({
+      PRQ_BUILD_VERSION: "v9.9.9",
+      WRANGLER_CI_OVERRIDE_NAME: "sentinel-other-worker",
+      LANG: "sentinel-mise-locale",
+      CLOUDFLARE_ACCOUNT_ID: OTHER_ACCOUNT,
+    });
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(0);
+    const steps = (await toolCalls()).filter((call) => call.tool === "pnpm");
+    expect(steps.map((call) => call.args[0])).toEqual(["install", "--dir"]);
+    const [upload] = await deployCalls();
+    for (const call of [...steps, upload]) {
+      expect(call?.fromMise).toEqual([]);
+    }
+    expect(upload?.env).toMatchObject({ CLOUDFLARE_ACCOUNT_ID: ACCOUNT });
+  });
+
+  it.each([
+    ["fails", { pnpm: null }, "mise which pnpm failed (exit 1)"],
+    [
+      "names no installed file",
+      { node: "node" },
+      "mise which node named no file by its absolute path: the clone's node is not installed",
+    ],
+  ])("refuses the release, before the install, when mise %s for a pinned tool", async (_what, which, line) => {
+    await released();
+    env["FAKE_MISE_WHICH"] = JSON.stringify(which);
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(`deploy: ${line}\n`);
+    expect((await toolCalls()).filter((call) => call.tool === "pnpm")).toEqual([]);
+    expect(await deployCalls()).toEqual([]);
+  });
+
+  it("stops mise which at the end of its bound, and refuses the release", async () => {
+    await released();
+    env["FAKE_MISE_WHICH"] = JSON.stringify({ node: "hang" });
+    settings.stepMs = 8000;
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("deploy: mise which node did not finish within 8 s and was stopped\n");
+    const which = (await toolCalls()).find((call) => call.args[0] === "which");
+    expect(await ended(which?.pid ?? 0)).toBe(true);
+    expect(await deployCalls()).toEqual([]);
   });
 
   it("deploys nothing when the owner does not confirm", async () => {
@@ -1572,8 +1661,8 @@ describe("deploy <tag>", () => {
     const { result } = start([TAG], { answers: ["y"] });
 
     const pids = await hangingPids();
-    const mise = (await toolCalls()).findLast((call) => call.tool === "mise");
-    process.kill(mise?.ppid ?? 0, "SIGTERM");
+    const [upload] = await deployCalls();
+    process.kill(upload?.ppid ?? 0, "SIGTERM");
 
     await result;
     for (const pid of pids) {
@@ -1608,8 +1697,8 @@ describe("deploy <tag>", () => {
     const { result } = start([TAG], { answers: ["y"] });
 
     const pids = await hangingPids();
-    const mise = (await toolCalls()).findLast((call) => call.tool === "mise");
-    process.kill(mise?.ppid ?? 0, "SIGKILL");
+    const [upload] = await deployCalls();
+    process.kill(upload?.ppid ?? 0, "SIGKILL");
     for (const pid of pids) {
       process.kill(pid, "SIGKILL");
     }

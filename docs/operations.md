@@ -284,9 +284,11 @@ or with other credentials than its login: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_A
 Worker), and the OAuth login's `WRANGLER_AUTH_DOMAIN`, `WRANGLER_AUTH_URL`, `WRANGLER_TOKEN_URL`, `WRANGLER_REVOKE_URL`,
 `WRANGLER_CLIENT_ID`, `WRANGLER_API_ENVIRONMENT` and `WRANGLER_CF_AUTHORIZATION_TOKEN`. wrangler then runs with an
 environment built for it, so a variable this list misses does not reach it either: the paths, user and shell, the temp
-directory, the locale and the terminal, `XDG_*` (where its login is kept), `MISE_*` (the upload runs through mise), and
-Docker's settings (`DOCKER_*`, `WRANGLER_DOCKER_BIN`, `WRANGLER_DOCKER_HOST`). Each call is given an env file that holds
-nothing, in place of the `.env` and `.env.local` wrangler would load from its working directory.
+directory, the locale and the terminal, `XDG_*` (where its login is kept), and Docker's settings (`DOCKER_*`,
+`WRANGLER_DOCKER_BIN`, `WRANGLER_DOCKER_HOST`). Each call is given an env file that holds nothing, in place of the `.env`
+and `.env.local` wrangler would load from its working directory. A release's install, build and upload do not run
+through mise: mise only names the clone's pinned Node and pnpm (`mise which`), which the deploy then runs directly, so
+nothing mise's configuration sets (an `[env]`, global or a project's, or a `MISE_ENV` variant's) reaches them.
 
 - `--bootstrap`: once, before prq's first upload. It deploys an inert Worker named `prq` (every request answers 404
   with an `x-prq-bootstrap` header; no assets, Durable Objects or container) with workers.dev and preview URLs off and
@@ -298,9 +300,10 @@ nothing, in place of the `.env` and `.env.local` wrangler would load from its wo
   another Worker's domain on the hostname). In order, it
   1. clones the tag from `origin` into a new directory of the OS temp directory, `prq-deploy-vX.Y.Z-…`, which it prints
      and keeps, running no git hook (neither yours nor a template's);
-  2. runs, in the clone, the release check, `mise trust`, `mise install` (the tag's pinned tools),
-     `pnpm install --frozen-lockfile` and the web UI's build, each stopped after an hour, without `PRQ_BUILD_VERSION`
-     and `PRQ_BUILD_PREFIX` (the browser check's build inputs). Before the build, and again right before the upload, it
+  2. runs, in the clone, the release check, `mise trust`, `mise install` (the tag's pinned tools), `mise which` for the
+     pinned Node and pnpm, then that pnpm's `install --frozen-lockfile` and the web UI's build, each stopped after an
+     hour, without `PRQ_BUILD_VERSION` and `PRQ_BUILD_PREFIX` (the browser check's build inputs), with those tools first
+     on `PATH`. Before the build, and again right before the upload, it
      refuses when the clone's `HEAD` or a tracked file is no longer the commit the release check checked;
   3. refuses when the tag's tracked files hold the value of `PRQ_HOST`, `CLOUDFLARE_ACCOUNT_ID`, `ACCESS_TEAM_DOMAIN`
      (its hostname) or `ACCESS_AUD`, naming the variable and the file, never the value, or when its `wrangler.jsonc`

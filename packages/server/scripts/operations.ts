@@ -103,10 +103,9 @@ export function refuseOverrides(): void {
 }
 
 // What wrangler's environment keeps of this process's: what a program needs to run here (the paths, the user, the
-// shell, the temp directory, the locale and the terminal), the directories wrangler keeps its login in and mise its
-// tools and trust (XDG_*, MISE_*: the upload runs through mise), and the Docker settings the image's build and push
-// take. Nothing else reaches wrangler, so a variable that would redirect it and is missing from OVERRIDES does not
-// either.
+// shell, the temp directory, the locale and the terminal), the directories wrangler keeps its login in (XDG_*), and the
+// Docker settings the image's build and push take. Nothing else reaches wrangler, so a variable that would redirect it
+// and is missing from OVERRIDES does not either.
 const KEPT = [
   "PATH",
   "HOME",
@@ -124,7 +123,7 @@ const KEPT = [
   "WRANGLER_DOCKER_BIN",
   "WRANGLER_DOCKER_HOST",
 ];
-const KEPT_PREFIXES = ["LC_", "XDG_", "MISE_", "DOCKER_"];
+const KEPT_PREFIXES = ["LC_", "XDG_", "DOCKER_"];
 
 // A refusal: each line names a file or a variable, never a value.
 export class Refusal extends Error {
