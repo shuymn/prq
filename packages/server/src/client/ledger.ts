@@ -1,10 +1,10 @@
 // The PR list's rows (plan §1.5): GET /api/ledger a page at a time, under one generation that covers paging,
 // refreshes and filters. A pass reads from no cursor through the requested depth, stopping at the last page, and then
-// replaces the rows at once; the rows shown stay until then. The depth only grows until the filter changes, which
-// resets it to one: a continuation (the next page, read into the rows shown) raises it to the pages it reaches for,
-// so a pass that replaces another reads as deep. A new generation (a filter change, a refresh the Hub's view asks for,
-// Try again) aborts the requests in flight and discards whatever they bring: a result is adopted only while its
-// generation is current.
+// replaces the rows at once; the rows shown stay until then, and no next page continues them until the pass gives its
+// cursor. The depth only grows until the filter changes, which resets it to one: a continuation (the next page, read
+// into the rows shown) raises it to the pages it reaches for, so a pass that replaces another reads as deep. A new
+// generation (a filter change, a refresh the Hub's view asks for, Try again) aborts the requests in flight and discards
+// whatever they bring: a result is adopted only while its generation is current.
 
 import { type HubView, LedgerPage, LedgerQuery, type LedgerRow } from "@prq/protocol";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
@@ -38,7 +38,8 @@ export type LedgerSnapshot = {
   // The rows shown and the filter they answer, null until a pass first completes.
   rows: LedgerRow[] | null;
   filter: ListFilter;
-  // Whether a later page exists, and whether it is being read into the rows.
+  // Whether the next page can be read (not while a pass that replaces the rows has yet to give its cursor), and whether
+  // it is being read into the rows.
   more: boolean;
   loadingMore: boolean;
   // A failed read: the first pass ("load", nothing to show) or a later one ("refresh", the rows kept).
@@ -88,8 +89,8 @@ export class LedgerReader {
     this.#controller = new AbortController();
     const generation = ++this.#generation;
     this.#cursor = null;
-    if (this.#snapshot.loadingMore) {
-      this.#update({ loadingMore: false });
+    if (this.#snapshot.more || this.#snapshot.loadingMore) {
+      this.#update({ more: false, loadingMore: false });
     }
     void this.#pass(generation, this.#controller.signal, this.#filter, this.#depth);
   }

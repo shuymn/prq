@@ -1,9 +1,9 @@
-// The PR list over a fetch the test answers (plan P2.5–P2.7): its failures and Try again, its empty states, and how it
-// names repositories and reads them for the menu.
+// The PR list over a fetch the test answers (plan P2.5–P2.7): its failures and Try again, its empty states, the next
+// page after a refresh, and how it names repositories and reads them for the menu.
 
 import { type HubView, LedgerRow } from "@prq/protocol";
 import * as v from "valibot";
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import { render } from "vitest-browser-react";
 import { page } from "vitest/browser";
 
@@ -76,6 +76,12 @@ const controls = () => [
 ];
 const firstRepository = () => page.getByRole("table").getByRole("row").nth(1).getByRole("cell").first();
 
+// Each test starts from the default filter, at the top of the page.
+beforeEach(() => {
+  localStorage.clear();
+  window.scrollTo(0, 0);
+});
+
 describe("the PR list's failures", () => {
   test("a failed first pass shows the load failure, and Try again reads again", async () => {
     const { fetch } = await list(hubOf(view()));
@@ -106,6 +112,26 @@ describe("the PR list's failures", () => {
     (await fetch.request(2)).respond({ rows: ROWS.slice(1), nextCursor: null });
     await expect.element(page.getByText("Couldn't refresh pull requests")).not.toBeInTheDocument();
     expect(titles()).toEqual(["Render tables"]);
+  });
+});
+
+describe("the PR list's next page", () => {
+  test("in view while a refresh reads, is read once the refresh gives its cursor, without scrolling", async () => {
+    const many = Array.from({ length: 30 }, (_, index) => row("shuymn/prq", index + 1, `Pull request ${index + 1}`));
+    const { fetch, rerender } = await list(hubOf(view()));
+    (await fetch.request(0)).respond({ rows: many, nextCursor: "first" });
+    await expect.element(page.getByRole("link", { name: "Pull request 30" })).toBeInTheDocument();
+    expect(fetch.requests).toHaveLength(1);
+
+    // A refresh, and the end of the rows comes into view while it reads.
+    await rerender(hubOf(view({ ledgerVersion: 2 })));
+    const replacement = await fetch.request(1);
+    window.scrollTo(0, document.documentElement.scrollHeight);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    replacement.respond({ rows: many, nextCursor: "second" });
+    await expect
+      .poll(() => fetch.requests.map(path))
+      .toEqual(["/api/ledger?state=open", "/api/ledger?state=open", "/api/ledger?state=open&cursor=second"]);
   });
 });
 
