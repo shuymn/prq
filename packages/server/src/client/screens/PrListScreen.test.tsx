@@ -221,6 +221,21 @@ describe("the PR list's repositories", () => {
     await expect.poll(menuItems).toEqual(["All repositories", "one/app", "two/app"]);
   });
 
+  test("a menu longer than the window stays in it and scrolls to its last repository, which can be chosen", async () => {
+    const { fetch } = await list(hubOf(view({ owners: 1 })));
+    (await fetch.request(0)).respond({ rows: ROWS, nextCursor: null });
+    await repoTrigger().click();
+    const repositories = Array.from({ length: 25 }, (_, index) => ({ fullName: `shuymn/repository-${index + 1}` }));
+    (await fetch.request(1)).respond({ rows: repositories, nextCursor: null });
+    const last = page.getByRole("menuitemradio", { name: "repository-25" });
+    await expect.element(last).toBeInTheDocument();
+    expect(document.querySelector(".menu")?.getBoundingClientRect().bottom).toBeLessThanOrEqual(innerHeight);
+
+    await last.click();
+    await expect.element(page.getByRole("button", { name: "repository-25" })).toBeVisible();
+    expect(path(await fetch.request(2))).toBe("/api/ledger?state=open&repo=shuymn%2Frepository-25");
+  });
+
   test("opening the menu reads every page of repositories", async () => {
     const { fetch } = await list(hubOf(view({ owners: 2 })));
     (await fetch.request(0)).respond({ rows: ROWS, nextCursor: null });

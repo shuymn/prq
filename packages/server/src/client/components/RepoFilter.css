@@ -30,16 +30,21 @@
       }
     }
 
-    /* The menu hangs below the button, aligned to its end, and flips where it would not fit. */
+    /* The menu hangs below the button, aligned to its end, and flips where it would not fit. Where no side holds all
+       of it, it hangs below as high as the room there, and scrolls. */
     & .menu {
       position-area: block-end span-inline-start;
       position-try-fallbacks:
         flip-block,
         flip-inline,
-        flip-block flip-inline;
+        flip-block flip-inline,
+        --menu-scrolls,
+        --menu-scrolls flip-inline;
       inset: auto;
       box-sizing: border-box;
       inline-size: var(--size-popover);
+      overflow-y: auto;
+      overscroll-behavior: contain;
       margin: 0;
       margin-block: var(--gap-tight);
       padding: var(--inset-card);
@@ -95,5 +100,10 @@
       white-space: nowrap;
       text-overflow: ellipsis;
     }
+  }
+
+  @position-try --menu-scrolls {
+    position-area: block-end span-inline-start;
+    max-block-size: stretch;
   }
 }
