@@ -257,14 +257,15 @@ function conversationOf(session: Session, view: PrSessionView, slot: Slot | null
     const runs = session.runs
       .filter((run) => run.metadata.kind === "answer" && run.metadata.questionId === question.id)
       .toSorted((a, b) => a.run - b.run);
-    items.push(
-      ...answers
-        .filter((answer) => answer.metadata?.kind === "answer" && answer.metadata.questionId === question.id)
-        .map(storedAnswer),
-      ...runs.map((run) => streamedAnswer(run, job, view.owner)),
+    const stored = answers.filter(
+      (answer) => answer.metadata?.kind === "answer" && answer.metadata.questionId === question.id,
     );
-    // A turn under way before its first text, or a local claim, which streams nothing.
-    if (job !== undefined && RUNNING.has(job.state) && runs.every((run) => run.done)) {
+    items.push(...stored.map(storedAnswer), ...runs.map((run) => streamedAnswer(run, job, view.owner)));
+    // A turn under way before its first text, or a local claim, which streams nothing: none once a run has streamed
+    // or the job's result is stored, though the view may still say running; an earlier run's incomplete text does
+    // not end it.
+    const result = stored.some((answer) => answer.metadata?.incomplete === undefined);
+    if (job !== undefined && RUNNING.has(job.state) && runs.length === 0 && !result) {
       items.push({
         kind: "answer",
         id: job.jobId,

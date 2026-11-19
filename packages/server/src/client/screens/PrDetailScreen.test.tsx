@@ -555,6 +555,22 @@ describe("streamed text", () => {
     await vi.advanceTimersByTimeAsync(100);
     await nextTask();
     expect(shown()).toEqual(["Why?", "Run one", "Run two, longer"]);
+
+    // Run 2's result is stored before the view says the job is done: one answer for the run, none still answering.
+    reopened.receive(
+      listFrame([
+        question("q1", "Why?"),
+        {
+          ...answer("j1", "q1", "Run one"),
+          id: "answer-j1-1",
+          metadata: { ...answerRun(1), incomplete: { reason: "failed" } },
+        },
+        { ...answer("j1", "q1", "Run two, stored"), metadata: answerRun(2) },
+      ]),
+    );
+    await until(() => shown().includes("Run two, stored"));
+    expect(shown()).toEqual(["Why?", "Run one", "Run two, stored"]);
+    expect(document.querySelectorAll("[data-component=Message][data-role=answer]")).toHaveLength(2);
   });
 });
 
