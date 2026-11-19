@@ -20,7 +20,8 @@ export type Owner = v.InferOutput<typeof Owner>;
 // A job as the UI shows it. A job being finalized shows as running. since is when its current claim was made (for a
 // claimed or running job), stalled whether that claim has had no result for 60 minutes (by the session's clock when
 // the view was made), failure the reason a failed job gives. rev is the job's revision, which every change of the job
-// advances; a retry names the revision it was made from.
+// advances; a retry names the revision it was made from. run is the job's current run, from 1, which a retry advances:
+// the run a result's metadata names.
 export const JobView = v.object({
   jobId: v.string(),
   target: JobTarget,
@@ -33,6 +34,7 @@ export const JobView = v.object({
   createdAt: v.number(),
   updatedAt: v.number(),
   rev: v.number(),
+  run: v.number(),
 });
 export type JobView = v.InferOutput<typeof JobView>;
 

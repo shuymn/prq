@@ -1,6 +1,7 @@
-// What the PR detail shows of a session (plan §1.6, §1.7, §1.10): the header, the versions and the shown summary, the
-// conversation with each question's state and answers, the rail's jobs, the composer's hold and context line, and the
-// connection. Pure: the screen and the gallery derive the same page from the same inputs.
+// What the PR detail shows of a session (plan §1.6, §1.7, §1.9, §1.10): the header, the versions and the shown
+// summary with a newer analysis's stall or failure, the conversation with each question's state and answers, the
+// rail's jobs, each job's Retry, the composer's hold and context line, and the connection. Pure: the screen and the
+// gallery derive the same page from the same inputs.
 
 import type { HubView, JobView, MessageMetadata, Owner, PrSessionView } from "@prq/protocol";
 
@@ -9,10 +10,14 @@ import type { ConnectionState } from "../components/ConnectionBanner.tsx";
 import type { JobRowState, JobTargetLabel } from "../components/JobRow.tsx";
 import type { AnswerState, QuestionState } from "../components/Message.tsx";
 import type { PrState } from "../components/PrStateLabel.tsx";
+import type { RetryState } from "../components/retry.tsx";
 import type { VersionStatus } from "../components/VersionItem.tsx";
 import type { Version } from "../components/VersionMenu.tsx";
 import type { Connection, RunText, Session, StoredMessage } from "../session.ts";
 import { failureOf, type Slot } from "../slots.ts";
+
+// A job's Retry: the job and the revision shown, which the retry names, and its state.
+export type RetryControl = { jobId: string; rev: number; state: RetryState };
 
 export type DetailInput = {
   session: Session;
@@ -38,19 +43,22 @@ export type QuestionItem = {
   failure?: "not-sent" | "unconfirmed";
 };
 
+// `run`: the job run it is the text of, when known.
 export type AnswerItem = {
   kind: "answer";
   id: string;
+  run: number | null;
   state: AnswerState;
   text: string;
   running: string | null;
   reason?: string;
+  retry: RetryControl | null;
   sha: string | null;
   model: string | null;
   tokens: number | null;
 };
 
-// `since`: a running job's start, from which the rail gives its elapsed time.
+// `since`: a running or possibly stalled job's start, from which the rail gives its elapsed time.
 export type JobItem = {
   jobId: string;
   state: JobRowState;
@@ -58,6 +66,7 @@ export type JobItem = {
   meta: string;
   since: number | null;
   at: string | null;
+  retry: RetryControl | null;
 };
 
 export type DetailContent = {
@@ -65,6 +74,10 @@ export type DetailContent = {
   shown: Version | null;
   // A newer head being analyzed while another version is shown.
   summarizing: string | null;
+  // The newest analysis, possibly stalled: its head, its agent and the claim's start.
+  stalled: { sha: string; agent: string; since: number; retry: RetryControl | null } | null;
+  // The newest analysis, failed: its head, why, and the head of the summary shown instead of it.
+  failed: { sha: string; reason: string; shown: string | null; retry: RetryControl | null } | null;
   summary: SummaryModel;
   conversation: (QuestionItem | AnswerItem)[];
   jobs: { active: JobItem[]; done: JobItem[] };
@@ -108,6 +121,20 @@ function runningLine(job: JobView, owner: Owner | null): string {
 // A pending job of a local session waits for an agent when none is present.
 const agentAbsent = (view: PrSessionView, hub: HubView | null) =>
   view.owner === "local" && hub !== null && !hub.localAgentPresent;
+
+// Retry on a claimed job (before and after the stall mark) and a failed one, none on any other: busy while its request
+// is out; after a 409, none until a view of the job's newer revision; after another failure, with the retry error until
+// then (the session ends a mark at that view).
+function retryOf(job: JobView, session: Session): RetryControl | null {
+  if (job.state !== "claimed" && job.state !== "failed") {
+    return null;
+  }
+  const mark = session.retries[job.jobId];
+  if (mark?.phase === "withdrawn") {
+    return null;
+  }
+  return { jobId: job.jobId, rev: job.rev, state: mark?.phase ?? "ready" };
+}
 
 // A cloud result's usage and model; a local agent's result reports neither.
 const tokensOf = (metadata: MessageMetadata | null) => {
@@ -208,9 +235,11 @@ function streamedAnswer(run: RunText, job: JobView | undefined, owner: Owner | n
   return {
     kind: "answer",
     id: `${run.jobId}:${run.run}`,
+    run: run.run,
     state: live ? "streaming" : "complete",
     text: run.text,
     running: live ? runningLine(job, owner) : null,
+    retry: null,
     sha: null,
     model: null,
     tokens: null,
@@ -222,14 +251,49 @@ function storedAnswer(message: StoredMessage): AnswerItem {
   return {
     kind: "answer",
     id: message.id,
+    run: message.metadata?.run ?? null,
     state: reason === undefined ? "complete" : "incomplete",
     text: message.text,
     running: null,
     ...(reason === undefined ? {} : { reason }),
+    retry: null,
     sha: message.metadata?.kind === "answer" ? message.metadata.sha : null,
     model: modelOf(message.metadata),
     tokens: tokensOf(message.metadata),
   };
+}
+
+// What a question's job adds to its answers, by the job's current run. While it runs and that run has neither streamed
+// nor left a stored row (a turn before its first text, or a local claim, which streams nothing), the answering row;
+// an earlier run's text does not end it, and the view may still say running once the run's row is stored. Once it
+// failed, its reason and Retry on that run's text, or where the answer would be when the run left none.
+function jobAnswer(job: JobView, shown: AnswerItem[], session: Session, owner: Owner | null): AnswerItem[] {
+  const current = shown.findLast((answer) => answer.run === job.run);
+  const row = (change: Partial<AnswerItem>): AnswerItem => ({
+    kind: "answer",
+    id: job.jobId,
+    run: job.run,
+    state: "streaming",
+    text: "",
+    running: null,
+    retry: null,
+    sha: null,
+    model: null,
+    tokens: null,
+    ...change,
+  });
+  if (RUNNING.has(job.state)) {
+    return current === undefined ? [row({ running: runningLine(job, owner) })] : [];
+  }
+  if (job.state !== "failed") {
+    return [];
+  }
+  const failure = { state: "incomplete", reason: job.failure ?? "failed", retry: retryOf(job, session) } as const;
+  if (current === undefined) {
+    return [row(failure)];
+  }
+  Object.assign(current, { ...failure, reason: current.reason ?? failure.reason, running: null });
+  return [];
 }
 
 const answerJob = (view: PrSessionView, questionId: string) =>
@@ -276,23 +340,11 @@ function conversationOf(session: Session, view: PrSessionView, slot: Slot | null
     const stored = answers.filter(
       (answer) => answer.metadata?.kind === "answer" && answer.metadata.questionId === question.id,
     );
-    items.push(...stored.map(storedAnswer), ...runs.map((run) => streamedAnswer(run, job, view.owner)));
-    // A turn under way before its first text, or a local claim, which streams nothing: none once a run has streamed
-    // or the job's result is stored, though the view may still say running; an earlier run's incomplete text does
-    // not end it.
-    const result = stored.some((answer) => answer.metadata?.incomplete === undefined);
-    if (job !== undefined && RUNNING.has(job.state) && runs.length === 0 && !result) {
-      items.push({
-        kind: "answer",
-        id: job.jobId,
-        state: "streaming",
-        text: "",
-        running: runningLine(job, view.owner),
-        sha: null,
-        model: null,
-        tokens: null,
-      });
+    const shown = [...stored.map(storedAnswer), ...runs.map((run) => streamedAnswer(run, job, view.owner))];
+    if (job !== undefined) {
+      shown.push(...jobAnswer(job, shown, session, view.owner));
     }
+    items.push(...shown);
   }
   if (slot !== null && !session.messages.some((message) => message.id === slot.id)) {
     const failure = failureOf(slot);
@@ -336,11 +388,11 @@ function jobsOf(session: Session, view: PrSessionView, hub: HubView | null): Det
     const who = by === undefined ? (job.agentId ?? "cloud") : by.kind === "local" ? by.agentId : "cloud";
     const tokens = tokensOf(result?.metadata ?? null);
     const state = jobState(job);
-    const running = runningLine(job, view.owner);
+    // A possibly stalled job names its agent; the rail adds how long the claim has had no result.
     const meta = {
       waiting: job.state === "pending" && agentAbsent(view, hub) ? waitingForAgent(job.updatedAt) : "",
-      running,
-      stalled: running,
+      running: runningLine(job, view.owner),
+      stalled: who,
       failed: [job.failure, who].filter((part) => part !== null).join(" · "),
       done: tokens === null ? who : `${who} · ${count.format(tokens)} tokens`,
     }[state];
@@ -357,8 +409,9 @@ function jobsOf(session: Session, view: PrSessionView, hub: HubView | null): Det
                 question: session.messages.find((message) => message.id === question)?.text ?? "",
               },
         meta,
-        since: state === "running" ? startOf(job, view.owner) : null,
+        since: state === "running" || state === "stalled" ? startOf(job, view.owner) : null,
         at: answered?.kind === "answer" ? answered.sha : null,
+        retry: retryOf(job, session),
       },
     ];
   });
@@ -411,6 +464,25 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
     return { ...base, body: { kind: "unknown" } };
   }
   const { newest, completed, shown } = versionsOf(view, picked);
+  const latest = newest[0];
+  const stalled =
+    latest?.job.state === "claimed" && latest.job.stalled
+      ? {
+          sha: latest.sha,
+          agent: latest.job.agentId ?? "cloud",
+          since: startOf(latest.job, view.owner),
+          retry: retryOf(latest.job, session),
+        }
+      : null;
+  const failed =
+    latest?.job.state === "failed"
+      ? {
+          sha: latest.sha,
+          reason: latest.job.failure ?? "failed",
+          shown: shown === undefined || shown === latest ? null : shown.sha,
+          retry: retryOf(latest.job, session),
+        }
+      : null;
   const newer = newest.find(
     ({ job }) => RUNNING.has(job.state) && shown !== undefined && job.createdAt > shown.job.createdAt,
   );
@@ -429,7 +501,10 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
       refreshFailed: session.refreshFailed,
       versions: newest.map(versionOf),
       shown: shown === undefined ? null : versionOf(shown),
-      summarizing: newer?.sha ?? null,
+      // The line says a newer head is analyzed, or that the newest analysis is possibly stalled.
+      summarizing: stalled === null ? (newer?.sha ?? null) : null,
+      stalled,
+      failed,
       summary: summaryOf(shown, session, view, hub),
       conversation: conversationOf(session, view, slot, hub),
       jobs: jobsOf(session, view, hub),

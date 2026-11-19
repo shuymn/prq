@@ -30,6 +30,7 @@ import { RelativeTime } from "../components/RelativeTime.tsx";
 import { RepoFilter } from "../components/RepoFilter.tsx";
 import { ALL_REPOSITORIES, RepoMenu, type RepoItems } from "../components/RepoMenu.tsx";
 import { RepoMenuItem } from "../components/RepoMenuItem.tsx";
+import { RetryButton, RetryError } from "../components/retry.tsx";
 import { SegmentedControl } from "../components/SegmentedControl.tsx";
 import { Sha } from "../components/Sha.tsx";
 import { Skeleton } from "../components/Skeleton.tsx";
@@ -151,6 +152,7 @@ function DetailState({ data, layout, menuOpen = false }: { data: DetailFixture; 
         unsent={unsent}
         draft={data.draft ?? ""}
         menuOpen={menuOpen}
+        railCollapsed={data.railCollapsed}
       />
     </Frame>
   );
@@ -184,7 +186,7 @@ const VERSIONS = (now: number): Version[] => [
 const JOB_META: Record<JobRowState, string> = {
   waiting: "Waiting for a local agent since 10:02",
   running: "agent-7f3a · running since 10:02 (12 min)",
-  stalled: "agent-7f3a · running since 09:02",
+  stalled: "agent-7f3a · no result after 64 min",
   failed: "Step limit reached · agent-7f3a",
   done: "agent-7f3a · 12,480 tokens",
 };
@@ -216,6 +218,27 @@ function detailEntries(): Entry[] {
       <Summary
         state={state}
         version={<VersionMenu versions={VERSIONS(now)} shown={shownVersion(now)} />}
+        stalled={
+          state === "ready"
+            ? { sha: HEADS.latest, detail: "possibly stalled: no result from mbp-office after 64 min" }
+            : undefined
+        }
+        retry={state === "ready" ? "failed" : undefined}
+        notice={
+          state === "ready" ? (
+            <Notice
+              tone="danger"
+              title="Summary of 9f8e7d6 failed"
+              text="The provider refused the call: spend limit reached. The summary below is for e4f5a6b."
+              actions={
+                <>
+                  <RetryButton state="ready" />
+                  <RetryError />
+                </>
+              }
+            />
+          ) : undefined
+        }
         content={state === "ready" || state === "streaming" ? <Markdown text={SUMMARY} /> : undefined}
         running={state === "streaming" ? "cloud · started 10:12" : undefined}
         meta={state === "ready" ? "deepseek-chat · 12,480 tokens" : state === "streaming" ? "deepseek-chat" : null}
@@ -237,6 +260,7 @@ function detailEntries(): Entry[] {
           density={density}
           target={{ kind: "analysis", sha: HEADS.older }}
           meta={JOB_META[state]}
+          retry={state === "running" || state === "stalled" || state === "failed" ? "failed" : undefined}
         />
       )),
     ),
@@ -271,6 +295,7 @@ function detailEntries(): Entry[] {
         }
         running={state === "streaming" ? "cloud · started 10:12" : undefined}
         reason={state === "incomplete" ? "step limit reached" : undefined}
+        retry={state === "incomplete" ? "failed" : undefined}
         sha={state === "streaming" ? null : HEADS.older}
         model={state === "complete" ? "sonnet-5-5" : null}
         tokens={state === "complete" ? 2310 : null}
@@ -413,6 +438,8 @@ export const REGISTRY: Entry[] = [
   { name: "detail.waiting-agent", render: detail("waiting-agent") },
   { name: "detail.running", render: detail("running") },
   { name: "detail.queued", render: detail("queued") },
+  { name: "detail.stalled", render: detail("stalled") },
+  { name: "detail.failed", render: detail("failed") },
   { name: "detail.disconnected", render: detail("disconnected") },
   { name: "detail.reconnect-failed", render: detail("reconnect-failed") },
   { name: "detail.earlier-version", render: detail("earlier-version") },
@@ -422,6 +449,7 @@ export const REGISTRY: Entry[] = [
   { name: "panel.version-menu", render: panel("panel-default", true) },
   { name: "panel.streaming", render: panel("streaming") },
   { name: "panel.summary-streaming", render: panel("panel-summary-streaming") },
+  { name: "panel.failed", render: panel("panel-failed") },
   { name: "panel.disconnected", render: panel("disconnected") },
   { name: "panel.reconnect-failed", render: panel("reconnect-failed") },
   { name: "panel.new-version", render: panel("panel-new-version") },

@@ -1,6 +1,6 @@
 // The PR detail over a socket and a fetch the test answers, with the Agents SDK's chat hook and PartySocket unmodified
-// (plan P3.1–P3.4, P3.10, P3.12, P3.13): the history reads and what a read may change, the send model, streamed text
-// by run, versions, and the connection's states.
+// (plan P3.1–P3.4, P3.10, P3.12, P3.13, P4.3–P4.6, P4.8): the history reads and what a read may change, the send
+// model, streamed text by run, versions, the connection's states, a job's Retry and the rail.
 
 import { type HubView, PrSessionView } from "@prq/protocol";
 import * as v from "valibot";
@@ -8,9 +8,10 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import { page, userEvent } from "vitest/browser";
 
+import { RETRY_ERROR } from "../components/retry.tsx";
 import type { Hub } from "../hub.ts";
 import { FetchContext } from "../reads.ts";
-import { RECONNECT_FAILED_MS, SocketContext } from "../session.ts";
+import { RECONNECT_FAILED_MS, RETRY_ANSWER_MS, RETRY_STALE_MS, SocketContext } from "../session.ts";
 import { SEND_SETTLE_MS, SendSlots, SlotsContext } from "../slots.ts";
 import { controlledFetch, settled } from "../test/fetch.ts";
 import { controlledSockets, type TestSocket } from "../test/socket.ts";
@@ -34,7 +35,16 @@ const HUB: Hub = {
   serverVersion: null,
 };
 
-type JobSpec = { id: string; state?: string; at?: number } & ({ analysis: string } | { question: string });
+type JobSpec = {
+  id: string;
+  state?: string;
+  at?: number;
+  rev?: number;
+  run?: number;
+  stalled?: boolean;
+  agentId?: string;
+  failure?: string;
+} & ({ analysis: string } | { question: string });
 
 const T0 = Date.parse("2026-11-19T10:14:00");
 
@@ -44,14 +54,15 @@ function job(spec: JobSpec, index: number) {
     target:
       "analysis" in spec ? { kind: "analysis", headSha: spec.analysis } : { kind: "answer", messageId: spec.question },
     state: spec.state ?? "done",
-    agentId: null,
-    since: null,
-    stalled: false,
-    failure: null,
+    agentId: spec.agentId ?? null,
+    since: spec.agentId === undefined ? null : (spec.at ?? T0 + index),
+    stalled: spec.stalled ?? false,
+    failure: spec.failure ?? null,
     resultMessageId: null,
     createdAt: T0 + index,
     updatedAt: spec.at ?? T0 + index,
-    rev: 1,
+    rev: spec.rev ?? 1,
+    run: spec.run ?? 1,
   };
 }
 
@@ -471,6 +482,12 @@ const startOf = (wire: string, messageId: string, metadata: object, extra: objec
 const delta = (wire: string, text: string, extra: object = {}) =>
   frame(wire, { type: "text-delta", id: "text", delta: text }, extra);
 const answerRun = (run: number) => ({ kind: "answer", jobId: "j1", questionId: "q1", sha: HEAD, run, by: BY });
+// A run of j1's text that stopped, stored with the reason the job failed with.
+const incompleteAnswer = (run: number, text: string) => ({
+  ...answer("j1", "q1", text),
+  id: `answer-j1-r${run}-incomplete`,
+  metadata: { ...answerRun(run), incomplete: { reason: "lost" } },
+});
 
 function receiveAll(socket: TestSocket, frames: object[]) {
   for (const sent of frames) {
@@ -571,6 +588,56 @@ describe("streamed text", () => {
     await until(() => shown().includes("Run two, stored"));
     expect(shown()).toEqual(["Why?", "Run one", "Run two, stored"]);
     expect(document.querySelectorAll("[data-component=Message][data-role=answer]")).toHaveLength(2);
+  });
+
+  test("an incomplete answer stored before the failed view ends its run's answering row; the failed view puts Retry on it (carried M4)", async () => {
+    const { fetch, sockets } = await detail();
+    const socket = await connect(sockets, 0, [{ id: "j1", question: "q1", state: "running" }]);
+    (await fetch.request(0)).respond([question("q1", "Why?")]);
+    (await fetch.request(1)).respond([question("q1", "Why?")]);
+    receiveAll(socket, [...startOf("w1", "answer-j1", answerRun(1)), delta("w1", "Partial")]);
+    await expect.element(page.getByText("Partial")).toBeVisible();
+    socket.receive({ type: "cf_agent_use_chat_response", id: "w1", body: "lost", done: true, error: true });
+    socket.receive(listFrame([question("q1", "Why?"), incompleteAnswer(1, "Partial")]));
+    await expect.element(page.getByText("Incomplete — lost")).toBeVisible();
+    expect(shown()).toEqual(["Why?", "Partial"]);
+    expect(page.getByText("Answering").elements()).toEqual([]);
+    expect(page.getByRole("button", { name: "Retry" }).elements()).toEqual([]);
+
+    socket.receive({
+      type: "cf_agent_state",
+      state: sessionView([{ id: "j1", question: "q1", state: "failed", rev: 4, failure: "lost" }]),
+    });
+    await expect
+      .poll(() => document.querySelector(".conversation [data-component=Message][data-state=incomplete] button"))
+      .not.toBeNull();
+    expect(shown()).toEqual(["Why?", "Partial"]);
+  });
+
+  test("a retry's running view, while the read holding run 1's incomplete row is out, shows run 2's answering row before its first frame (carried M4)", async () => {
+    const { fetch, sockets } = await detail();
+    const socket = await connect(sockets, 0, [{ id: "j1", question: "q1", state: "running" }]);
+    (await fetch.request(0)).respond([question("q1", "Why?")]);
+    (await fetch.request(1)).respond([question("q1", "Why?")]);
+    receiveAll(socket, [...startOf("w1", "answer-j1", answerRun(1)), delta("w1", "Run one")]);
+    await expect.element(page.getByText("Run one")).toBeVisible();
+    socket.receive({ type: "cf_agent_use_chat_response", id: "w1", body: "lost", done: true, error: true });
+    socket.receive({ type: "prq:history-changed" });
+    const held = await fetch.request(2);
+    socket.receive({
+      type: "cf_agent_state",
+      state: sessionView([{ id: "j1", question: "q1", state: "running", rev: 6, run: 2, at: T0 + 5 * 60_000 }]),
+    });
+    await expect.element(page.getByText("Answering")).toBeVisible();
+    expect(textOf(".conversation [data-component=Message] .running")).toBe("Answeringcloud · started 10:19");
+
+    held.respond([question("q1", "Why?"), incompleteAnswer(1, "Run one")]);
+    await expect.element(page.getByText("Incomplete — lost")).toBeVisible();
+    await expect.element(page.getByText("Answering")).toBeVisible();
+    receiveAll(socket, [...startOf("w2", "answer-j1", answerRun(2)), delta("w2", "Run two")]);
+    await expect.element(page.getByText("Run two")).toBeVisible();
+    expect(shown()).toEqual(["Why?", "Run one", "Run two"]);
+    expect(document.querySelectorAll(".conversation [data-component=Message] .running")).toHaveLength(1);
   });
 });
 
@@ -690,5 +757,247 @@ describe("the connection", () => {
     (await fetch.request(0)).respond([]);
     await expect.element(page.getByRole("heading", { level: 1, name: "Unknown pull request" })).toBeVisible();
     await expect.element(page.getByText("prq has nothing for shuymn/prq#42.", { exact: false })).toBeVisible();
+  });
+});
+
+const RETRY = "/api/pr/shuymn/prq/42/jobs/j1/retry";
+const retryPosts = (fetch: ReturnType<typeof controlledFetch>) =>
+  fetch.requests.filter((request) => request.method === "POST" && request.url.pathname === RETRY);
+// The Retry buttons, found without a locator: under fake timers a locator's retries would move the clock.
+const retryButtons = () => [...document.querySelectorAll("button")].filter((button) => button.textContent === "Retry");
+
+// j1, the answer to q1, failed without text at rev 3, as the session shows it once its history is read.
+async function failed() {
+  const opened = await detail();
+  const socket = await connect(opened.sockets, 0, [
+    { id: "j1", question: "q1", state: "failed", rev: 3, failure: "step limit reached" },
+  ]);
+  (await opened.fetch.request(0)).respond([question("q1", "Why?")]);
+  (await opened.fetch.request(1)).respond([question("q1", "Why?")]);
+  await expect.element(page.getByText("Incomplete — step limit reached")).toBeVisible();
+  return { ...opened, socket };
+}
+
+describe("a job's Retry", () => {
+  test("is offered on a claimed job, before and after the stall mark, and a failed one, on no other (P4.4)", async () => {
+    const { fetch, sockets } = await detail();
+    const states: JobSpec[] = [
+      { id: "pending", question: "q-pending", state: "pending" },
+      { id: "claimed", question: "q-claimed", state: "claimed", agentId: "laptop" },
+      { id: "stalled", question: "q-stalled", state: "claimed", agentId: "laptop", stalled: true },
+      { id: "running", question: "q-running", state: "running" },
+      { id: "failed", question: "q-failed", state: "failed", failure: "step limit reached" },
+      { id: "done", question: "q-done", state: "done" },
+      { id: "superseded", analysis: OLDER, state: "superseded" },
+    ];
+    const socket = await sockets.socket(0);
+    socket.open();
+    socket.receive({ type: "cf_agent_state", state: sessionView(states, "local") });
+    const history = states.flatMap((spec) => ("question" in spec ? [question(spec.question, spec.id)] : []));
+    (await fetch.request(0)).respond(history);
+    (await fetch.request(1)).respond(history);
+    await expect.element(page.getByText("Incomplete — step limit reached")).toBeVisible();
+    const rows = [...document.querySelectorAll(".rail [data-component=JobRow]")].map((row) => [
+      row.querySelector(".cut")?.textContent,
+      row.querySelector("button")?.textContent ?? null,
+    ]);
+    expect(rows).toEqual([
+      ["pending", null],
+      ["claimed", "Retry"],
+      ["stalled", "Retry"],
+      ["running", null],
+      ["failed", "Retry"],
+      ["done", null],
+    ]);
+    // The failed answer's own, under its question.
+    expect(retryButtons()).toHaveLength(4);
+  });
+
+  test("a press sends one POST from the shown rev, both of the job's Retry busy meanwhile; a 503 and a network failure each show the retry error at that job's Retry and send nothing again (P4.1, P4.5)", async () => {
+    const { fetch } = await failed();
+    await page.getByRole("button", { name: "Retry" }).first().click();
+    await expect.poll(() => retryPosts(fetch)).toHaveLength(1);
+    expect(JSON.parse(retryPosts(fetch)[0]?.body ?? "")).toEqual({ expectedRev: 3 });
+    // The rail's and the answer's.
+    expect(document.querySelectorAll("[data-component=Button][data-state=busy]")).toHaveLength(2);
+    retryPosts(fetch)[0]?.respond({ error: "unavailable" }, 503);
+    await expect.element(page.getByText(RETRY_ERROR).first()).toBeVisible();
+    expect(page.getByText(RETRY_ERROR).elements()).toHaveLength(2);
+    await settled();
+    expect(retryPosts(fetch)).toHaveLength(1);
+
+    await page.getByRole("button", { name: "Retry" }).first().click();
+    await expect.poll(() => retryPosts(fetch)).toHaveLength(2);
+    expect(page.getByText(RETRY_ERROR).elements()).toEqual([]);
+    retryPosts(fetch)[1]?.fail();
+    await expect.element(page.getByText(RETRY_ERROR).first()).toBeVisible();
+    await settled();
+    expect(retryPosts(fetch)).toHaveLength(2);
+  });
+
+  test("a retry nobody answers is busy for RETRY_ANSWER_MS, not a tick less, then shows the retry error; its late answer changes nothing (P4.5)", async () => {
+    const { fetch } = await failed();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    retryButtons()[0]?.click();
+    await until(() => retryPosts(fetch).length === 1);
+    await vi.advanceTimersByTimeAsync(RETRY_ANSWER_MS - 1);
+    expect(document.querySelectorAll("[data-component=Button][data-state=busy]")).toHaveLength(2);
+    expect(textOf(".pr-detail")).not.toContain(RETRY_ERROR);
+    await vi.advanceTimersByTimeAsync(1);
+    await until(() => textOf(".pr-detail").includes(RETRY_ERROR));
+    expect(retryPosts(fetch)[0]?.signal.aborted).toBe(true);
+    retryPosts(fetch)[0]?.respond({ status: "retried" });
+    await vi.advanceTimersByTimeAsync(0);
+    await nextTask();
+    expect(textOf(".pr-detail")).toContain(RETRY_ERROR);
+    expect(retryPosts(fetch)).toHaveLength(1);
+  });
+
+  test("a 409 withdraws that Retry while the view shows the rev it was sent from; with no newer view by RETRY_STALE_MS, not a tick less, the socket connects again and its view shows the job as it is (P4.3)", async () => {
+    const { fetch, sockets, socket } = await failed();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    retryButtons()[0]?.click();
+    await until(() => retryPosts(fetch).length === 1);
+    retryPosts(fetch)[0]?.respond({ error: "stale_job" }, 409);
+    await until(() => retryButtons().length === 0);
+    expect(textOf(".pr-detail")).not.toContain(RETRY_ERROR);
+    await vi.advanceTimersByTimeAsync(RETRY_STALE_MS - 1);
+    // A reconnect closes the open socket at once.
+    expect(socket.readyState).toBe(socket.OPEN);
+    await vi.advanceTimersByTimeAsync(1);
+    const reopened = await reconnect(sockets, 1);
+    reopened.open();
+    reopened.receive({
+      type: "cf_agent_state",
+      state: sessionView([{ id: "j1", question: "q1", state: "running", rev: 5, run: 2 }]),
+    });
+    await until(() => textOf(".conversation").includes("Answering"));
+    expect(retryButtons()).toEqual([]);
+    expect(retryPosts(fetch)).toHaveLength(1);
+  });
+
+  test("a 409 after a view with the job's newer rev leaves Retry from that view at once, and nothing connects again (P4.2, P4.3)", async () => {
+    const { fetch, sockets, socket } = await failed();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    retryButtons()[0]?.click();
+    await until(() => retryPosts(fetch).length === 1);
+    socket.receive({
+      type: "cf_agent_state",
+      state: sessionView([{ id: "j1", question: "q1", state: "failed", rev: 5, failure: "step limit reached" }]),
+    });
+    retryPosts(fetch)[0]?.respond({ error: "stale_job" }, 409);
+    await until(() => document.querySelectorAll("[data-component=Button][data-state=busy]").length === 0);
+    expect(retryButtons()).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(RETRY_STALE_MS);
+    expect(sockets.sockets).toHaveLength(1);
+    retryButtons()[0]?.click();
+    await until(() => retryPosts(fetch).length === 2);
+    expect(JSON.parse(retryPosts(fetch)[1]?.body ?? "")).toEqual({ expectedRev: 5 });
+  });
+
+  test("with the socket down at the 409, nothing connects again but the reopen, whose view brings the job and its Retry from the new rev (P4.3)", async () => {
+    const { fetch, sockets, socket } = await failed();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    retryButtons()[0]?.click();
+    await until(() => retryPosts(fetch).length === 1);
+    socket.drop();
+    const reopened = await reconnect(sockets, 1);
+    retryPosts(fetch)[0]?.respond({ error: "stale_job" }, 409);
+    await until(() => retryButtons().length === 0);
+    await vi.advanceTimersByTimeAsync(RETRY_STALE_MS);
+    expect(sockets.sockets).toHaveLength(2);
+    reopened.open();
+    reopened.receive({
+      type: "cf_agent_state",
+      state: sessionView([{ id: "j1", question: "q1", state: "failed", rev: 7, failure: "step limit reached" }]),
+    });
+    await until(() => retryButtons().length === 2);
+    retryButtons()[0]?.click();
+    await until(() => retryPosts(fetch).length === 2);
+    expect(JSON.parse(retryPosts(fetch)[1]?.body ?? "")).toEqual({ expectedRev: 7 });
+  });
+
+  test("leaving the page ends a retry: its request is aborted, and its late 409 connects nothing again (P4.3)", async () => {
+    const { fetch, sockets, show } = await failed();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    retryButtons()[0]?.click();
+    await until(() => retryPosts(fetch).length === 1);
+    await show(false);
+    expect(retryPosts(fetch)[0]?.signal.aborted).toBe(true);
+    retryPosts(fetch)[0]?.respond({ error: "stale_job" }, 409);
+    await vi.advanceTimersByTimeAsync(2 * RETRY_STALE_MS);
+    expect(sockets.sockets).toHaveLength(1);
+  });
+});
+
+describe("the summary and the rail", () => {
+  test("a failed newer analysis shows its Notice with the reason and Retry above the completed summary, which stays readable (P4.6)", async () => {
+    const { fetch, sockets } = await detail();
+    await connect(sockets, 0, [
+      { id: "a1", analysis: OLDER },
+      {
+        id: "a2",
+        analysis: HEAD,
+        state: "failed",
+        rev: 2,
+        failure: "provider refused the request (HTTP 402): spend limit",
+      },
+    ]);
+    const history = [analysis("a1", OLDER, "The completed summary.")];
+    (await fetch.request(0)).respond(history);
+    (await fetch.request(1)).respond(history);
+    await expect.element(page.getByText("The completed summary.")).toBeVisible();
+    const notice = document.querySelector("[data-component=Summary] [data-component=Notice]");
+    expect(notice?.textContent).toBe(
+      "Summary of e4f5a6b failedProvider refused the request (HTTP 402): spend limit. The summary below is for a1b2c3d.Retry",
+    );
+    const body = document.querySelector("[data-component=Summary] > .body");
+    expect(body === null ? 0 : (notice?.compareDocumentPosition(body) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    await page.getByRole("button", { name: "Retry" }).first().click();
+    await expect
+      .poll(() => fetch.requests.filter((request) => request.method === "POST").map((request) => request.url.pathname))
+      .toEqual(["/api/pr/shuymn/prq/42/jobs/a2/retry"]);
+  });
+
+  test("done jobs collapse into N done; the collapsed rail stays collapsed across a reload, and the summary's version menu still picks a version (P4.8)", async () => {
+    const { fetch, sockets, show } = await detail();
+    const jobs: JobSpec[] = [
+      { id: "a1", analysis: OLDER },
+      { id: "a2", analysis: HEAD },
+      { id: "j1", question: "q1" },
+    ];
+    const history = [
+      analysis("a1", OLDER, "Older summary."),
+      analysis("a2", HEAD, "Latest summary."),
+      question("q1", "Why?"),
+      answer("j1", "q1", "Because."),
+    ];
+    await connect(sockets, 0, jobs);
+    (await fetch.request(0)).respond(history);
+    (await fetch.request(1)).respond(history);
+    await expect.element(page.getByText("Latest summary.")).toBeVisible();
+    await expect.element(page.getByText("3 done")).toBeVisible();
+    expect(document.querySelectorAll(".rail details [data-component=JobRow]")).toHaveLength(3);
+    await page.getByRole("button", { name: "Collapse rail" }).click();
+    await expect.element(page.getByRole("button", { name: "Expand rail", exact: true })).toBeVisible();
+    expect(page.getByRole("heading", { name: "Versions" }).elements()).toEqual([]);
+
+    await show(false);
+    await show(true);
+    await connect(sockets, 1, jobs);
+    (await fetch.request(2)).respond(history);
+    (await fetch.request(3)).respond(history);
+    await expect.element(page.getByText("Latest summary.")).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Expand rail", exact: true })).toBeVisible();
+    expect(page.getByRole("heading", { name: "Versions" }).elements()).toEqual([]);
+    const trigger = document.querySelector("[data-component=VersionMenu] .trigger");
+    expect(trigger).not.toBeNull();
+    if (trigger !== null) {
+      await page.elementLocator(trigger).click();
+    }
+    await page.getByRole("menuitemradio", { name: new RegExp(`^${OLDER.slice(0, 7)}`) }).click();
+    await expect.element(page.getByText("Older summary.")).toBeVisible();
   });
 });

@@ -20,6 +20,14 @@ export const HEADS = {
   newer: "c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7",
 } as const;
 
+// The heads of the failed frames' pull request.
+const WEBHOOK_HEADS = {
+  failed: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3",
+  latest: "7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b",
+  superseded: "5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c",
+  first: "0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c",
+} as const;
+
 const PR = {
   pr: { owner: "shuymn", repo: "prq", number: 42 },
   details: {
@@ -28,6 +36,18 @@ const PR = {
     state: "open",
     url: "https://github.com/shuymn/prq/pull/42",
     headSha: HEADS.latest,
+    baseSha: "0123456789abcdef0123456789abcdef01234567",
+  },
+};
+
+const WEBHOOK_PR = {
+  pr: { owner: "shuymn", repo: "prq", number: 41 },
+  details: {
+    fullName: "shuymn/prq",
+    title: "Split the webhook handler by event type",
+    state: "open",
+    url: "https://github.com/shuymn/prq/pull/41",
+    headSha: WEBHOOK_HEADS.failed,
     baseSha: "0123456789abcdef0123456789abcdef01234567",
   },
 };
@@ -89,6 +109,22 @@ const A2_PARTIAL =
 const Q_OLDER = `What did ${HEADS.older.slice(0, 7)} do with a late result?`;
 const A_OLDER = `At ${HEADS.older.slice(0, 7)} a late result was still accepted: the claim ID stayed the same across a retry. Since ${HEADS.latest.slice(0, 7)} it is discarded.`;
 const Q_UNSENT = "Does the retry route reset the attempt counter as well?";
+const WEBHOOK_SUMMARY = `## What changed
+
+The webhook handler is split into one module per event type. pull_request, issue_comment and installation events each get their own handler, and unknown events are acknowledged and ignored.
+
+Routing lives in \`routeEvent()\` as described in [the design doc](https://github.com/shuymn/prq/blob/main/docs/design.md)`;
+const Q_EVENTS = "Why are unknown events acknowledged instead of rejected?";
+const A_EVENTS = `GitHub redelivers an event whose delivery got an error response. Acknowledging unknown events keeps those redeliveries from piling up.
+
+\`\`\`ts
+default:
+  return new Response(null, { status: 202 });
+\`\`\``;
+const Q_TOKEN = "Walk me through every handler that reads the installation token.";
+const A_TOKEN_PARTIAL =
+  "The installation token is read in installation.ts when the app is installed, and in pull_request.ts before the checkout. The comment handler then";
+const SPEND_LIMIT = "the provider refused the call: spend limit reached";
 
 type JobSpec = {
   id: string;
@@ -97,6 +133,7 @@ type JobSpec = {
   ago: number;
   agentId?: string;
   failure?: string;
+  stalled?: boolean;
 };
 
 function job(spec: JobSpec, now: number) {
@@ -107,12 +144,13 @@ function job(spec: JobSpec, now: number) {
     state: spec.state,
     agentId: spec.agentId ?? null,
     since: claimed && spec.agentId !== undefined ? now - spec.ago : null,
-    stalled: false,
+    stalled: spec.stalled ?? false,
     failure: spec.failure ?? null,
     resultMessageId: spec.state === "done" ? `${spec.target.kind}-${spec.id}` : null,
     createdAt: now - spec.ago - MINUTE,
     updatedAt: now - spec.ago,
     rev: 1,
+    run: 1,
   };
 }
 
@@ -144,6 +182,20 @@ function answer(jobId: string, questionId: string, text: string, tokens: number,
     usage: usage(tokens),
   });
   return { id: `answer-${jobId}`, role: "assistant", text, metadata } satisfies StoredMessage;
+}
+
+// A run's text that stopped, stored with the reason.
+function incomplete(jobId: string, questionId: string, text: string, reason: string, sha: string): StoredMessage {
+  const metadata = v.parse(MessageMetadata, {
+    kind: "answer",
+    jobId,
+    questionId,
+    sha,
+    run: 1,
+    by: CLOUD,
+    incomplete: { reason },
+  });
+  return { id: `answer-${jobId}-r1-incomplete`, role: "assistant", text, metadata };
 }
 
 function streamed(jobId: string, metadata: unknown, text: string): RunText {
@@ -185,6 +237,7 @@ export type DetailFixture = {
   draft?: string;
   // The new version notice, and whether it warns that reloading loses a question.
   newVersion?: boolean;
+  railCollapsed?: boolean;
 };
 
 const hub = (localAgentPresent: boolean) =>
@@ -202,7 +255,7 @@ function fixture(
   messages: StoredMessage[],
   change: Partial<Session> & Partial<Omit<DetailFixture, "session">> = {},
 ): DetailFixture {
-  const { slot = null, hub: hubView = hub(true), picked = null, draft, newVersion, ...session } = change;
+  const { slot = null, hub: hubView = hub(true), picked = null, draft, newVersion, railCollapsed, ...session } = change;
   return {
     session: {
       view: v.parse(PrSessionView, { ...(view.pr ?? PR), owner: view.owner, jobs: view.jobs }),
@@ -212,6 +265,7 @@ function fixture(
       runs: [],
       connection: "open",
       serverVersion: null,
+      retries: {},
       ...session,
     },
     slot,
@@ -219,6 +273,7 @@ function fixture(
     picked,
     ...(draft === undefined ? {} : { draft }),
     ...(newVersion === undefined ? {} : { newVersion }),
+    ...(railCollapsed === undefined ? {} : { railCollapsed }),
   };
 }
 
@@ -282,8 +337,68 @@ const panelDefault = (now: number) =>
     ...CONVERSATION.slice(0, 2),
   ]);
 
+// The failed frames' pull request: its versions (the latest analysis failed, when `analysisFailed`), a done question and a
+// failed one whose text stopped.
+function failedSession(now: number, analysisFailed: boolean) {
+  const jobs = [
+    job({ id: "a-first", target: { kind: "analysis", headSha: WEBHOOK_HEADS.first }, state: "done", ago: DAY }, now),
+    job(
+      {
+        id: "a-superseded",
+        target: { kind: "analysis", headSha: WEBHOOK_HEADS.superseded },
+        state: "superseded",
+        ago: 3 * HOUR,
+      },
+      now,
+    ),
+    job(
+      { id: "a-latest", target: { kind: "analysis", headSha: WEBHOOK_HEADS.latest }, state: "done", ago: 2 * HOUR },
+      now,
+    ),
+    job({ id: "j-events", target: { kind: "answer", messageId: "q-events" }, state: "done", ago: 59 * MINUTE }, now),
+    ...(analysisFailed
+      ? [
+          job(
+            {
+              id: "a-failed",
+              target: { kind: "analysis", headSha: WEBHOOK_HEADS.failed },
+              state: "failed",
+              ago: 10 * MINUTE,
+              failure: SPEND_LIMIT,
+            },
+            now,
+          ),
+        ]
+      : []),
+    job(
+      {
+        id: "j-token",
+        target: { kind: "answer", messageId: "q-token" },
+        state: "failed",
+        ago: 5 * MINUTE,
+        failure: analysisFailed ? SPEND_LIMIT : "step limit reached",
+      },
+      now,
+    ),
+  ];
+  return fixture({ pr: WEBHOOK_PR, owner: "cloud", jobs }, [
+    analysis("a-first", WEBHOOK_HEADS.first, WEBHOOK_SUMMARY, 9_870),
+    analysis("a-latest", WEBHOOK_HEADS.latest, WEBHOOK_SUMMARY, 10_214),
+    question("q-events", Q_EVENTS),
+    answer("j-events", "q-events", A_EVENTS, 2_310, WEBHOOK_HEADS.latest),
+    question("q-token", Q_TOKEN),
+    incomplete(
+      "j-token",
+      "q-token",
+      A_TOKEN_PARTIAL,
+      analysisFailed ? SPEND_LIMIT : "step limit reached",
+      WEBHOOK_HEADS.latest,
+    ),
+  ]);
+}
+
 export const DETAIL_FIXTURES: Record<string, (now: number) => DetailFixture> = {
-  default: (now) => answeredSession(now),
+  default: (now) => answeredSession(now, { railCollapsed: true }),
   empty: (now) =>
     fixture(
       {
@@ -356,6 +471,36 @@ export const DETAIL_FIXTURES: Record<string, (now: number) => DetailFixture> = {
       { picked: "a-older" },
     );
   },
+  // The latest head's analysis claimed by an agent with no result for 64 minutes, the version before it shown.
+  stalled: (now) =>
+    fixture(
+      {
+        owner: "local",
+        jobs: [
+          job({ id: "a-older", target: { kind: "analysis", headSha: HEADS.older }, state: "done", ago: DAY }, now),
+          job({ id: "j-q1", target: { kind: "answer", messageId: "q1" }, state: "done", ago: DAY }, now),
+          job(
+            {
+              id: "a-latest",
+              target: { kind: "analysis", headSha: HEADS.latest },
+              state: "claimed",
+              ago: 64 * MINUTE,
+              agentId: "mbp-office",
+              stalled: true,
+            },
+            now,
+          ),
+        ],
+      },
+      [
+        analysis("a-older", HEADS.older, SUMMARY, 11_902),
+        question("q1", Q1),
+        answer("j-q1", "q1", A1, 2_310, HEADS.older),
+      ],
+      { railCollapsed: true },
+    ),
+  failed: (now) => failedSession(now, true),
+  "panel-failed": (now) => failedSession(now, false),
   "send-failed": (now) => sendFailed(now, "not-sent"),
   "panel-send-failed": (now) => sendFailed(now, "unconfirmed"),
   "panel-default": (now) => panelDefault(now),

@@ -1,0 +1,8 @@
+@layer components {
+  /* The retry error after the Retry that failed. */
+  .retry-error {
+    font: var(--text-small);
+    font-size-adjust: from-font;
+    color: var(--color-danger-fg);
+  }
+}

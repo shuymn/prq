@@ -1,15 +1,22 @@
 @layer components {
   [data-component="JobRow"] {
     display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: var(--gap-related);
     padding-inline: var(--inset-control-md);
     font: var(--text-small);
     font-size-adjust: from-font;
     color: var(--color-fg-muted);
 
+    & .row {
+      display: flex;
+      align-items: center;
+      gap: var(--gap-related);
+    }
+
     & .info {
       display: flex;
+      flex: 1;
       align-items: center;
       gap: var(--gap-related);
       min-inline-size: 0;
@@ -20,6 +27,11 @@
       align-items: center;
       gap: var(--gap-related);
       min-inline-size: 0;
+    }
+
+    /* A meta too long for the line wraps, its workspace SHA after it. */
+    & .meta-row {
+      flex-wrap: wrap;
     }
 
     & :where(.target, .at) {
@@ -41,9 +53,20 @@
       text-overflow: ellipsis;
     }
 
+    /* Full: one line, Retry and the retry error at its end. */
+    &[data-density="full"] {
+      flex-direction: row;
+      align-items: center;
+
+      & .row {
+        display: contents;
+      }
+    }
+
+    /* Compact: the lines stretch to the info's width, so a long question is cut there. */
     &[data-density="compact"] .info {
       flex-direction: column;
-      align-items: flex-start;
+      align-items: stretch;
       gap: var(--gap-related);
     }
   }

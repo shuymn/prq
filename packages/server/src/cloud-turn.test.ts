@@ -286,7 +286,7 @@ describe("failure", () => {
     expect(events(logs, "prq.job.failed")).toMatchObject([{ from: "running", to: "failed", reason: "lost" }]);
   });
 
-  it("names the run in each run's stream start, in its incomplete text and in the retried run's result", async () => {
+  it("names the run in each run's stream start, in its incomplete text, in the retried run's result and in the view", async () => {
     captureLogs();
     const session = await cloudSession("turn", sockets);
     const { stub, client } = session;
@@ -298,9 +298,11 @@ describe("failure", () => {
 
     await client.chat([Q1]);
     await untilState(stub, "q1", "failed");
+    expect((await stub.view()).jobs).toMatchObject([{ state: "failed", run: 1 }]);
     const job = await jobOf(stub, "q1");
     expect(await retryIn(stub, job.job_id)).toEqual({ status: "retried" });
     await untilState(stub, "q1", "done");
+    expect((await stub.view()).jobs).toMatchObject([{ state: "done", run: 2 }]);
 
     const metadataOf = async (id: string) => v.parse(MessageMetadata, (await stored(session, id))?.metadata);
     expect(await metadataOf(`answer-${job.job_id}-r1-incomplete`)).toMatchObject({ jobId: job.job_id, run: 1 });
