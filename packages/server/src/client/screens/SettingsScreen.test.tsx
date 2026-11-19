@@ -473,6 +473,29 @@ describe("a confirm's outcome", () => {
     expect(textOf("[data-component=SkillRow] .source")).toContain("e4f5a6b");
     expect(document.body.textContent).not.toContain("Couldn't confirm");
   });
+
+  test("a retry's refusal stays in its dialog when the read after it settles the earlier attempt as not applied (M2)", async () => {
+    const { next } = await refForm();
+    await userEvent.fill(field("Ref").element(), "v2");
+    await userEvent.click(button("Review update"));
+    (await next("POST", "/api/skills/review/preview")).respond(UPDATE_PREVIEW);
+    await userEvent.click(button("Apply update to e4f5a6b"));
+    (await next("PUT", "/api/skills/review")).fail();
+    (await next("GET", "/api/instructions")).fail();
+    await expect.element(page.getByText("Couldn't confirm the update")).toBeVisible();
+    await userEvent.click(button("Apply update to e4f5a6b"));
+    (await next("PUT", "/api/skills/review")).respond(
+      { error: "invalid_skill", detail: "the blob of scripts/collect.sh does not match its tree (size or SHA-1)" },
+      422,
+    );
+    const reason = "The blob of scripts/collect.sh does not match its tree (size or SHA-1).";
+    await expect.element(page.getByText(reason)).toBeVisible();
+    (await next("GET", "/api/instructions")).respond(instructions([REVIEW, YOMIYASU]));
+    await until(() => document.querySelectorAll("[data-component=SkillRow]").length === 2);
+    await expect.element(page.getByText("Couldn't apply the update")).toBeVisible();
+    await expect.element(page.getByText(reason)).toBeVisible();
+    expect(document.body.textContent).not.toContain("Couldn't reach the server");
+  });
 });
 
 describe("removing a skill", () => {

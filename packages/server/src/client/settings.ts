@@ -303,6 +303,12 @@ export class SettingsStore {
   // outcome unknown, waits for that read's list.
   async #confirm(change: Change, url: string, method: string, body: unknown, ms: number): Promise<void> {
     const dialog = this.#dialogs;
+    // The dialog speaks for its latest confirm: an earlier one from it, still undecided, settles without a word.
+    for (const decision of this.#decisions) {
+      if (decision.dialog === dialog) {
+        this.#decisions.delete(decision);
+      }
+    }
     const answer = await send(this.#fetcher, url, method, body, ms, new AbortController().signal);
     const conflict = answer?.status === 409 && errorOf(answer)?.error === change.conflict?.error;
     if (answer !== null && change.applied(answer.status)) {
