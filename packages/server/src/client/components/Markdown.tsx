@@ -36,6 +36,14 @@ const COMPONENTS: Components = {
       : undefined;
     return <CodeBlock code={(code === undefined ? "" : textOf(code)).replace(/\n$/, "")} language={language} />;
   },
+  // A table scrolls sideways within its own box when it is wider than the content.
+  table({ children }) {
+    return (
+      <div className="table">
+        <table>{children}</table>
+      </div>
+    );
+  },
   // A link opens in a new tab when it is an absolute http(s) URL; any other is its text alone.
   a({ href, children }) {
     const target = absolute(href, ["https:", "http:"]);

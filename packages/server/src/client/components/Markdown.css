@@ -55,6 +55,11 @@
       color: var(--color-fg-muted);
     }
 
+    /* A table wider than the content scrolls within its own box, so the page keeps its width. */
+    & .table {
+      overflow-x: auto;
+    }
+
     & table {
       inline-size: 100%;
       border: var(--border-width-thin) solid var(--color-border-default);

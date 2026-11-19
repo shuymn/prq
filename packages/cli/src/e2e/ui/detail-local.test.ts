@@ -224,12 +224,17 @@ describe("a question from the composer", () => {
 });
 
 describe("versions and layouts", () => {
-  // A table wider than the panel, a long unbroken word, and a long code line.
+  // Tables wider than the panel (a long path; sixteen columns, whose cells' insets alone pass 360 px), a long unbroken
+  // word, and a long code line.
   const WIDE = `The summary of h2.
 
 | File | What changed | Why | Risk |
 | --- | --- | --- | --- |
 | packages/server/src/client/screens/PrDetailScreen.tsx | the session's container | the detail page | low |
+
+| a | b | c | d | e | f | g | h | i | j | k | l | m | n | o | p |
+${"| --- ".repeat(16)}|
+${"| 1 ".repeat(16)}|
 
 ${"x".repeat(200)}
 
@@ -280,6 +285,22 @@ ${"const value = compute(".repeat(12)}
     await items.filter({ hasText: short("h2") }).click();
     await summary(page, "The summary of h2.").waitFor();
     expect(await overflow(page)).toBe(0);
+    // The sixteen columns scroll within the table's own box to the last one; the code wraps before the copy button.
+    const contained: unknown = await page.evaluate(`(() => {
+      const table = [...document.querySelectorAll('[data-component="Summary"] .table')].at(-1);
+      table.scrollLeft = table.scrollWidth;
+      const box = table.getBoundingClientRect();
+      const last = table.querySelector("th:last-child").getBoundingClientRect();
+      const pre = document.querySelector('[data-component="Summary"] [data-component="CodeBlock"] pre');
+      const copy = pre.parentElement.querySelector(".copy").getBoundingClientRect();
+      return {
+        tableScrolls: table.scrollWidth > table.clientWidth,
+        lastColumnShown: last.left >= box.left && last.right <= box.right + 1,
+        codeWraps: pre.scrollWidth <= pre.clientWidth,
+        codeBeforeCopy: pre.getBoundingClientRect().right <= copy.left,
+      };
+    })()`);
+    expect(contained).toEqual({ tableScrolls: true, lastColumnShown: true, codeWraps: true, codeBeforeCopy: true });
 
     // Either side of the breakpoint: the table and the rail within the page.
     for (const width of [NARROW_PX - 1, NARROW_PX]) {
