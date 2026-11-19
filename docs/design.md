@@ -1430,15 +1430,16 @@ prq/
 │  │   │   └─ client/            React UI (Vite): index.html, main.tsx, the components with one stylesheet each,
 │  │   │                         the base styles, the BrandMark's drawing, and public/ (_headers, the favicon set)
 │  │   ├─ scripts/           manual checks of a model provider, the tool loop and the GitHub App
-│  │   │                     (`pnpm run check:provider`, `check:tools`, `check:github`), not part of the Worker
+│  │   │                     (`pnpm run check:provider`, `check:tools`, `check:github`), and the production secrets
+│  │   │                     (`pnpm run secrets`, docs/operations.md); not part of the Worker
 │  │   ├─ container/         the skill runner the image installs (prq-skill-run.py)
 │  │   ├─ Dockerfile         the workspace container's image
 │  │   ├─ build/             the UI's build: the tokens as CSS (Style Dictionary), the generated _headers, the font
 │  │   │                     preload, the favicon script (`pnpm run icons`), and their Node tests
 │  │   ├─ wrangler.jsonc     the Worker, and the UI's build (dist/client) as its static assets
 │  │   ├─ vite.config.ts     src/client into dist/client (`pnpm run build`)
-│  │   └─ vitest.config.ts   two projects: the Worker's tests in workerd, the git procedure's, the skill runner's and
-│  │                         the UI build's (*.node.test.ts) in Node
+│  │   └─ vitest.config.ts   two projects: the Worker's tests in workerd, the git procedure's, the skill runner's, the
+│  │                         UI build's and the secrets command's (*.node.test.ts) in Node
 │  └─ cli/                 @prq/cli: prq, compiled by Bun into one binary (dist/prq; Node 24 runs the source too)
 │      └─ src/
 │          ├─ main.ts            the entry the binary is built from: arguments, the command, the exit code
@@ -1455,7 +1456,7 @@ prq/
 │          └─ test/              the binary's build, the Worker through wrangler's test harness, a stand-in for Access and its browser door, Chrome for the UI's browser check, the binary as a child process, the local stack (`pnpm run stack`), manual checks of a cloud question, of head reconciliation, of the workspace container, of compaction and of skills (`pnpm run check:cloud`, `check:reconcile`, `check:workspace`, `check:compaction`, `check:skills`)
 ├─ skills/prq/SKILL.md     the local AI's procedure (wait → claim → work → submit → wait again); not a registered skill
 ├─ .claude/skills/verify-prq/  running the local stack with scripted jobs for a local agent, and reading its request log
-├─ docs/                   design.md, decisions.md, ui.md, spikes.md
+├─ docs/                   design.md, decisions.md, ui.md, spikes.md, operations.md
 ├─ design/                 design tokens, component inventory, screens ↔ Pencil frames, the Pencil document (the UI design's source for code)
 ├─ pnpm-workspace.yaml     catalog
 ├─ package.json

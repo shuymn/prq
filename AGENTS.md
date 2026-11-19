@@ -2,7 +2,7 @@
 
 prq summarizes the host's own GitHub pull requests and answers follow-up questions. A Cloudflare Worker
 (`packages/server`) holds the conversations; a local CLI connects local agents. Design: `docs/design.md`; library and
-platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
+platform decisions: `docs/decisions.md`; the UI design: `design/README.md`; hosting it: `docs/operations.md`.
 
 ## Commands
 
@@ -70,6 +70,11 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
   model, at the window `.dev.vars` sets (written without `--window`).
 - lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows, a
   `fileToken` check on `design/prq.pen`, and commitlint on the message.
+- `pnpm run secrets check|status|put` in `packages/server` handles the Worker's production secrets
+  (`docs/operations.md`, The secrets command). `status` and `put` reach the Cloudflare account and are the host's to
+  run. Its tests (`packages/server/scripts/secrets.node.test.ts`, in the server's node project) run it against a
+  stand-in for wrangler and a deploy directory in the OS temp directory (`PRQ_DEPLOY_DIRECTORY`,
+  `PRQ_DEPLOY_WRANGLER`, `PRQ_DEPLOY_WRANGLER_CONFIG`), and nothing reaches the network.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
   change, and `mise exec -- gh-infra apply .github/infra.yaml` applies it once the owner approves.
 

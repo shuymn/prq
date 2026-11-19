@@ -15,6 +15,8 @@ deployed or released yet.
 - [docs/decisions.md](docs/decisions.md): library and platform decisions.
 - [docs/ui.md](docs/ui.md): the brief for the UI design.
 - [docs/spikes.md](docs/spikes.md): what the prototype checked and found (code on the `spike/prototype` branch).
+- [docs/operations.md](docs/operations.md): hosting prq: the accounts, the setup, the production secrets and their
+  rotation.
 
 ## Running a local agent
 
