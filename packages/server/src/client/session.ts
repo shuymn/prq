@@ -72,6 +72,12 @@ const ResponseFrame = v.looseObject({
   error: v.optional(v.boolean()),
 });
 type ResponseFrame = v.InferOutput<typeof ResponseFrame>;
+// A frame of the session's socket the page reads, by its type; any other is ignored.
+const Frame = v.pipe(
+  v.string(),
+  v.parseJson(),
+  v.variant("type", [ListFrame, HistoryChangedMessage, ServerVersionMessage, ResponseFrame]),
+);
 const StartChunk = v.pipe(
   v.string(),
   v.parseJson(),
@@ -193,26 +199,24 @@ class SessionStore {
   }
 
   message(event: MessageEvent): void {
-    if (typeof event.data !== "string") {
+    const frame = v.safeParse(Frame, event.data);
+    if (!frame.success) {
       return;
     }
-    let frame: unknown;
-    try {
-      frame = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-    const list = v.safeParse(ListFrame, frame);
-    const version = v.safeParse(ServerVersionMessage, frame);
-    const response = v.safeParse(ResponseFrame, frame);
-    if (list.success) {
-      this.#listed(list.output.messages, null);
-    } else if (v.is(HistoryChangedMessage, frame)) {
-      this.read();
-    } else if (version.success) {
-      this.#update({ serverVersion: version.output.version });
-    } else if (response.success) {
-      this.#response(response.output);
+    const { output } = frame;
+    switch (output.type) {
+      case "cf_agent_chat_messages":
+        this.#listed(output.messages, null);
+        break;
+      case "prq:history-changed":
+        this.read();
+        break;
+      case "prq:version":
+        this.#update({ serverVersion: output.version });
+        break;
+      case "cf_agent_use_chat_response":
+        this.#response(output);
+        break;
     }
   }
 
@@ -348,7 +352,7 @@ export const SocketContext = createContext<{
   WebSocket?: new (url: string | URL, protocols?: string | string[]) => EventTarget;
 }>({});
 
-export type SessionHandle = {
+type SessionHandle = {
   session: Session;
   slot: Slot | null;
   // Sends a question unless one is held; whether it was sent.
