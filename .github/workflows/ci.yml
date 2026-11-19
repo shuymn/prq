@@ -16,9 +16,11 @@ concurrency:
 permissions: {}
 
 jobs:
-  check:
-    name: Check
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    # Installing the dependencies takes about 90s of the job and the checks about 15s: room for a runner several times
+    # slower.
     timeout-minutes: 10
     permissions:
       contents: read
@@ -31,19 +33,16 @@ jobs:
       - name: Set up mise
         uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
-          install_args: node pnpm bun
+          install_args: node pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The versions mise.lock pins; the job's checks run on these. The web UI's browser check and the favicon script
-      # drive the runner's own Chrome.
+      # The versions mise.lock pins; the job's checks run on these.
       - name: Print tool versions
         run: |
           node --version
           pnpm --version
-          bun --version
-          google-chrome --version
 
       - name: Run linter
         run: pnpm run lint
@@ -61,7 +60,88 @@ jobs:
       - name: Run type checker
         run: pnpm run typecheck
 
-      # Builds the web UI the Worker serves, then runs the tests. The CLI's tests first compile the prq binary with Bun
-      # (packages/cli/src/test/build.ts), then run it; the UI's browser check (packages/cli/src/e2e/ui) runs Chrome.
+  # Each package's tests, the server's by its vitest projects: the workerd project (the Worker) with the client project
+  # (the web UI in Chrome, seconds), and the node project (the build, git and the operations scripts) apart. Together
+  # they run what the root `pnpm run test` runs.
+  test:
+    name: Test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    # The single job that ran all of these at once took up to 9m10s; 15 minutes holds that at the runner's 1.5x
+    # variance, so only a hang reaches it.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The CLI's tests first compile the prq binary with Bun (packages/cli/src/test/build.ts), then run it; the UI's
+          # browser check (packages/cli/src/e2e/ui) runs Chrome.
+          - name: cli
+            package: cli
+            tools: node pnpm bun
+            args: ""
+          - name: server workerd, client
+            package: server
+            tools: node pnpm
+            args: --project workerd --project client
+          # The favicon test drives Chrome too.
+          - name: server node
+            package: server
+            tools: node pnpm
+            args: --project node
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up mise
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          install_args: ${{ matrix.tools }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The versions mise.lock pins; the tests run on these, in the runner's own Chrome.
+      - name: Print tool versions
+        env:
+          TOOLS: ${{ matrix.tools }}
+        run: |
+          node --version
+          pnpm --version
+          if [[ " $TOOLS " == *" bun "* ]]; then bun --version; fi
+          google-chrome --version
+
+      # The web UI the Worker serves, which the tests that start it need.
+      - name: Build the web UI
+        run: pnpm --filter @prq/server run build
+
       - name: Run tests
-        run: pnpm run test
+        working-directory: packages/${{ matrix.package }}
+        env:
+          TEST_ARGS: ${{ matrix.args }}
+        run: |
+          read -ra args <<< "$TEST_ARGS"
+          pnpm run test "${args[@]}"
+
+  # The required status check (.github/infra.yaml) and the release check (packages/server/scripts/release-check.ts) read
+  # this job's run: it succeeds only when every job above succeeded, and fails when one failed or was cancelled.
+  check:
+    name: Check
+    needs:
+      - lint
+      - test
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require every job to succeed
+        env:
+          LINT: ${{ needs.lint.result }}
+          TEST: ${{ needs.test.result }}
+        run: |
+          echo "Lint: $LINT, Test: $TEST"
+          [[ "$LINT" == success && "$TEST" == success ]]
