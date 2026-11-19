@@ -28,6 +28,7 @@ import {
   print,
   printError,
   readPrivate,
+  refuseOverrides,
   Refusal,
   runCommand,
   stopped,
@@ -226,9 +227,11 @@ await runCommand("secrets", async () => {
       break;
     }
     case "status":
+      refuseOverrides();
       await status();
       break;
     case "put":
+      refuseOverrides();
       await put();
       break;
     default:

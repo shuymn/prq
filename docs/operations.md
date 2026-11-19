@@ -225,8 +225,9 @@ the new secrets or the ones it had, and `status`, which shows names, cannot tell
 update stays unconfirmed until one exits 0.
 
 `status` and `put` refuse when `packages/server/wrangler.jsonc` sets an `account_id` other than `target.env`'s, which
-wrangler would use in its place. Each wrangler call uses the configuration's top level, whatever `CLOUDFLARE_ENV` says,
-and Cloudflare's production API, whatever `CLOUDFLARE_API_BASE_URL` or `CF_API_BASE_URL` says.
+wrangler would use in its place, and, before that, a terminal holding an override, as the deploy does
+([The deploy command](#the-deploy-command)). Each wrangler call uses the configuration's top level, no `.env` file, and
+Cloudflare's production API.
 
 Nothing it prints holds a value. `put` shows none of the output of `wrangler secret bulk`, the call that gets the
 values, since an error from Cloudflare's API can quote what was sent. When a call before it fails (`whoami` or the
@@ -272,6 +273,20 @@ environment marks the run as CI by a variable wrangler reads as such (`CI` unles
 `BUILD_NUMBER`, `CI_APP_ID`, `CI_BUILD_ID`, `CI_BUILD_NUMBER`, `CI_NAME`, `CONTINUOUS_INTEGRATION`, `RUN_ID`, or a CI
 service's own, such as `GITHUB_ACTIONS`), and names the variables it found, since wrangler then answers its own
 questions with their defaults.
+
+Every mode, `--read-back` included, also refuses a terminal that holds an override, before any call or credential, and
+names the variables it found: unset them, or open a new terminal. An override is one of the tests' own settings
+(`PRQ_DEPLOY_*`), or a variable the pinned wrangler reads that would send it to another account, Worker, API or login,
+or with other credentials than its login: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_API_KEY`,
+`CLOUDFLARE_EMAIL` (and the older `CF_*` names of these four and of `CLOUDFLARE_API_BASE_URL`), `CLOUDFLARE_AUTH_PROFILE`,
+`CLOUDFLARE_ENV`, `CLOUDFLARE_API_BASE_URL`, `CLOUDFLARE_COMPLIANCE_REGION`, `CLOUDFLARE_API_HEADERS`,
+`CLOUDFLARE_CONTAINER_REGISTRY`, `CLOUDFLARE_CLIENT_ID`, `WRANGLER_CI_*` (`WRANGLER_CI_OVERRIDE_NAME` names another
+Worker), and the OAuth login's `WRANGLER_AUTH_DOMAIN`, `WRANGLER_AUTH_URL`, `WRANGLER_TOKEN_URL`, `WRANGLER_REVOKE_URL`,
+`WRANGLER_CLIENT_ID`, `WRANGLER_API_ENVIRONMENT` and `WRANGLER_CF_AUTHORIZATION_TOKEN`. wrangler then runs with an
+environment built for it, so a variable this list misses does not reach it either: the paths, user and shell, the temp
+directory, the locale and the terminal, `XDG_*` (where its login is kept), `MISE_*` (the upload runs through mise), and
+Docker's settings (`DOCKER_*`, `WRANGLER_DOCKER_BIN`, `WRANGLER_DOCKER_HOST`). Each call is given an env file that holds
+nothing, in place of the `.env` and `.env.local` wrangler would load from its working directory.
 
 - `--bootstrap`: once, before prq's first upload. It deploys an inert Worker named `prq` (every request answers 404
   with an `x-prq-bootstrap` header; no assets, Durable Objects or container) with workers.dev and preview URLs off and
@@ -319,10 +334,7 @@ questions with their defaults.
 The deploy refuses, before any wrangler call, when `packages/server/wrangler.jsonc` here sets an `account_id` other than
 `target.env`'s, and a release also refuses, before its upload, a tag whose `wrangler.jsonc` sets one at all: wrangler
 would use it in place of `target.env`'s. As for the secrets command, each wrangler call uses its configuration's top
-level, whatever `CLOUDFLARE_ENV` says, and Cloudflare's production API, whatever `CLOUDFLARE_API_BASE_URL` or
-`CF_API_BASE_URL` says, as the deploy's own reads of that API do. Its tests point those reads at a stand-in with
-`PRQ_DEPLOY_API`, which the deploy refuses before anything else unless it is a loopback address beside the tests'
-stand-in for wrangler.
+level and Cloudflare's production API, as the deploy's own reads of that API do.
 
 A signal or a bound stops wrangler with the processes it started, found by their parent links when it acts: a process
 that left that tree and ignores SIGTERM can outlive the deploy (`ps` shows it).

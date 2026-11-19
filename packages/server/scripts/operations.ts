@@ -10,8 +10,11 @@
 // A program runs with a bound on its time, in a process group of its own unless it runs in the foreground; a timeout,
 // or a signal to this process, stops it with what it started (SIGTERM, then SIGKILL after a grace), and this process
 // then ends as the signal would have ended it. A program in the foreground is stopped with the processes its tree holds
-// when each signal is sent: one that left the tree and ignores SIGTERM can outlive it. wrangler's environment is
-// wranglerEnv()'s.
+// when each signal is sent: one that left the tree and ignores SIGTERM can outlive it.
+//
+// A command that reaches the account first refuses a terminal holding an override (refuseOverrides()), and wrangler
+// runs with an environment built for it (wranglerEnv()) and an env file that holds nothing (NO_ENV_FILE). The tests
+// reach their stand-ins through their own entry (test-entry.ts, fixture.ts), not through the environment.
 
 import { spawn, spawnSync } from "node:child_process";
 import { constants } from "node:fs";
@@ -22,6 +25,8 @@ import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 
 import * as v from "valibot";
+
+import { fixture } from "./fixture.ts";
 
 // The Worker's name in wrangler.jsonc.
 export const WORKER = "prq";
@@ -41,16 +46,85 @@ const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 const EXIT_REFUSED = 1;
 const EXIT_UNCONFIRMED = 2;
 
-// Only for tests: another deploy directory, a program run in wrangler's place, another wrangler configuration, and a
-// shorter wait.
-const directory = process.env["PRQ_DEPLOY_DIRECTORY"] ?? join(homedir(), ".config", "prq", "deploy");
-const wranglerOverride = process.env["PRQ_DEPLOY_WRANGLER"];
-const CONFIG = process.env["PRQ_DEPLOY_WRANGLER_CONFIG"] ?? join(SERVER, "wrangler.jsonc");
-// The repository's wrangler configuration at its top level, whatever CLOUDFLARE_ENV says, for every call on the account.
-export const TOP_LEVEL: readonly string[] = ["--config", CONFIG, "--env", ""];
-export const waitMs = /^[1-9][0-9]*$/.test(process.env["PRQ_DEPLOY_WAIT_MS"] ?? "")
-  ? Number(process.env["PRQ_DEPLOY_WAIT_MS"])
-  : DEFAULT_WAIT_MS;
+// Only the tests' fixture sets another deploy directory, a program run in wrangler's place, another wrangler
+// configuration, or a shorter wait.
+const directory = fixture.directory ?? join(homedir(), ".config", "prq", "deploy");
+const wranglerOverride = fixture.wrangler;
+const CONFIG = fixture.wranglerConfig ?? join(SERVER, "wrangler.jsonc");
+// The env file every wrangler call is given, which holds nothing: without one, wrangler loads .env and .env.local from
+// its working directory into its environment at its start.
+export const NO_ENV_FILE = "/dev/null";
+// The repository's wrangler configuration at its top level, and no env file, for every call on the account.
+export const TOP_LEVEL: readonly string[] = ["--config", CONFIG, "--env", "", "--env-file", NO_ENV_FILE];
+export const waitMs = fixture.waitMs ?? DEFAULT_WAIT_MS;
+
+// What a terminal can hold that would send a command elsewhere than the account and Worker it names, or with other
+// credentials than wrangler's login: the tests' own settings (PRQ_DEPLOY_*, which no production entry reads), and what
+// the pinned wrangler (4.161.0) reads for the account, the credentials, the Worker's name and configuration
+// environment (the WRANGLER_CI_* family among them), the API, its headers and the image registry, and the OAuth login
+// (its URLs, client, environment and auth domain).
+const OVERRIDES = [
+  "CLOUDFLARE_ACCOUNT_ID",
+  "CF_ACCOUNT_ID",
+  "CLOUDFLARE_API_TOKEN",
+  "CF_API_TOKEN",
+  "CLOUDFLARE_API_KEY",
+  "CF_API_KEY",
+  "CLOUDFLARE_EMAIL",
+  "CF_EMAIL",
+  "CLOUDFLARE_AUTH_PROFILE",
+  "CLOUDFLARE_ENV",
+  "CLOUDFLARE_API_BASE_URL",
+  "CF_API_BASE_URL",
+  "CLOUDFLARE_COMPLIANCE_REGION",
+  "CLOUDFLARE_API_HEADERS",
+  "CLOUDFLARE_CONTAINER_REGISTRY",
+  "CLOUDFLARE_CLIENT_ID",
+  "WRANGLER_CLIENT_ID",
+  "WRANGLER_AUTH_DOMAIN",
+  "WRANGLER_AUTH_URL",
+  "WRANGLER_TOKEN_URL",
+  "WRANGLER_REVOKE_URL",
+  "WRANGLER_API_ENVIRONMENT",
+  "WRANGLER_CF_AUTHORIZATION_TOKEN",
+];
+const OVERRIDE_PREFIXES = ["PRQ_DEPLOY_", "WRANGLER_CI_"];
+
+// Refused before any wrangler call or read of a credential: a terminal that holds an override, named (never its value).
+export function refuseOverrides(): void {
+  const found = Object.keys(process.env)
+    .filter((name) => OVERRIDES.includes(name) || OVERRIDE_PREFIXES.some((prefix) => name.startsWith(prefix)))
+    .toSorted();
+  if (found.length > 0) {
+    throw new Refusal(
+      `the environment sets ${found.join(", ")}, which would send this command elsewhere than target.env's account and the Worker ${WORKER}, or with other credentials than wrangler's login: unset ${found.length === 1 ? "it" : "them"} (docs/operations.md, The deploy command)`,
+    );
+  }
+}
+
+// What wrangler's environment keeps of this process's: what a program needs to run here (the paths, the user, the
+// shell, the temp directory, the locale and the terminal), the directories wrangler keeps its login in and mise its
+// tools and trust (XDG_*, MISE_*: the upload runs through mise), and the Docker settings the image's build and push
+// take. Nothing else reaches wrangler, so a variable that would redirect it and is missing from OVERRIDES does not
+// either.
+const KEPT = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TMPDIR",
+  "LANG",
+  "LANGUAGE",
+  "TZ",
+  "TERM",
+  "COLORTERM",
+  "NO_COLOR",
+  "FORCE_COLOR",
+  "WRANGLER_DOCKER_BIN",
+  "WRANGLER_DOCKER_HOST",
+];
+const KEPT_PREFIXES = ["LC_", "XDG_", "MISE_", "DOCKER_"];
 
 // A refusal: each line names a file or a variable, never a value.
 export class Refusal extends Error {
@@ -381,22 +455,22 @@ function wranglerCommand(): [string, string[]] {
   });
 }
 
-// wrangler's environment on the account. Each variable set, not left out: wrangler reads a variable its environment
-// lacks from a .env file in packages/server, and one set here, not empty, wins over the file. A call given values on
-// its stdin writes no log file.
+// wrangler's environment on the account, built from what KEPT keeps (and, in the tests, what their stand-ins read). A
+// call given values on its stdin writes no log file.
 export function wranglerEnv(accountId: string, { values = false } = {}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  const env: NodeJS.ProcessEnv = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([name]) => KEPT.includes(name) || KEPT_PREFIXES.some((prefix) => name.startsWith(prefix)),
+    ),
+  );
+  Object.assign(env, fixture.childEnv, {
     CLOUDFLARE_ACCOUNT_ID: accountId,
-    // An inherited override (or its older name, CF_API_BASE_URL, which this one wins over) cannot send the requests
-    // elsewhere.
     CLOUDFLARE_API_BASE_URL: API,
     // Its debug log, which it also writes to disk, leaves out request bodies, the values among them.
     WRANGLER_LOG_SANITIZE: "true",
     // No debug lines among the JSON its commands print.
     WRANGLER_LOG: "log",
-  };
-  delete env["CF_API_BASE_URL"];
+  });
   if (values) {
     // An error from the API, which can quote what was sent, is logged there as it is.
     env["WRANGLER_WRITE_LOGS"] = "false";

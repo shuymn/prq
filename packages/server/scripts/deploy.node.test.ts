@@ -1,4 +1,5 @@
-// The deploy (deploy.ts) run as the package script runs it, from a host's clone whose origin is a GitHub URL that the
+// The deploy (deploy.ts) run through the tests' entry (test-entry.ts), whose fixture gives it the stand-ins and shorter
+// bounds, from a host's clone whose origin is a GitHub URL that the
 // fixture's git config rewrites to a bare repository, all in the OS temp directory: stand-ins for wrangler (its answers
 // kept in a state file each call reads and changes), mise, pnpm and gh record every call, and a local server answers
 // the ledger for the idle check and Cloudflare's API for the deploy's own reads. A release deploy needs a terminal:
@@ -6,7 +7,7 @@
 // Nothing reaches the network or an account.
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import { join } from "node:path";
@@ -17,8 +18,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { unstable_readConfig } from "wrangler";
 
 import { FixtureGit, type FixtureRepo, fixtureRoot } from "../../cli/src/test/git.ts";
+import type { Fixture } from "./fixture.ts";
 
 const SCRIPT = fileURLToPath(new URL("deploy.ts", import.meta.url));
+const TEST_ENTRY = fileURLToPath(new URL("test-entry.ts", import.meta.url));
 const CONFIG = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url));
 const REPOSITORY = "prq-test/prq";
 const TAG = "v0.1.0";
@@ -61,7 +64,7 @@ for (const name of ["CLOUDFLARE_ACCOUNT_ID", "WRANGLER_OUTPUT_FILE_PATH", "WRANG
   env[name] = process.env[name] ?? null;
 }
 const credentialInEnv = ${CREDENTIAL_IN_ENV};
-appendFileSync(process.env.FAKE_WRANGLER_LOG, JSON.stringify({ call, args, cwd: process.cwd(), ppid: process.ppid, env, config, credentialInEnv }) + "\\n");
+appendFileSync(process.env.FAKE_WRANGLER_LOG, JSON.stringify({ call, args, cwd: process.cwd(), ppid: process.ppid, env, names: Object.keys(process.env), config, credentialInEnv }) + "\\n");
 const statePath = process.env.FAKE_WRANGLER_STATE;
 const state = JSON.parse(readFileSync(statePath, "utf8"));
 const save = () => writeFileSync(statePath, JSON.stringify(state));
@@ -198,6 +201,7 @@ const WranglerCall = v.object({
   cwd: v.string(),
   ppid: v.number(),
   env: v.record(v.string(), v.nullable(v.string())),
+  names: v.array(v.string()),
   config: v.nullable(v.string()),
   credentialInEnv: v.boolean(),
 });
@@ -238,6 +242,8 @@ let seed: FixtureRepo;
 let host: FixtureRepo;
 let commit: string;
 let env: Record<string, string>;
+// What the entry gives the deploy; the stand-ins' own settings (FAKE_*) are added to wrangler's environment.
+let settings: v.InferOutput<typeof Fixture>;
 let server: Server;
 let port: number;
 let ledger: { rows: unknown[]; nextCursor: string | null }[];
@@ -385,13 +391,6 @@ beforeEach(async () => {
     ...fixture.env,
     PATH: `${bin}:${fixture.env["PATH"] ?? ""}`,
     TMPDIR: join(root, "tmp"),
-    PRQ_DEPLOY_DIRECTORY: directory,
-    PRQ_DEPLOY_WRANGLER: join(bin, "wrangler"),
-    PRQ_DEPLOY_WAIT_MS: "15000",
-    PRQ_DEPLOY_POLL_MS: "50",
-    PRQ_DEPLOY_ROLLOUT_MS: "20000",
-    PRQ_DEPLOY_ORIGIN: `http://127.0.0.1:${port}`,
-    PRQ_DEPLOY_API: `http://127.0.0.1:${port}/client/v4`,
     PRQ_ACCESS_CLIENT_ID: TOKEN.id,
     PRQ_ACCESS_CLIENT_SECRET: TOKEN.secret,
     FAKE_WRANGLER_STATE: join(root, "wrangler-state.json"),
@@ -399,6 +398,15 @@ beforeEach(async () => {
     FAKE_WRANGLER_PIDS: join(root, "wrangler-pids.json"),
     FAKE_TOOLS_LOG: join(root, "tools.jsonl"),
     FAKE_GH_ANSWER: checkRuns(commit),
+  };
+  settings = {
+    directory,
+    wrangler: join(bin, "wrangler"),
+    waitMs: 15_000,
+    pollMs: 50,
+    rolloutMs: 20_000,
+    origin: `http://127.0.0.1:${port}`,
+    api: `http://127.0.0.1:${port}/client/v4`,
   };
 });
 
@@ -466,10 +474,16 @@ const IN_TERMINAL = [
   "sys.exit(code if code >= 0 else 128 - code)",
 ].join("\n");
 
-// The deploy with these arguments, in a terminal unless told otherwise, answering each question it asks in turn.
-// Its output never holds a value it must not print.
-function start(args: string[], { terminal = true, answers = [] as string[] } = {}) {
-  const command = [process.execPath, SCRIPT, ...args];
+// The deploy with these arguments, in a terminal unless told otherwise, answering each question it asks in turn,
+// through the tests' entry with the settings, or (production) as `pnpm run deploy` runs it, with none. Its output never
+// holds a value it must not print.
+function start(args: string[], { terminal = true, answers = [] as string[], production = false } = {}) {
+  const file = join(root, "fixture.json");
+  const childEnv = Object.fromEntries(Object.entries(env).filter(([name]) => name.startsWith("FAKE_")));
+  writeFileSync(file, JSON.stringify({ ...settings, childEnv }));
+  const command = production
+    ? [process.execPath, SCRIPT, ...args]
+    : [process.execPath, TEST_ENTRY, file, "deploy", ...args];
   const argv = terminal ? ["python3", "-I", "-S", "-c", IN_TERMINAL, ...command] : command;
   const child = spawn(argv[0] ?? "", argv.slice(1), { cwd: host.path, env, stdio: ["pipe", "pipe", "pipe"] });
   started.push(child);
@@ -506,7 +520,10 @@ function start(args: string[], { terminal = true, answers = [] as string[] } = {
   return { child, result };
 }
 
-function deploy(args: string[], options: { terminal?: boolean; answers?: string[] } = {}): Promise<Result> {
+function deploy(
+  args: string[],
+  options: { terminal?: boolean; answers?: string[]; production?: boolean } = {},
+): Promise<Result> {
   return start(args, options).result;
 }
 
@@ -653,6 +670,8 @@ describe("deploy --bootstrap", () => {
       `--config=${join(call?.cwd ?? "", "wrangler.jsonc")}`,
       "--env",
       "",
+      "--env-file",
+      "/dev/null",
       "--tag=prq-bootstrap",
       "--message=prq bootstrap: serves nothing",
     ]);
@@ -751,7 +770,7 @@ async function publishRelease(...paths: string[]): Promise<void> {
 async function otherAccount(): Promise<void> {
   const other = join(root, "other-account.jsonc");
   await writeFile(other, `${JSON.stringify({ name: "prq", account_id: OTHER_ACCOUNT })}\n`);
-  env["PRQ_DEPLOY_WRANGLER_CONFIG"] = other;
+  settings.wranglerConfig = other;
 }
 
 describe("an environment marked as CI", () => {
@@ -811,35 +830,71 @@ describe("the account", () => {
   });
 });
 
-describe("the API override", () => {
-  const REFUSAL =
-    "deploy: PRQ_DEPLOY_API is set, which only the deploy's tests use (a loopback address beside their stand-in for wrangler): unset it, and the deploy reads Cloudflare's API\n";
+describe("the production entry", () => {
+  // deploy.ts as `pnpm run deploy` runs it, with no fixture. Were an override taken, each run would still stop before
+  // any call: HOME holds no deploy directory, the release runs out of a terminal, and the record is no path.
+  const MODES = [[TAG], ["--bootstrap"], ["--read-back", "no-record"]];
 
-  // Each run would stop before wrangler runs were the override taken: a release out of a terminal, and a read-back of
-  // a path that is no record.
   it.each([
-    ["a release with wrangler itself", [TAG], false, null],
-    ["a read-back with wrangler itself", ["--read-back", "no-record"], false, null],
-    ["an address off this machine", [TAG], true, "https://api.sentinel-zone.example/client/v4"],
-  ] as const)(
-    "is refused for %s, before any call or read of the credentials",
-    async (_what, args, standIn, address) => {
-      await released();
-      if (!standIn) {
-        delete env["PRQ_DEPLOY_WRANGLER"];
-      }
-      if (address !== null) {
-        env["PRQ_DEPLOY_API"] = address;
-      }
+    // Round 2's scene and its stand-in for wrangler with a local API, and round 3's ledger origin.
+    [
+      "the tests' own settings",
+      { PRQ_DEPLOY_WRANGLER: "/sentinel/wrangler", PRQ_DEPLOY_API: "http://127.0.0.1:9/client/v4" },
+    ],
+    ["the idle check's origin", { PRQ_DEPLOY_ORIGIN: "http://127.0.0.1:9" }],
+    // Round 3's Worker name, and the configuration's environment.
+    ["the Worker's name", { WRANGLER_CI_OVERRIDE_NAME: "sentinel-other-worker", WRANGLER_CI_MATCH_TAG: "sentinel" }],
+    ["the configuration's environment", { CLOUDFLARE_ENV: "sentinel-env" }],
+    ["the account", { CLOUDFLARE_ACCOUNT_ID: OTHER_ACCOUNT, CF_ACCOUNT_ID: OTHER_ACCOUNT }],
+    [
+      "other credentials",
+      {
+        CLOUDFLARE_API_TOKEN: "sentinel-other-token",
+        CLOUDFLARE_API_KEY: "sentinel-other-key",
+        CLOUDFLARE_AUTH_PROFILE: "sentinel",
+      },
+    ],
+    [
+      "the API",
+      {
+        CLOUDFLARE_API_BASE_URL: "https://api.sentinel.example/client/v4",
+        CF_API_BASE_URL: "https://api.sentinel.example/client/v4",
+        CLOUDFLARE_COMPLIANCE_REGION: "fedramp_high",
+        CLOUDFLARE_API_HEADERS: "x-sentinel: 1",
+        CLOUDFLARE_CONTAINER_REGISTRY: "registry.sentinel.example",
+      },
+    ],
+    // Round 3's OAuth endpoint and auth domain.
+    [
+      "the OAuth login",
+      {
+        WRANGLER_TOKEN_URL: "https://login.sentinel.example/oauth2/token",
+        WRANGLER_AUTH_URL: "https://login.sentinel.example/oauth2/auth",
+        WRANGLER_AUTH_DOMAIN: "login.sentinel.example",
+        WRANGLER_API_ENVIRONMENT: "staging",
+      },
+    ],
+  ] as const)("refuses a terminal that sets %s, in every mode, before any call", async (_what, set) => {
+    await released();
+    Object.assign(env, set);
+    const names = Object.keys(set).toSorted();
 
-      const result = await deploy([...args], { terminal: false });
+    for (const args of MODES) {
+      const result = await deploy(args, { terminal: false, production: true });
 
-      expect(result).toMatchObject({ code: 1, output: REFUSAL });
-      expect(await wranglerCalls()).toEqual([]);
-      expect(await toolCalls()).toEqual([]);
-      expect(apiRequests).toEqual([]);
-    },
-  );
+      expect(result).toMatchObject({
+        code: 1,
+        output: `deploy: the environment sets ${names.join(", ")}, which would send this command elsewhere than target.env's account and the Worker prq, or with other credentials than wrangler's login: unset ${names.length === 1 ? "it" : "them"} (docs/operations.md, The deploy command)\n`,
+      });
+      for (const value of Object.values(set)) {
+        expect(result.output).not.toContain(value);
+      }
+    }
+    expect(await wranglerCalls()).toEqual([]);
+    expect(await toolCalls()).toEqual([]);
+    expect(apiRequests).toEqual([]);
+    expect(ledgerRequests).toEqual([]);
+  });
 });
 
 describe("deploy <tag>", () => {
@@ -907,6 +962,8 @@ describe("deploy <tag>", () => {
       `--config=${join(clone, "packages", "server", "wrangler.jsonc")}`,
       "--env",
       "",
+      "--env-file",
+      "/dev/null",
       `--domain=${HOST}`,
       `--tag=${TAG}`,
       `--message=prq ${TAG} ${commit}`,
@@ -914,7 +971,7 @@ describe("deploy <tag>", () => {
     expect(call?.cwd).toBe(join(clone, "packages", "server"));
     // Every read on the account: the repository's configuration at its top level.
     for (const read of (await wranglerCalls()).filter((each) => each.call !== "deploy")) {
-      expect(read.args.slice(-4)).toEqual(["--config", CONFIG, "--env", ""]);
+      expect(read.args.slice(-6)).toEqual(["--config", CONFIG, "--env", "", "--env-file", "/dev/null"]);
     }
     expect(call?.env).toMatchObject({
       CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
@@ -1009,6 +1066,34 @@ describe("deploy <tag>", () => {
       `/client/v4/accounts/${ACCOUNT}/workers/workers/prq Bearer ${API_TOKEN_REFRESHED}`,
     ]);
     expect((await onlyRecord()).data.readBack).toMatchObject({ state: "complete" });
+  });
+
+  it("gives wrangler an environment built for it, whatever else the terminal holds", async () => {
+    await released();
+    // Kept: the locale, Docker's settings, where wrangler keeps its login. Left out: everything else, a variable that
+    // would redirect wrangler and that the refused list misses among it.
+    const kept = {
+      LANG: "en_US.UTF-8",
+      DOCKER_HOST: "unix:///sentinel/docker.sock",
+      XDG_CACHE_HOME: join(root, "cache"),
+    };
+    const left = {
+      NODE_OPTIONS: "--max-old-space-size=2048",
+      HTTPS_PROXY: "http://127.0.0.1:9",
+      WRANGLER_SEND_METRICS: "true",
+      WRANGLER_SENTINEL_FUTURE_OVERRIDE: "https://elsewhere.sentinel.example",
+    };
+    Object.assign(env, kept, left);
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(0);
+    const calls = await wranglerCalls();
+    expect(calls.map((call) => call.call)).toContain("deploy");
+    for (const call of calls) {
+      expect(call.names).toEqual(expect.arrayContaining(Object.keys(kept)));
+      expect(call.names.filter((name) => name in left || name.startsWith("PRQ_"))).toEqual([]);
+    }
   });
 
   it("deploys nothing when the owner does not confirm", async () => {
@@ -1228,7 +1313,7 @@ describe("deploy <tag>", () => {
     ],
   ])("leaves a rollout incomplete at the end of its time with %s", async (_what, instancePages, line) => {
     await released({ imageChanges: true, rolloutAfterDeploy: 0, instancePages });
-    env["PRQ_DEPLOY_ROLLOUT_MS"] = "5000";
+    settings.rolloutMs = 5000;
 
     const result = await deploy([TAG], { answers: ["y"] });
 
@@ -1388,7 +1473,7 @@ describe("deploy <tag>", () => {
 
     // The rollout has cleared, and an active instance still reports the application's earlier version.
     await changeState({ rolloutReads: 0, instancePages: [[{ state: "running", version: APP.version - 1 }]] });
-    env["PRQ_DEPLOY_ROLLOUT_MS"] = "3000";
+    settings.rolloutMs = 3000;
     const behind = await deploy(["--read-back", dir], { terminal: false });
     expect(behind.code).toBe(2);
     expect(behind.output).toContain("instances: 1 active (1 at another version or none, 0 not settled), 0 inactive");
@@ -1417,7 +1502,7 @@ describe("deploy <tag>", () => {
 
   it("stops the upload with all it started at the end of its bound, and records it", async () => {
     await released({ behavior: { deploy: "hang" } });
-    env["PRQ_DEPLOY_STEP_MS"] = "8000";
+    settings.stepMs = 8000;
 
     const result = await deploy([TAG], { answers: ["y"] });
 

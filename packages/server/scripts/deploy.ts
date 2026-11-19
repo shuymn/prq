@@ -21,6 +21,7 @@ import { isCI, name as ciName } from "ci-info";
 import * as v from "valibot";
 import { unstable_readConfig } from "wrangler";
 
+import { fixture } from "./fixture.ts";
 import {
   account,
   accountName,
@@ -32,10 +33,12 @@ import {
   exited,
   failed,
   hide,
+  NO_ENV_FILE,
   onInterrupt,
   print,
   printError,
   readPrivate,
+  refuseOverrides,
   Refusal,
   run,
   runCommand,
@@ -107,36 +110,15 @@ function isSet(name: string): boolean {
   return (process.env[name] ?? "") !== "";
 }
 
-function setting(name: string, fallback: number): number {
-  const text = process.env[name] ?? "";
-  return /^[1-9][0-9]*$/.test(text) ? Number(text) : fallback;
-}
-
-// Only for tests: shorter bounds for the clone's steps and the upload, a shorter poll interval, and the Worker's origin
-// for the idle check.
-const stepMs = setting("PRQ_DEPLOY_STEP_MS", 60 * 60_000);
-const uploadMs = setting("PRQ_DEPLOY_STEP_MS", 2 * 60 * 60_000);
-const pollMs = setting("PRQ_DEPLOY_POLL_MS", 10_000);
+// Only the tests' fixture sets shorter bounds for the clone's steps and the upload, a shorter poll interval, the
+// Worker's origin for the idle check, or the API the deploy's own reads go to (a stand-in).
+const stepMs = fixture.stepMs ?? 60 * 60_000;
+const uploadMs = fixture.stepMs ?? 2 * 60 * 60_000;
+const pollMs = fixture.pollMs ?? 10_000;
 // The rollout is read every poll interval until it is complete or this long has passed since the poll began.
-const rolloutMs = setting("PRQ_DEPLOY_ROLLOUT_MS", 30 * 60_000);
-const originOverride = process.env["PRQ_DEPLOY_ORIGIN"];
-// Only for tests: the API the deploy's own reads go to, a stand-in on this machine beside the stand-in for wrangler
-// (wrangler's calls stay pinned to the production one). apiChecked refuses any other before anything runs.
-const api = process.env["PRQ_DEPLOY_API"] ?? API;
-
-function apiChecked(): void {
-  if (api === API) {
-    return;
-  }
-  const url = URL.canParse(api) ? new URL(api) : null;
-  const loopback =
-    url !== null && url.protocol === "http:" && ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname);
-  if (!loopback || (process.env["PRQ_DEPLOY_WRANGLER"] ?? "") === "") {
-    throw new Refusal(
-      "PRQ_DEPLOY_API is set, which only the deploy's tests use (a loopback address beside their stand-in for wrangler): unset it, and the deploy reads Cloudflare's API",
-    );
-  }
-}
+const rolloutMs = fixture.rolloutMs ?? 30 * 60_000;
+const originOverride = fixture.origin;
+const api = fixture.api ?? API;
 
 // What wrangler answers: `deployments status --json`, `versions view --json`, `auth token --json` (wrangler's
 // credentials: an OAuth or API token, or a global API key with its email), `containers info --json` and a page of `containers instances --json --per-page` (a Durable Object with no instance
@@ -1141,6 +1123,8 @@ async function release(tag: string, flags: Flags): Promise<number> {
       `--config=${join(clone, "packages", "server", "wrangler.jsonc")}`,
       "--env",
       "",
+      "--env-file",
+      NO_ENV_FILE,
       `--domain=${host}`,
       `--tag=${tag}`,
       `--message=prq ${tag} ${sha}`,
@@ -1303,6 +1287,8 @@ async function bootstrap(resume: boolean): Promise<number> {
         `--config=${join(work, "wrangler.jsonc")}`,
         "--env",
         "",
+        "--env-file",
+        NO_ENV_FILE,
         `--tag=${BOOTSTRAP_TAG}`,
         "--message=prq bootstrap: serves nothing",
       ],
@@ -1381,7 +1367,7 @@ function notInCi(): void {
 }
 
 async function main(args: readonly string[]): Promise<number> {
-  apiChecked();
+  refuseOverrides();
   const [first = "", ...rest] = args;
   if (first === "--bootstrap" && (rest.length === 0 || (rest.length === 1 && rest[0] === "--resume"))) {
     notInCi();
