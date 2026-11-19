@@ -82,6 +82,9 @@ catalog:
   wrangler: 4.161.0
   # What the deploy refuses to run in: an environment wrangler takes as CI, by the ci-info it bundles (this version).
   ci-info: 4.4.0
+  # The deployed checks' WebSockets: unlike Node's own WebSocket, ws gives a refused handshake's HTTP response.
+  "@types/ws": 8.18.2
+  ws: 8.23.0
 
   # Lint, format, unused files, dependencies and exports (knip.jsonc), commit messages, and the Git hooks.
   "@commitlint/cli": 21.2.4

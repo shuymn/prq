@@ -67,6 +67,8 @@ const SUBDOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const COMPATIBILITY_DATE = "2026-11-10";
 const DASHBOARD = "Workers & Pages → prq → Settings → Domains & Routes";
 const RESUME = "pnpm --dir packages/server run deploy -- --read-back";
+// The CLI package of the checkout this script runs from, where the bootstrap's check runs.
+const CLI_DIR = fileURLToPath(new URL("../../cli", import.meta.url));
 // A changed application's instances, read a page at a time (wrangler's own page size) up to this many pages.
 const INSTANCES_PER_PAGE = "25";
 const INSTANCE_PAGES = 200;
@@ -798,11 +800,24 @@ async function settle(
   print(`in the dashboard (${DASHBOARD}): workers.dev and Preview URLs disabled, ${record.data.host} a custom domain`);
   if (state === "complete") {
     print(`read-back complete: ${reason}`);
+    // The team domain is not printed: the shell gives it, as the subdomain, which a release does not know.
+    const cli = join(record.data.clone, "packages", "cli");
+    print(
+      "then, with PRQ_URL and the service token set, ACCESS_TEAM_DOMAIN to the Access team domain and WORKERS_SUBDOMAIN to the account's workers.dev subdomain, run:",
+    );
+    print(checkCommand(cli, 'edge --team-domain "$ACCESS_TEAM_DOMAIN"'));
+    print(checkCommand(cli, 'endpoints "$WORKERS_SUBDOMAIN"'));
     return 0;
   }
   printError(`deploy: verification incomplete: ${reason}`);
   printError(`deploy: resume it with ${RESUME} ${record.dir}`);
   return 2;
+}
+
+// A deployed check (docs/operations.md, The deployed checks) as a command line of its own, the CLI package's path
+// quoted for a POSIX shell.
+function checkCommand(cli: string, args: string): string {
+  return `  pnpm --dir '${cli.replaceAll("'", "'\\''")}' run check:deployed -- ${args}`;
 }
 
 // The instances as the read-back counts them: those of a Durable Object with no instance (inactive) apart, and of the
@@ -1386,6 +1401,12 @@ async function bootstrap(resume: boolean): Promise<number> {
   print(`in the dashboard (${DASHBOARD}): workers.dev and Preview URLs disabled, no custom domain`);
   if (urls !== null) {
     print(`serve nothing of prq: ${urls.production} and ${urls.preview}`);
+    print("then run:");
+    print(checkCommand(CLI_DIR, `endpoints ${subdomain} --version ${versionId}`));
+  } else if (subdomain === "none") {
+    print("then run:");
+    print(checkCommand(CLI_DIR, "endpoints none"));
+    print("with no subdomain, the dashboard's settings above are the evidence");
   }
   if (subdomain === null) {
     printError(

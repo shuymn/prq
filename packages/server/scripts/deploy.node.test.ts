@@ -6,7 +6,7 @@
 // those runs get one from python3's pty module.
 // Nothing reaches the network or an account.
 
-import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { type ChildProcess, execFile, execFileSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
@@ -17,10 +17,12 @@ import * as v from "valibot";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { unstable_readConfig } from "wrangler";
 
+import { parseInvocation } from "../../cli/src/test/deployed-invocation.ts";
 import { FixtureGit, type FixtureRepo, fixtureRoot } from "../../cli/src/test/git.ts";
 import type { Fixture } from "./fixture.ts";
 
 const SCRIPT = fileURLToPath(new URL("deploy.ts", import.meta.url));
+const CLI_DIR = fileURLToPath(new URL("../../cli", import.meta.url));
 const TEST_ENTRY = fileURLToPath(new URL("test-entry.ts", import.meta.url));
 const CONFIG = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url));
 const REPOSITORY = "prq-test/prq";
@@ -583,6 +585,7 @@ async function recordDirs(): Promise<string[]> {
 const RecordJson = v.looseObject({
   tag: v.string(),
   sha: v.string(),
+  clone: v.string(),
   outcome: v.string(),
   idle: v.nullable(v.string()),
   application: v.nullable(v.string()),
@@ -628,6 +631,25 @@ async function filesHolding(dir: string, text: string): Promise<string[]> {
 }
 
 // What is left in the deploy's temp directory besides its clones.
+// The deployed checks the output prints, one command a line, as a POSIX shell reads each with the variables given:
+// the CLI package each runs in, and its arguments as the check's parser takes them.
+function printedChecks(output: string, variables: Record<string, string> = {}) {
+  return output
+    .split("\n")
+    .filter((line) => line.trimStart().startsWith("pnpm --dir "))
+    .map((line) => {
+      const words = execFileSync("/bin/sh", ["-c", `set -- ${line}; printf '%s\\0' "$@"`], {
+        env: { PATH: process.env["PATH"] ?? "", ...variables },
+        encoding: "utf8",
+      })
+        .split("\0")
+        .slice(0, -1);
+      expect(words.slice(0, 1)).toEqual(["pnpm"]);
+      expect(words.slice(3, 6)).toEqual(["run", "check:deployed", "--"]);
+      return { dir: words[2], invocation: parseInvocation(words.slice(6)) };
+    });
+}
+
 async function leftInTmp(): Promise<string[]> {
   return (await readdir(join(root, "tmp"))).filter((name) => !/^prq-deploy-v[0-9]/.test(name));
 }
@@ -714,6 +736,12 @@ describe("deploy --bootstrap", () => {
     expect(result.output).toContain(
       "in the dashboard (Workers & Pages → prq → Settings → Domains & Routes): workers.dev and Preview URLs disabled, no custom domain",
     );
+    expect(printedChecks(result.output)).toEqual([
+      {
+        dir: CLI_DIR,
+        invocation: { mode: "endpoints", subdomain: "synthetic-sub", version, json: undefined },
+      },
+    ]);
     const dir = join(root, ".local", "state", "prq", "deploys", "bootstrap");
     const [file] = await readdir(dir);
     expect(JSON.parse(await readFile(join(dir, file ?? ""), "utf8"))).toMatchObject({
@@ -757,6 +785,12 @@ describe("deploy --bootstrap", () => {
     const resumed = await deploy(["--bootstrap", "--resume"], { terminal: false, answers: ["none"] });
     expect(resumed.code).toBe(0);
     expect(await deployCalls()).toHaveLength(1);
+    expect(printedChecks(resumed.output)).toEqual([
+      { dir: CLI_DIR, invocation: { mode: "endpoints", subdomain: null, version: undefined, json: undefined } },
+    ]);
+    expect(resumed.output).toContain(
+      "in the dashboard (Workers & Pages → prq → Settings → Domains & Routes): workers.dev and Preview URLs disabled, no custom domain",
+    );
   });
 
   it("records no subdomain it cannot read, and says the bootstrap is not complete", async () => {
@@ -1355,6 +1389,9 @@ describe("deploy <tag>", () => {
 
   it("reads a changed application's rollout until it is complete, and passes --immediate on", async () => {
     await released({ imageChanges: true, rolloutAfterDeploy: 2 });
+    // A temp directory whose path holds a space, as the clone's then does.
+    env["TMPDIR"] = join(root, "tmp with space");
+    await mkdir(env["TMPDIR"]);
 
     const result = await deploy([TAG, "--immediate"], { answers: ["y"] });
 
@@ -1364,6 +1401,13 @@ describe("deploy <tag>", () => {
     expect(data).toMatchObject({ application: "changed", readBack: { state: "complete" } });
     expect(data.readBack?.rounds).toHaveLength(2);
     expect(result.output).toContain("read-back complete: the application's rollout of version 4 is complete");
+    const cli = join(data.clone, "packages", "cli");
+    expect(cli).toContain("tmp with space");
+    const team = "https://synthetic.cloudflareaccess.com";
+    expect(printedChecks(result.output, { ACCESS_TEAM_DOMAIN: team, WORKERS_SUBDOMAIN: "synthetic-sub" })).toEqual([
+      { dir: cli, invocation: { mode: "edge", teamDomain: team, pr: undefined, json: undefined } },
+      { dir: cli, invocation: { mode: "endpoints", subdomain: "synthetic-sub", version: undefined, json: undefined } },
+    ]);
     // Every page of the instances, the inactive Durable Object apart.
     expect(result.output).toContain("instances: 1 active (0 at another version or none, 0 not settled), 1 inactive");
   });

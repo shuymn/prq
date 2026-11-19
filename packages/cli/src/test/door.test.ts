@@ -12,7 +12,7 @@ import { text } from "node:stream/consumers";
 
 import { afterEach, describe, expect, test } from "vitest";
 
-import { type Door, startDoor } from "./door.ts";
+import { type Admission, type Door, startDoor } from "./door.ts";
 import { latch } from "./latch.ts";
 
 const TOKEN = "the-harness-token";
@@ -73,8 +73,11 @@ async function upstream(
   return stand;
 }
 
-async function door(target: string): Promise<Door> {
-  const opened = await startDoor({ url: () => target, token: () => Promise.resolve(TOKEN) }, { answerMs: ANSWER_MS });
+async function door(target: string, admit?: (req: IncomingMessage) => Admission): Promise<Door> {
+  const opened = await startDoor(
+    { url: () => target, token: ({ expired = false } = {}) => Promise.resolve(expired ? "an-expired-token" : TOKEN) },
+    { answerMs: ANSWER_MS, ...(admit === undefined ? {} : { admit }) },
+  );
   started.push(opened);
   return opened;
 }
@@ -318,6 +321,65 @@ async function echoPaths(): Promise<Upstream & { asked: string[] }> {
 }
 
 const anyPath = () => true;
+
+describe("a door that decides each request first", () => {
+  test("answers a refused request and a refused upgrade itself, forwarding neither", async () => {
+    const worker = await echoPaths();
+    const front = await door(worker.url, () => ({
+      kind: "deny",
+      status: 302,
+      headers: [["Location", "https://team.example/cdn-cgi/access/login/x"]],
+      body: "sign in",
+    }));
+    expect(await send(`${front.url}/api/ledger`, { method: "POST", body: "a body" })).toMatchObject({
+      status: 302,
+      headers: { location: "https://team.example/cdn-cgi/access/login/x" },
+      body: "sign in",
+    });
+    expect(await upgrade(`${front.url}/agents/hub/hub`)).toMatchObject({ status: 302, socket: null, body: "sign in" });
+    expect(worker.asked).toEqual([]);
+    expect(front.log).toEqual([]);
+  });
+
+  test("forwards with the token it decides on, never the service token's headers", async () => {
+    const seen: IncomingMessage["headers"][] = [];
+    const worker = await upstream((req, res) => {
+      seen.push(req.headers);
+      res.end();
+    });
+    const tokens: Admission[] = [
+      { kind: "forward", token: "none" },
+      { kind: "forward", token: "expired" },
+      { kind: "forward", token: "valid" },
+    ];
+    const front = await door(worker.url, () => tokens.shift() ?? { kind: "forward", token: "valid" });
+    const headers = { "CF-Access-Client-Id": "the-id", "CF-Access-Client-Secret": "the-secret" };
+    for (let i = 0; i < 3; i += 1) {
+      await send(`${front.url}/`, { headers });
+    }
+    expect(seen.map((entry) => entry["cf-access-jwt-assertion"])).toEqual([undefined, "an-expired-token", TOKEN]);
+    expect(seen.flatMap((entry) => [entry["cf-access-client-id"], entry["cf-access-client-secret"]])).toEqual(
+      Array(6).fill(undefined),
+    );
+  });
+});
+
+describe("a rewritten answer", () => {
+  test("reaches the browser with the headers the plan returns", async () => {
+    const worker = await upstream((_req, res) => {
+      res.writeHead(200, { "Cache-Control": "no-cache", "X-Kept": "1" }).end("shell");
+    });
+    const front = await door(worker.url);
+    front.plan((path) => path === "/", {
+      kind: "rewrite",
+      headers: (headers) => headers.filter(([name]) => name.toLowerCase() !== "cache-control"),
+    });
+    const answer = await send(`${front.url}/`);
+    expect(answer).toMatchObject({ status: 200, headers: { "x-kept": "1" }, body: "shell" });
+    expect(answer.headers["cache-control"]).toBeUndefined();
+    expect((await send(`${front.url}/`)).headers["cache-control"]).toBe("no-cache");
+  });
+});
 
 describe("a gated request", () => {
   test("reaches the Worker only once released, an upgrade too", async () => {

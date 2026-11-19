@@ -70,6 +70,13 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`; host
   model, at the window `.dev.vars` sets (written without `--window`).
 - lefthook runs oxlint and oxfmt on the staged files, a betterleaks secret scan, actionlint and ghalint on workflows, a
   `fileToken` check on `design/prq.pen`, and commitlint on the message.
+- `pnpm run check:deployed -- <mode>` in `packages/cli` checks the real deployment that `PRQ_URL` names
+  (`docs/operations.md`, The deployed checks); its runs are the owner's. Its tests (`packages/cli/src/test/deployed-*`,
+  `packages/cli/src/e2e/deployed.test.ts`) run the modes against loopback servers and against the local Worker through
+  the stand-in's edge, a third listener of `src/test/access.ts` that decides each request as Access does for the
+  hostname before the door forwards it, with short polls and the scripted model; nothing reaches the network.
+  wrangler's local runtime does not pass a client's departure on to the Worker, so the edge check's E9 fails there by
+  design.
 - `pnpm run secrets check|status|put` in `packages/server` handles the Worker's production secrets
   (`docs/operations.md`, The secrets command). `status` and `put` reach the Cloudflare account and are the host's to
   run. Its tests (`packages/server/scripts/secrets.node.test.ts`, in the server's node project) run it through the
