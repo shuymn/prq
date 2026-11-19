@@ -1,7 +1,8 @@
 // The PR detail in Chrome for a local session, against the real Worker in wrangler's local runtime through the Access
-// stand-in's browser door, its jobs done by the compiled prq (plan P3.2, P3.5, P3.8–P3.10, P3.12, P3.14, P3.16): what
-// the page reads and when, a question from the composer, a cut connection, the waiting line, versions, the panel
-// layout, the version notice under an earlier deploy's bundle, history navigation and the panel's back control.
+// stand-in's browser door, its jobs done by the compiled prq (plan P3.2, P3.5, P3.8–P3.10, P3.12, P3.14, P3.16,
+// P4.2, P4.4, P4.7, P4.8): what the page reads and when, a question from the composer, a cut connection, the waiting
+// line, versions, the panel layout, the version notice under an earlier deploy's bundle, history navigation and the
+// panel's back control, Retry on a claim while the job moves, the stalled line, and the rail collapsed.
 
 import { writeFile } from "node:fs/promises";
 
@@ -14,6 +15,7 @@ import { useBrowser } from "../../test/browser.ts";
 import { result } from "../../test/cli.ts";
 import { conversation, summary } from "../../test/detail-page.ts";
 import { gateUpgrades } from "../../test/door.ts";
+import { latch } from "../../test/latch.ts";
 import { buildOldBundle } from "../../test/old-bundle.ts";
 import { ask, push, sessionView, sha, storedMessages } from "../../test/pr.ts";
 import { useStack } from "../../test/stack.ts";
@@ -372,4 +374,109 @@ describe("history navigation", () => {
     await row.waitFor();
     expect(await index()).toBe(list + 3);
   });
+});
+
+// The door's log of a job's retries.
+const retries = (jobId: string) =>
+  stack
+    .access()
+    .door.log.filter((entry) => entry.path === `/api/pr/${PR.owner}/${PR.repo}/${PR.number}/jobs/${jobId}/retry`);
+
+describe("jobs and Retry", () => {
+  test("a local claim offers Retry before the stall mark; a retry gated while prq resumes the claim gets 409 stale_job, sends nothing again, and Retry comes back from the new rev; one gated while prq submits gets 409 not_retryable, and the answer shows (P4.2, P4.4)", async () => {
+    const worker = stack.worker();
+    await present();
+    await ask(worker, PR, "q1", "What changed?");
+    await claim();
+    const page = browser.page();
+    browser.expectConsoleError((message) => message.includes("409"));
+    const posts: unknown[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().endsWith("/retry")) {
+        posts.push(request.postDataJSON());
+      }
+    });
+    await page.goto(door(DETAIL));
+    const retry = page
+      .locator('.rail [data-component="JobRow"][data-state="running"]')
+      .getByRole("button", { name: "Retry" });
+    await retry.waitFor();
+    const [before] = (await sessionView(worker, PR)).jobs;
+    const jobId = before?.jobId ?? "";
+    const gated = (path: string) => path.endsWith(`/jobs/${jobId}/retry`);
+
+    const first = { arrived: latch(), release: latch() };
+    stack.access().door.plan(gated, { kind: "gate", ...first });
+    await retry.click();
+    await first.arrived.promise;
+    const resumed = await claim();
+    const [moved] = (await sessionView(worker, PR)).jobs;
+    expect(moved).toMatchObject({ state: "claimed", rev: (before?.rev ?? 0) + 1 });
+    first.release.open();
+    await vi.waitFor(() => expect(retries(jobId)).toMatchObject([{ status: 409 }]));
+    await retry.and(page.locator('[data-state="rest"]')).waitFor();
+    expect(await page.getByText("Couldn't retry. Try again.").count()).toBe(0);
+
+    const second = { arrived: latch(), release: latch() };
+    stack.access().door.plan(gated, { kind: "gate", ...second });
+    await retry.click();
+    await second.arrived.promise;
+    await writeFile(resumed.answer, "It renames the flag.\n");
+    await submit();
+    second.release.open();
+    await vi.waitFor(async () =>
+      expect(await conversation(page)).toEqual([
+        { role: "question", state: "sent", text: "What changed?" },
+        { role: "answer", state: "complete", text: "It renames the flag." },
+      ]),
+    );
+    await vi.waitFor(() => expect(retries(jobId)).toMatchObject([{ status: 409 }, { status: 409 }]));
+    await page.getByText("1 done").waitFor();
+    expect(await page.getByRole("button", { name: "Retry" }).count()).toBe(0);
+    expect(posts).toEqual([{ expectedRev: before?.rev }, { expectedRev: moved?.rev }]);
+  }, 60_000);
+
+  test("a claim past the stall deadline shows the stalled line with its agent and elapsed time, and the collapsed rail's toggle its danger dot; the rail stays collapsed across a reload, where the summary's version menu picks a version (P4.7, P4.8)", async () => {
+    const worker = stack.worker();
+    await present();
+    await push(worker, PR, sha("h1"));
+    await work("The summary of h1.\n");
+    await push(worker, PR, sha("h2"));
+    await work("The summary of h2.\n");
+    await push(worker, PR, sha("h3"));
+    await claim();
+    const page = browser.page();
+    await page.goto(door(DETAIL));
+    await summary(page, "The summary of h2.").waitFor();
+    await page.getByRole("button", { name: "Collapse rail" }).click();
+    const attention = page.getByRole("button", { name: "Expand rail, a job needs attention" });
+    expect(await attention.count()).toBe(0);
+
+    const name = sessionName(PR);
+    await worker.sql(
+      "PrSession",
+      name,
+      "UPDATE prq_jobs SET claimed_at = ? WHERE state = 'claimed'",
+      Date.now() - 64 * 60_000,
+    );
+    await (await worker.durableObject("PrSession", name))["settle"]?.();
+    const stalled = page.locator('[data-component="Summary"] .progress[data-tone="attention"]');
+    await stalled.waitFor();
+    expect(await stalled.textContent()).toBe(
+      `Summary of ${short("h3")} possibly stalled: no result from ${AGENT} after 1 hrRetry`,
+    );
+    await attention.waitFor();
+    expect(await page.locator(".rail-toggle .alert").isVisible()).toBe(true);
+
+    await page.reload();
+    await summary(page, "The summary of h2.").waitFor();
+    await attention.waitFor();
+    expect(await page.getByRole("heading", { name: "Versions" }).count()).toBe(0);
+    await page.locator('[data-component="VersionMenu"] .trigger').click();
+    await page
+      .getByRole("menuitemradio")
+      .filter({ hasText: short("h1") })
+      .click();
+    await summary(page, "The summary of h1.").waitFor();
+  }, 60_000);
 });

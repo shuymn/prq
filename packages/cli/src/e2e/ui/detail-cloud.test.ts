@@ -1,7 +1,7 @@
 // The PR detail in Chrome for a cloud session, against the real Worker in wrangler's local runtime through the Access
-// stand-in's browser door, its model scripted (plan P3.6, P3.7): a pull request no webhook names, so its questions are
-// the cloud agent's and need no workspace. The first question is seeded through the harness, the second asked from the
-// composer while the first's answer is held mid-stream.
+// stand-in's browser door, its model scripted (plan P3.6, P3.7, P4.1, P4.6): a pull request no webhook names, so its
+// questions are the cloud agent's and need no workspace. Questions are seeded through the harness or asked from the
+// composer; a held stream, and answers whose model fails after its text or before any, then succeeds on the retry.
 
 import { type PrRef, sessionName } from "@prq/protocol";
 import { afterAll, expect, test, vi } from "vitest";
@@ -25,6 +25,7 @@ const sessionSocket = (path: string) => path.startsWith(`/agents/pr-session/${se
 
 const Q1 = "What does the first change do?";
 const Q2 = "And the second one?";
+const Q3 = "Does it change the cache key?";
 
 test("a held answer streams under its own question before, after its commit and across a reconnect; the next question queues with Send back on (P3.6, P3.7)", async () => {
   const worker = stack.worker();
@@ -89,4 +90,64 @@ test("a held answer streams under its own question before, after its commit and 
   } finally {
     hold.release.open();
   }
+}, 60_000);
+
+test("an answer whose model fails after its text keeps it under its question with the reason and Retry; one press sends one POST from the shown rev and the retried run completes it; one that fails before any text shows the reason and Retry where it would be (P4.1, P4.6)", async () => {
+  const worker = stack.worker();
+  let failing = true;
+  scripted.play((request) => {
+    if (JSON.stringify(request.messages).includes(Q3)) {
+      return { text: [], error: "spend limit reached" };
+    }
+    return failing
+      ? { text: ["The first change", " adds"], error: "the stream broke off" }
+      : { text: "The first change adds a cache." };
+  });
+  await ask(worker, PR, "q1", Q1);
+  await vi.waitFor(async () =>
+    expect((await sessionView(worker, PR)).jobs.map((job) => job.state)).toEqual(["failed"]),
+  );
+
+  const page = browser.page();
+  const posts: unknown[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().endsWith("/retry")) {
+      posts.push(JSON.parse(request.postData() ?? "null"));
+    }
+  });
+  await page.goto(door(`/pr/${PR.owner}/${PR.repo}/${PR.number}`));
+  await vi.waitFor(async () =>
+    expect(await conversation(page)).toEqual([
+      { role: "question", state: "sent", text: Q1 },
+      { role: "answer", state: "incomplete", text: "The first change adds" },
+    ]),
+  );
+  await page.getByText(/^Incomplete — .*the stream broke off/).waitFor();
+  const [job] = (await sessionView(worker, PR)).jobs;
+
+  failing = false;
+  await page.locator('.conversation [data-component="Message"]').getByRole("button", { name: "Retry" }).click();
+  await vi.waitFor(
+    async () =>
+      expect(await conversation(page)).toEqual([
+        { role: "question", state: "sent", text: Q1 },
+        { role: "answer", state: "incomplete", text: "The first change adds" },
+        { role: "answer", state: "complete", text: "The first change adds a cache." },
+      ]),
+    { timeout: 10_000 },
+  );
+  expect(posts).toEqual([{ expectedRev: job?.rev }]);
+  const retries = stack.access().door.log.filter((entry) => entry.path.endsWith(`/jobs/${job?.jobId}/retry`));
+  expect(retries).toMatchObject([{ status: 200 }]);
+
+  await ask(worker, PR, "q3", Q3);
+  await vi.waitFor(async () =>
+    expect((await conversation(page)).slice(3)).toEqual([
+      { role: "question", state: "sent", text: Q3 },
+      { role: "answer", state: "incomplete", text: "" },
+    ]),
+  );
+  const failed = page.locator('.conversation [data-component="Message"][data-state="incomplete"]').last();
+  await failed.getByText(/^Incomplete — .*spend limit reached/).waitFor();
+  expect(await failed.getByRole("button", { name: "Retry" }).count()).toBe(1);
 }, 60_000);
