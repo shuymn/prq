@@ -367,9 +367,10 @@ the deploy did to the container application:
   the upload with the same version and image. That rollout, with the image and version it was found with, is then read
   as a changed one is, also once it has cleared.
 
-Once found, the rollout to follow is recorded (`rollout`: the application, its image and version) with the read that
-found it, before any verdict (also when that read missed something else, such as the Worker's settings, which leaves
-the read-back incomplete) and before its instances are read, and every later `--read-back` follows it.
+Once found, the rollout to follow is recorded (`rollout`: the application, its image and version) right after the read
+that found it, before anything else is decided: also when that read missed something else (the live versions, the
+Worker's settings) or found an upload that did not finish, each of which leaves the read-back incomplete. Every later
+`--read-back` follows it, and still completes only with the deployed version live alone and both settings off.
 
 It exits 0 once the read-back is complete. When the upload failed it exits with wrangler's code, 1 when it was stopped
 at its bound. Otherwise it exits 2 with `verification incomplete`, the reason, and the command that resumes it,

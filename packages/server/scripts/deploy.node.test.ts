@@ -1751,6 +1751,44 @@ describe("deploy <tag>", () => {
     });
   });
 
+  it("keeps the rollout a --read-back found while it could not read the live versions of an upload that ended without its result", async () => {
+    // A retry whose image was the same ends during its upload, once wrangler has written the version, without its
+    // result recorded.
+    await released({ behavior: { deploy: "hang-after-upload" } });
+    const { result } = start([TAG], { answers: ["y"] });
+    const pids = await hangingPids();
+    const [upload] = await deployCalls();
+    process.kill(upload?.ppid ?? 0, "SIGKILL");
+    for (const pid of pids) {
+      process.kill(pid, "SIGKILL");
+    }
+    await result;
+    const { dir } = await onlyRecord();
+
+    // The first --read-back cannot read the live versions, and finds a rollout under way.
+    await changeState({ behavior: { "deployments status": "fail" }, rolloutReads: 1 });
+    const first = await deploy(["--read-back", dir], { terminal: false });
+    expect(first.code).toBe(2);
+    expect(await record(dir)).toMatchObject({
+      application: null,
+      rollout: { id: APP.id, image: APP.image, version: APP.version },
+      readBack: {
+        state: "incomplete",
+        reason: `the upload did not finish (the deploy ended during the upload without recording its result): deploy ${TAG} again (docs/operations.md, Recovery)`,
+      },
+    });
+
+    // The second reads them, and finds the rollout cleared with an active instance still at the earlier version.
+    await changeState({ behavior: {}, instancePages: [[{ state: "running", version: APP.version - 1 }]] });
+    settings.rolloutMs = 3000;
+    const second = await deploy(["--read-back", dir], { terminal: false });
+    expect(second.code).toBe(2);
+    expect(await record(dir)).toMatchObject({
+      application: "unchanged",
+      readBack: { state: "incomplete", reason: "the rollout was not complete within 3 s" },
+    });
+  });
+
   it("prints its usage for anything else", async () => {
     for (const args of [[], ["0.1.0"], [TAG, "--force"], [TAG, "--immediate", "--immediate"], ["--bootstrap", TAG]]) {
       expect(await deploy(args, { terminal: false })).toMatchObject({

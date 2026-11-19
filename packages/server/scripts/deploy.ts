@@ -913,28 +913,25 @@ async function provisioning(record: Saved): Promise<number> {
   }
 }
 
-// The rollout to follow, from the reads so far: a changed application's, as read right after the upload (this deploy
-// started it); an unchanged or kept one's when a read found one under way, after the upload, now, or before the upload
-// when the application then had the same version and image (as before a retry whose image was the same).
-function followed(data: DeployRecord, app: Application): Rollout | null {
-  if (data.application === "changed") {
-    const set = data.after?.application ?? app;
-    return { id: set.id, image: set.image, version: set.version };
+// Pins the rollout every later read-back follows, given the application a read just found (app): called as the first
+// thing after each read and once the application is classified, before anything returns or saves, and never replacing
+// a pin. A rollout the read finds under way is pinned whatever else that read missed and before any classification:
+// the application's as read, or the one it had before the upload when it still has that ID, version and image (an
+// earlier deploy's, under way at a retry with the same image). A changed application's is this deploy's own, pinned
+// as read right after the upload whether a read shows it or not.
+function pin(record: Saved, app: Application | null): void {
+  const { data } = record;
+  if (data.rollout !== null || app === null) {
+    return;
   }
   const before = data.before.application;
   const same = before?.id === app.id && before.version === app.version && before.image === app.image;
-  const found = [data.after?.application, app, same ? before : null].find(
-    (each) => (each?.activeRollout ?? null) !== null,
-  );
-  return found === undefined || found === null ? null : { id: found.id, image: found.image, version: found.version };
-}
-
-// The rollout a read of the application found, kept in the record as soon as it is found, before any verdict (one on a
-// read that missed something else included): once found, it stays the one every later read-back follows.
-function observe(record: Saved, app: Application | null): void {
-  const { application } = record.data;
-  if (app !== null && (application === "changed" || application === "unchanged" || application === "kept")) {
-    record.data.rollout ??= followed(record.data, app);
+  const found =
+    data.application === "changed"
+      ? (data.after?.application ?? app)
+      : [app, same ? before : null].find((each) => (each?.activeRollout ?? null) !== null);
+  if (found !== undefined && found !== null) {
+    data.rollout = { id: found.id, image: found.image, version: found.version };
   }
 }
 
@@ -942,7 +939,7 @@ function observe(record: Saved, app: Application | null): void {
 async function readBack(record: Saved): Promise<number> {
   const { after, upload, application } = record.data;
   const state = record.data.reread ?? after;
-  observe(record, state?.application ?? null);
+  pin(record, state?.application ?? null);
   const versionId = upload?.versionId ?? null;
   const live = state?.deployment?.versions ?? [];
   if (state !== null && state.unread.length > 0) {
@@ -1208,6 +1205,7 @@ async function release(tag: string, flags: Flags): Promise<number> {
   // The login read before the upload can have expired since (wrangler refreshes it when asked again).
   credentials = null;
   record.data.after = await readState(accountId, before.application?.id ?? null);
+  pin(record, record.data.after.application);
   if (!succeeded(uploaded)) {
     await record.save();
     printError(`deploy: ${record.data.outcome}`);
@@ -1261,7 +1259,7 @@ async function readBackAgain(path: string): Promise<number> {
   }
   const state = await readState(accountId, record.data.after?.application?.id ?? before.application?.id ?? null);
   record.data.reread = state;
-  observe(record, state.application);
+  pin(record, state.application);
   print(`account: ${accountId}; live: ${versionsLine(state.deployment?.versions)}`);
   print(`container application ${APPLICATION}: ${applicationLine(state.application)}`);
   if (upload.exit !== 0) {
