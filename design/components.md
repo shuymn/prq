@@ -137,8 +137,9 @@ it." and Button secondary sm "Reload". A lazily loaded asset that fails to load 
 so without a confirmed version mismatch the same Notice says "Couldn't load part of this page." and "Try reloading."
 with the same "Reload". It is inline rather than a toast, has no dismiss, blocks nothing, and looks the same on every
 page. From Send until stored history holds the question or the host discards it, reloading loses the question, so on
-every page (also after leaving its pull request) each Reload notice (the failed ConnectionBanner, the new version Notice
-and the asset Notice) ends its text with "Reloading loses your unsent question."
+every page (also after leaving its pull request) each Reload notice (the failed ConnectionBanner, the new version
+Notice, the asset Notice and the settings' display failure below) ends its text with "Reloading loses your unsent
+question."
 
 Reads that fail or come back empty use these components with this copy:
 
@@ -151,6 +152,9 @@ Reads that fail or come back empty use these components with this copy:
 - **Refresh failure:** a later read failed. The same Notice danger sits above the content it failed to refresh, which
   stays as last read: "Couldn't refresh pull requests", "Couldn't refresh the summary and conversation" or "Couldn't
   refresh settings", "Showing what was loaded before." and "Try again".
+- **Display failure:** the settings page failed as it showed what it read. Notice danger in the page's place with
+  "Couldn't show settings", "Reload the page to try again." and Button secondary sm "Reload", which reloads the page;
+  the header and the other pages keep working.
 - **No rows for a filter:** EmptyState in the table's place, the toolbar kept, no actions. Open on all repositories:
   "No open pull requests", "Choose All to see closed and merged ones."; a repository chosen: "No pull requests match
   these filters", "Choose another repository, or All to include closed and merged ones."; Needs attention: "Nothing
