@@ -7439,6 +7439,327 @@
               ]
             }
           ]
+        },
+        {
+          "type": "frame",
+          "id": "rszhh",
+          "name": "RepoMenuItem",
+          "layout": "vertical",
+          "gap": "$gap-group",
+          "children": [
+            {
+              "type": "text",
+              "id": "N9v1M",
+              "name": "group-label",
+              "fill": "$color-fg-muted",
+              "content": "RepoMenuItem",
+              "lineHeight": "$text-small-strong-line-height",
+              "fontFamily": "$text-small-strong-font-family",
+              "fontSize": "$text-small-strong-font-size",
+              "fontWeight": "$text-small-strong-font-weight"
+            },
+            {
+              "type": "frame",
+              "id": "tJO7f",
+              "name": "row",
+              "gap": "$gap-group",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "fiQIO",
+                  "name": "RepoMenuItem/true",
+                  "context": "tokens width=size.popover height=size.control.md",
+                  "reusable": true,
+                  "width": 320,
+                  "height": 32,
+                  "fill": "$color-accent-bg",
+                  "cornerRadius": "$radius-md",
+                  "gap": "$gap-related",
+                  "padding": [
+                    0,
+                    "$inset-control-md"
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "pL6cA",
+                      "name": "check-slot",
+                      "context": "tokens width=size.icon height=size.icon",
+                      "width": 16,
+                      "height": 16,
+                      "children": [
+                        {
+                          "id": "YOGIv",
+                          "type": "ref",
+                          "ref": "ZKJC8",
+                          "name": "check",
+                          "descendants": {
+                            "fOMiv": {
+                              "fill": "$color-fg-default"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "vjAHV",
+                      "name": "label",
+                      "fill": "$color-fg-default",
+                      "content": "prq",
+                      "lineHeight": "$text-body-line-height",
+                      "fontFamily": "$text-body-font-family",
+                      "fontSize": "$text-body-font-size",
+                      "fontWeight": "$text-body-font-weight"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "urf0Y",
+                  "name": "RepoMenuItem/false",
+                  "context": "tokens width=size.popover height=size.control.md",
+                  "reusable": true,
+                  "width": 320,
+                  "height": 32,
+                  "cornerRadius": "$radius-md",
+                  "gap": "$gap-related",
+                  "padding": [
+                    0,
+                    "$inset-control-md"
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "pWica",
+                      "name": "check-slot",
+                      "context": "tokens width=size.icon height=size.icon",
+                      "width": 16,
+                      "height": 16
+                    },
+                    {
+                      "type": "text",
+                      "id": "a2b1QK",
+                      "name": "label",
+                      "fill": "$color-fg-default",
+                      "content": "kopje",
+                      "lineHeight": "$text-body-line-height",
+                      "fontFamily": "$text-body-font-family",
+                      "fontSize": "$text-body-font-size",
+                      "fontWeight": "$text-body-font-weight"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "pTOrg",
+          "name": "RepoMenu",
+          "layout": "vertical",
+          "gap": "$gap-group",
+          "children": [
+            {
+              "type": "text",
+              "id": "dtAw2",
+              "name": "group-label",
+              "fill": "$color-fg-muted",
+              "content": "RepoMenu",
+              "lineHeight": "$text-small-strong-line-height",
+              "fontFamily": "$text-small-strong-font-family",
+              "fontSize": "$text-small-strong-font-size",
+              "fontWeight": "$text-small-strong-font-weight"
+            },
+            {
+              "type": "frame",
+              "id": "cutIm",
+              "name": "row",
+              "gap": "$gap-group",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "K8FIrr",
+                  "name": "RepoMenu/ready",
+                  "context": "tokens width=size.popover",
+                  "reusable": true,
+                  "clip": true,
+                  "width": 320,
+                  "fill": "$color-bg-overlay",
+                  "cornerRadius": "$radius-md",
+                  "stroke": "$color-border-default",
+                  "strokeWidth": "$border-width-thin",
+                  "effect": {
+                    "type": "shadow",
+                    "shadowType": "outer",
+                    "color": "$shadow-overlay-color",
+                    "offset": {
+                      "x": "$shadow-overlay-offset-x",
+                      "y": "$shadow-overlay-offset-y"
+                    },
+                    "blur": "$shadow-overlay-blur"
+                  },
+                  "layout": "vertical",
+                  "padding": "$inset-card",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "krowz",
+                      "name": "items",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "children": [
+                        {
+                          "id": "tTbN2",
+                          "type": "ref",
+                          "ref": "urf0Y",
+                          "name": "item-All repositories",
+                          "width": "fill_container",
+                          "descendants": {
+                            "a2b1QK": {
+                              "content": "All repositories"
+                            }
+                          }
+                        },
+                        {
+                          "id": "QS23j",
+                          "type": "ref",
+                          "ref": "urf0Y",
+                          "name": "item-kopje",
+                          "width": "fill_container",
+                          "descendants": {
+                            "a2b1QK": {
+                              "content": "kopje"
+                            }
+                          }
+                        },
+                        {
+                          "id": "R1Ev0W",
+                          "type": "ref",
+                          "ref": "fiQIO",
+                          "name": "item-prq",
+                          "width": "fill_container",
+                          "descendants": {
+                            "vjAHV": {
+                              "content": "prq"
+                            }
+                          }
+                        },
+                        {
+                          "id": "vZFmf",
+                          "type": "ref",
+                          "ref": "urf0Y",
+                          "name": "item-zenith",
+                          "width": "fill_container",
+                          "descendants": {
+                            "a2b1QK": {
+                              "content": "zenith"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "vrQ8v",
+                  "name": "RepoMenu/loading",
+                  "context": "tokens width=size.popover",
+                  "reusable": true,
+                  "clip": true,
+                  "width": 320,
+                  "fill": "$color-bg-overlay",
+                  "cornerRadius": "$radius-md",
+                  "stroke": "$color-border-default",
+                  "strokeWidth": "$border-width-thin",
+                  "effect": {
+                    "type": "shadow",
+                    "shadowType": "outer",
+                    "color": "$shadow-overlay-color",
+                    "offset": {
+                      "x": "$shadow-overlay-offset-x",
+                      "y": "$shadow-overlay-offset-y"
+                    },
+                    "blur": "$shadow-overlay-blur"
+                  },
+                  "layout": "vertical",
+                  "padding": "$inset-card",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "lrzX9",
+                      "name": "items",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "children": [
+                        {
+                          "id": "A9rbV",
+                          "type": "ref",
+                          "ref": "fiQIO",
+                          "name": "item-All repositories",
+                          "width": "fill_container",
+                          "descendants": {
+                            "vjAHV": {
+                              "content": "All repositories"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "OzNYo",
+                  "name": "RepoMenu/failed",
+                  "context": "tokens width=size.popover",
+                  "reusable": true,
+                  "clip": true,
+                  "width": 320,
+                  "fill": "$color-bg-overlay",
+                  "cornerRadius": "$radius-md",
+                  "stroke": "$color-border-default",
+                  "strokeWidth": "$border-width-thin",
+                  "effect": {
+                    "type": "shadow",
+                    "shadowType": "outer",
+                    "color": "$shadow-overlay-color",
+                    "offset": {
+                      "x": "$shadow-overlay-offset-x",
+                      "y": "$shadow-overlay-offset-y"
+                    },
+                    "blur": "$shadow-overlay-blur"
+                  },
+                  "layout": "vertical",
+                  "padding": "$inset-card",
+                  "children": [
+                    {
+                      "id": "cNrp4",
+                      "type": "ref",
+                      "ref": "eXxzZ",
+                      "name": "notice",
+                      "width": "fill_container",
+                      "descendants": {
+                        "z1p5d": {
+                          "content": "Couldn't load repositories"
+                        },
+                        "K6ewc": {
+                          "enabled": false
+                        },
+                        "O7etnb/TrPON": {
+                          "content": "Try again"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
         }
       ]
     },
@@ -30719,6 +31040,840 @@
       "descendants": {
         "AhCkq": {
           "content": "States: panel.send-failed, settled: the history read after the send failed (before that it shows as sent, with Send off and the Reload warning). Guides: accessibility (the failure announced in the assertive region; Discard returns focus to the field; Send aria-disabled, described by the hint), persistent-toast-notifications (the failure stays inline until Try again, Discard or a later history read that holds the question), forms, color, icons, responsive-design (the actions wrap under the status)."
+        }
+      }
+    },
+    {
+      "type": "frame",
+      "id": "j4fXlV",
+      "x": 0,
+      "y": 9660,
+      "name": "PR list / Repository menu",
+      "clip": true,
+      "width": 1440,
+      "height": 920,
+      "fill": "$color-bg-canvas",
+      "layout": "vertical",
+      "children": [
+        {
+          "id": "nNbYv",
+          "type": "ref",
+          "ref": "dFd1K",
+          "name": "AppHeader",
+          "width": "fill_container",
+          "descendants": {
+            "U3fIg2": {
+              "id": "thCt5",
+              "type": "ref",
+              "ref": "fGBWy",
+              "name": "pool-status",
+              "descendants": {
+                "qTt53": {
+                  "content": "2 running · 3 waiting"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "frame",
+          "id": "iUoi5",
+          "name": "body",
+          "width": "fill_container",
+          "layout": "vertical",
+          "padding": [
+            "$inset-page",
+            0
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "hdBZg",
+              "name": "list",
+              "context": "tokens width=size.page",
+              "width": 1200,
+              "layout": "vertical",
+              "gap": "$gap-page",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "yL66X",
+                  "name": "toolbar",
+                  "context": "tokens height=size.control.md",
+                  "width": "fill_container",
+                  "height": 32,
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Msz8T",
+                      "name": "page-title",
+                      "fill": "$color-fg-default",
+                      "content": "Pull requests",
+                      "lineHeight": "$text-title-line-height",
+                      "fontFamily": "$text-title-font-family",
+                      "fontSize": "$text-title-font-size",
+                      "fontWeight": "$text-title-font-weight"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "oJM1T",
+                  "name": "table",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "id": "XY9w5",
+                      "type": "ref",
+                      "ref": "ev7QH",
+                      "name": "PrTableHeader",
+                      "width": "fill_container"
+                    },
+                    {
+                      "id": "yaRPp",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow prq #41",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "prq"
+                        },
+                        "ThKc5": {
+                          "content": "Split the webhook handler by event type"
+                        },
+                        "ffMUm": {
+                          "content": "#41"
+                        },
+                        "x8uVv": {
+                          "children": [
+                            {
+                              "id": "T78H89",
+                              "type": "ref",
+                              "ref": "Ka8ZR",
+                              "name": "problem",
+                              "descendants": {
+                                "eddOR": {
+                                  "content": "New push not summarized"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "X3ogjL": {
+                          "content": "Push received"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "2 min ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "NIOOC",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow prq #42",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "prq"
+                        },
+                        "ThKc5": {
+                          "content": "Add retry to stalled jobs"
+                        },
+                        "ffMUm": {
+                          "content": "#42"
+                        },
+                        "s1msjN": {
+                          "enabled": false
+                        },
+                        "X3ogjL": {
+                          "content": "Answer"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "3 min ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "xnSA7",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow kopje #16",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "kopje"
+                        },
+                        "ThKc5": {
+                          "content": "Render Markdown tables in answers"
+                        },
+                        "ffMUm": {
+                          "content": "#16"
+                        },
+                        "X3ogjL": {
+                          "content": "Question sent"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "8 min ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "BKslE",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow zenith #87",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "zenith"
+                        },
+                        "lfqO6": {
+                          "width": "fit_content"
+                        },
+                        "ThKc5": {
+                          "content": "Stream tokens to the summary view over the WebSocket, keep the previous version listed until the…"
+                        },
+                        "ffMUm": {
+                          "content": "#87"
+                        },
+                        "s1msjN": {
+                          "enabled": false
+                        },
+                        "X3ogjL": {
+                          "content": "Summary"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "12 min ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "Y7ZXb",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow kopje #15",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "kopje"
+                        },
+                        "ThKc5": {
+                          "content": "Pin skill commits on register"
+                        },
+                        "ffMUm": {
+                          "content": "#15"
+                        },
+                        "x8uVv": {
+                          "children": [
+                            {
+                              "id": "n5z03h",
+                              "type": "ref",
+                              "ref": "rTc86",
+                              "name": "problem",
+                              "descendants": {
+                                "aAUMF": {
+                                  "content": "Possibly stalled"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "X3ogjL": {
+                          "content": "Question sent"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "1 hr ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "a5xeR",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow zenith #85",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "zenith"
+                        },
+                        "ThKc5": {
+                          "content": "Cache installation tokens per repository"
+                        },
+                        "ffMUm": {
+                          "content": "#85"
+                        },
+                        "x8uVv": {
+                          "children": [
+                            {
+                              "id": "SlI02",
+                              "type": "ref",
+                              "ref": "Ka8ZR",
+                              "name": "problem",
+                              "descendants": {
+                                "eddOR": {
+                                  "content": "Waiting for a local agent"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "X3ogjL": {
+                          "content": "Push received"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "2 hr ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "iddQf",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow zenith #84",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "zenith"
+                        },
+                        "ThKc5": {
+                          "content": "Retry GitHub API calls on secondary rate limits"
+                        },
+                        "ffMUm": {
+                          "content": "#84"
+                        },
+                        "s1msjN": {
+                          "enabled": false
+                        },
+                        "X3ogjL": {
+                          "content": "Summary"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "3 hr ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "O7af91",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow prq #39",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "prq"
+                        },
+                        "ThKc5": {
+                          "content": "Document the job claim protocol"
+                        },
+                        "ffMUm": {
+                          "content": "#39"
+                        },
+                        "s1msjN": {
+                          "enabled": false
+                        },
+                        "X3ogjL": {
+                          "content": "Answer"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "yesterday"
+                        }
+                      }
+                    },
+                    {
+                      "id": "F3c9Gl",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow prq #38",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "prq"
+                        },
+                        "ThKc5": {
+                          "content": "Move settings to their own page"
+                        },
+                        "ffMUm": {
+                          "content": "#38"
+                        },
+                        "s1msjN": {
+                          "enabled": false
+                        },
+                        "X3ogjL": {
+                          "content": "Summary"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "2 days ago"
+                        }
+                      }
+                    },
+                    {
+                      "id": "xPVRJ",
+                      "type": "ref",
+                      "ref": "a71Ssm",
+                      "name": "PrRow kopje #14",
+                      "width": "fill_container",
+                      "descendants": {
+                        "E62nng": {
+                          "content": "kopje"
+                        },
+                        "ThKc5": {
+                          "content": "Show allowed tools in the skill review"
+                        },
+                        "ffMUm": {
+                          "content": "#14"
+                        },
+                        "s1msjN": {
+                          "enabled": false
+                        },
+                        "X3ogjL": {
+                          "content": "Answer"
+                        },
+                        "oYnVH/qnZ4a": {
+                          "content": "3 days ago"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "CagVk",
+          "layoutPosition": "absolute",
+          "x": 0,
+          "y": 0,
+          "name": "menu-layer",
+          "width": "fill_container(1440)",
+          "height": "fill_container(920)",
+          "layout": "vertical",
+          "padding": [
+            0,
+            0,
+            "$gap-tight",
+            0
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "uPzzk",
+              "name": "header-space",
+              "context": "tokens height=size.header",
+              "width": "fill_container",
+              "height": 48
+            },
+            {
+              "type": "frame",
+              "id": "qgp7p",
+              "name": "page",
+              "context": "tokens width=size.page",
+              "width": 1200,
+              "height": "fill_container",
+              "layout": "vertical",
+              "padding": [
+                "$inset-page",
+                0,
+                0,
+                0
+              ],
+              "alignItems": "end",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "pgz3c",
+                  "name": "filters",
+                  "height": "fill_container",
+                  "gap": "$gap-related",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "JDRhS",
+                      "name": "menu-column",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "gap": "$gap-tight",
+                      "alignItems": "end",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "F7vNuQ",
+                          "name": "trigger-row",
+                          "gap": "$gap-related",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "id": "P2UlWq",
+                              "type": "ref",
+                              "ref": "mp7j0",
+                              "name": "needs-attention",
+                              "descendants": {
+                                "ZKTfE": {
+                                  "content": "Needs attention · 3"
+                                }
+                              }
+                            },
+                            {
+                              "id": "KtdTU",
+                              "type": "ref",
+                              "ref": "gOOFA",
+                              "name": "repo-filter",
+                              "stroke": "$color-border-strong"
+                            }
+                          ]
+                        },
+                        {
+                          "id": "heCgw",
+                          "type": "ref",
+                          "ref": "K8FIrr",
+                          "name": "repo-menu",
+                          "height": "fill_container",
+                          "descendants": {
+                            "krowz": {
+                              "type": "frame",
+                              "id": "q3l1sd",
+                              "name": "items",
+                              "width": "fill_container",
+                              "layout": "vertical",
+                              "children": [
+                                {
+                                  "id": "Y3JAJ",
+                                  "type": "ref",
+                                  "ref": "fiQIO",
+                                  "name": "item-All repositories",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "vjAHV": {
+                                      "content": "All repositories"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "i4P9p",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-atlas",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "atlas"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "uuyTq",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-beacon",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "beacon"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "aHO5S",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-cinder",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "cinder"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "U1y1FJ",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-delta-sync",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "delta-sync"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "g7Tslq",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-dotfiles",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "dotfiles"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "y2fZq",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-ember",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "ember"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "p1xGY",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-fjord",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "fjord"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "e9SaE",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-gale",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "gale"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "XONto",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-harbor",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "harbor"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "ETIKE",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-ion",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "ion"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "v4izG",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-juniper",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "juniper"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "aWg5x",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-kite",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "kite"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "UKqgp",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-kopje",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "kopje"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "y0MuVT",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-lumen",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "lumen"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "oFvO6",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-mesa",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "mesa"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "b5Cop",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-nimbus",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "nimbus"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "Z4rJt",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-orbit",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "orbit"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "RNVCX",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-prq",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "prq"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "xLlFk",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-pylon",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "pylon"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "lqZrJ",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-quill",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "quill"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "t1pio",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-rivet",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "rivet"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "iuVdl",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-sable",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "sable"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "q3CwP",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-tundra",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "tundra"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "iw3UU",
+                                  "type": "ref",
+                                  "ref": "urf0Y",
+                                  "name": "item-zenith",
+                                  "width": "fill_container",
+                                  "descendants": {
+                                    "a2b1QK": {
+                                      "content": "zenith"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": "f1F8J",
+                      "type": "ref",
+                      "ref": "F6iWKQ",
+                      "name": "filter"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "SIMwj",
+      "type": "ref",
+      "ref": "p75xR",
+      "name": "Note / PR list / Repository menu",
+      "x": 1488,
+      "y": 9660,
+      "descendants": {
+        "AhCkq": {
+          "content": "States: list.repo-menu. Guides: menu, declarative-dialog-popover-control, viewport-aware-dropdowns, natural-interactions, single-line-overflow."
         }
       }
     }
