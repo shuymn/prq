@@ -299,8 +299,8 @@ service's own, such as `GITHUB_ACTIONS`), since wrangler then answers its own qu
   6. checks that no cloud work waits or runs: it reads every page of the ledger at `https://<host>/api/ledger` with the
      service token of `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET`, set in the shell as for `prq`, and refuses
      while a pull request the cloud agent owns has a job waiting or running, or when the ledger cannot be read. The check
-     is skipped while the live Worker is still the bootstrap's (versions with no binding but secrets), which serves
-     nothing at the hostname;
+     is skipped while the live Worker is still the bootstrap's (versions whose bindings wrangler lists, none but
+     secrets), which serves nothing at the hostname; a version whose bindings are not listed counts as a release;
   7. has the clone's wrangler deploy it, with `<host>` as the Worker's custom domain, the tag as the version's tag and
      `prq vX.Y.Z <sha>` as its message, its output shown, stopped after two hours. wrangler builds the workspace
      container's image with the local Docker first, then uploads the Worker, which makes the new version live, then

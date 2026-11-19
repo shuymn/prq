@@ -91,7 +91,9 @@ if (behavior === "hang") {
   // The bootstrap's Worker and a version secrets put made of it have no binding but secrets; a release has prq's.
   const tag = state.versions[args[2]] ?? undefined;
   const bindings = tag === undefined || tag === "prq-bootstrap" ? [{ type: "secret_text" }] : [{ type: "durable_object_namespace" }, { type: "assets" }];
-  json({ id: args[2], annotations: { "workers/tag": tag }, resources: { bindings } });
+  // "no resources" and "null bindings": a view that does not list them.
+  const resources = state.inventory === "no resources" ? undefined : { bindings: state.inventory === "null bindings" ? null : bindings };
+  json({ id: args[2], annotations: { "workers/tag": tag }, resources });
 } else if (call === "containers list") {
   // As wrangler prints it: the first page alone.
   json(state.applications.slice(0, 25).map((app) => ({ id: app.id, name: app.name, state: "ready", version: app.version })));
@@ -211,6 +213,7 @@ type ToolCall = v.InferOutput<typeof ToolCall>;
 type State = {
   deployment: string[] | null;
   versions: Record<string, string | null>;
+  inventory: "listed" | "no resources" | "null bindings";
   applications: { id: string; name: string; version: number; image: string }[];
   uploads: number;
   imageChanges: boolean;
@@ -410,6 +413,7 @@ async function saveState(state: Partial<State>): Promise<void> {
   const full: State = {
     deployment: null,
     versions: {},
+    inventory: "listed",
     applications: [],
     uploads: 9,
     imageChanges: false,
@@ -1092,6 +1096,26 @@ describe("deploy <tag>", () => {
     expect(await deployCalls()).toEqual([]);
     expect((await onlyRecord()).data.outcome).toMatch(/^refused: cloud work is waiting or running/);
   });
+
+  it.each([
+    ["no resources", "no resources"],
+    ["its bindings as null", "null bindings"],
+  ] as const)(
+    "reads the ledger, and refuses while cloud work runs, when the live version's view lists %s",
+    async (_what, inventory) => {
+      await released({ inventory });
+      ledger = [{ rows: [ledgerRow(3, "cloud", 0, 1)], nextCursor: null }];
+
+      const result = await deploy([TAG], { answers: ["y"] });
+
+      expect(result.code).toBe(1);
+      expect(result.output).toContain(
+        "deploy: cloud work is waiting or running: prq-test/app#3 (waiting 0, running 1)",
+      );
+      expect(ledgerRequests.map((request) => request.url)).toEqual(["/api/ledger?state=all"]);
+      expect(await deployCalls()).toEqual([]);
+    },
+  );
 
   it("refuses without the service token to read the ledger with", async () => {
     await released();

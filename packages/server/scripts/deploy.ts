@@ -158,7 +158,8 @@ const ApplicationsAnswer = v.array(v.object({ id: v.string(), name: v.string() }
 
 const Deployment = v.object({
   id: v.nullable(v.string()),
-  // inert: a version with no binding but secrets, as the bootstrap's Worker and the versions secrets put makes of it.
+  // inert: a version whose bindings are listed, none but secrets, as the bootstrap's Worker and the versions secrets put
+  // makes of it.
   versions: v.array(
     v.object({ versionId: v.string(), percentage: v.number(), tag: v.nullable(v.string()), inert: v.boolean() }),
   ),
@@ -311,7 +312,7 @@ async function deployedVersion(file: string): Promise<string | null> {
   return found;
 }
 
-// A version's tag, and whether it has no binding but secrets.
+// A version's tag, and whether its bindings are listed, none but secrets (one whose bindings are not listed is not).
 async function version(accountId: string, versionId: string): Promise<{ tag: string | null; inert: boolean }> {
   const viewed = await wranglerJson(
     "versions view",
@@ -319,9 +320,10 @@ async function version(accountId: string, versionId: string): Promise<{ tag: str
     accountId,
     VersionAnswer,
   );
+  const bindings = viewed.resources?.bindings ?? null;
   return {
     tag: viewed.annotations?.["workers/tag"] ?? null,
-    inert: (viewed.resources?.bindings ?? []).every((binding) => binding.type === "secret_text"),
+    inert: bindings !== null && bindings.every((binding) => binding.type === "secret_text"),
   };
 }
 
