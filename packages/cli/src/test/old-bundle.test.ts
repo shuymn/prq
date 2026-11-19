@@ -85,8 +85,13 @@ describe("the old bundle", () => {
     const slow = await standIn("setTimeout(() => {}, 60_000)");
     const cancel = new AbortController();
     const built = buildOldBundle({ command: slow.command, signal: cancel.signal });
-    const pid = await vi.waitFor(slow.pid);
-    cancel.abort();
+    let pid: number;
+    try {
+      pid = await vi.waitFor(slow.pid);
+    } finally {
+      cancel.abort();
+      await built.catch(() => {});
+    }
     await expect(built).rejects.toThrow("the old bundle's build was cancelled");
     expect(alive(pid)).toBe(false);
     expect(existsSync(slow.seen.dir)).toBe(false);
