@@ -1,8 +1,8 @@
 # Operations
 
-How to host prq: what it needs, how to set up the accounts and the private files its deployment reads, how to release
-and deploy it and recover from a deploy that stopped part-way, and how to rotate each credential. Publishing `prq`'s
-binaries is not described here yet.
+How to host prq: what it needs, how to set up the accounts and the private files its deployment reads, how to release,
+deploy and check it and recover from a deploy that stopped part-way, and how to rotate each credential. Publishing
+`prq`'s binaries is not described here yet.
 
 Every command runs from the root of a clone of this repository. `<host>` is the hostname prq is served at,
 `<team>` the Zero Trust team name, `<account-id>` the Cloudflare account's ID, and `vX.Y.Z` a release's version.
@@ -382,6 +382,82 @@ and a running container keeps the previous image until it is replaced. One host 
 happens: no new pushes to its pull requests and no questions from the idle check until the read-back is complete. The
 idle check is a snapshot of a ledger that can lag its sessions; keeping the interval is yours.
 
+## The deployed checks
+
+`pnpm --dir <checkout>/packages/cli run check:deployed -- <mode>`, below `check:deployed <mode>`, checks the deployment
+itself. Run it from a checkout of the deployed tag with its dependencies installed and its web UI built (the clone a
+release prints has both), so that the `prq` it builds, the build it compares the served files with, and the version it
+expects are the tag's. Every mode but `endpoints` reads `PRQ_URL`, `PRQ_ACCESS_CLIENT_ID` and
+`PRQ_ACCESS_CLIENT_SECRET` from the shell, as `prq` does. `summary` also needs `gh` signed in with read access to the
+private test repository. The build `edge` runs and `gh` get only the variables they use (the paths, locale and
+terminal, XDG's, `gh`'s own settings and login, the tool managers', a proxy's less any bypass entry naming the hostname
+or the team domain), none of the deployment's, and the build's output is not kept. The steps of
+[First deploy](#first-deploy), [Each release](#each-release), [Recovery](#recovery) and [Rotation](#rotation) say when
+to run each mode.
+
+| Mode                                                                 | Model tokens |
+| -------------------------------------------------------------------- | ------------ |
+| `endpoints <subdomain> [--version <id>]`, or `endpoints none`        | no           |
+| `edge --team-domain https://<team>.cloudflareaccess.com [--pr <pr>]` | no           |
+| `pool`                                                               | no           |
+| `summary <owner>/<repo>`                                             | yes          |
+| `ask <pr> "<question>"`                                              | yes          |
+| `jobs <pr>`                                                          | no           |
+| `retry <pr> <jobId>`                                                 | no           |
+
+`<pr>` is `<owner>/<repo>#<number>`. Each mode prints one line per assertion: `pass`; `FAIL`; `unattributed`, a denial
+that did not come from the Worker but that the command cannot credit to Access (find it in Zero Trust's Access logs by
+the time and `cf-ray` the line gives); or `unexercised`, when the event the assertion needs did not happen, which is
+not a pass. It exits 1 when an assertion failed, and 130 when stopped with Ctrl-C, which ends what it started, the
+build's whole process group included. `--json <file>` saves the run to a new file readable by you alone. What a line
+says of an answer is the check's own words over the fields it reads: the status, a header reduced to what the verdict
+needs (a media type the web UI or the API uses, a version, the sign-in path or `/`), job and message IDs in the form the
+Worker and the web UI give them, the edge check's own agents, a failure's category, an error's code, sizes and times.
+Anything else in those fields shows as a fixed label (another media type, ID or agent), and no header value, body,
+`gh` or build output, or the full text of a job's failure (the web UI shows it) is copied, so no line or saved run holds
+the hostname, the team domain, the application's AUD, the workers.dev subdomain or the token.
+
+- **`endpoints`** asks the Worker's workers.dev addresses, `https://prq.<subdomain>.workers.dev/` and, with
+  `--version`, the version's preview URL. It fails an answer that holds anything of prq (the bootstrap's header, a
+  `Prq-Version`, an error of the Worker's, the web UI), passes Cloudflare's page for an address with nothing behind it,
+  and leaves any other answer, or none, unexercised. `<subdomain>` is the account's workers.dev subdomain as the
+  dashboard shows it. The dashboard's Domains & Routes for `prq` (workers.dev and Preview URLs disabled) are the
+  evidence for an unexercised address, and on their own with `endpoints none`, when the subdomain is not known. After a
+  deploy, run it without `--version`: a Worker with Durable Objects has no version URLs. It needs no credentials and
+  builds nothing, so any checkout serves.
+- **`edge`** checks the hostname through Access. Without credentials, every path and the WebSockets must be redirected
+  (302) to the team's sign-in for the hostname (E1). The known Client ID with a wrong secret must be refused 401 or 403,
+  and a random Client ID refused, neither reaching the Worker (E2). That refusal is Access's strict mode for presented
+  tokens, which is on for every Zero Trust organization created from 2026-10-05 and may need turning on in an older one:
+  without it Access sends such a request to the sign-in, and E2 fails saying so. `POST /webhook` without a signature
+  must get the Worker's signature refusal, and `/webhook/x` the Worker's own 401 (E3). With the service token, the
+  ledger (E4); two raw `/cli/wait` polls that end near 25 seconds with the tag's `Prq-Version`, and
+  `prq wait --timeout 40`, which times out with no version notice (E5); `prq wait` with a wrong secret, which ends at
+  once with exit 3 (E6); the web UI's files, each byte for byte with the headers of the tag's build, a conditional
+  reload, `/index.html` and a missing asset (E7); the Hub's WebSocket with its version (E8); and a poll left to its
+  deadline against one the client leaves, which the Hub must stop counting as waiting within 5 seconds (E9). E9 credits
+  the departure only when no byte of an answer to the left poll had come before the client left, and the poll left to
+  its deadline passed. It takes about a minute, and leaves the agents `edge-poll`, `edge-cli`, and the run's own
+  `edge-keep-<id>` and `edge-cut-<id>`, in the pool for 10 minutes. `--pr` adds that pull request's WebSocket to E1 and
+  E2. A browser's way through Access, by its cookie, is not among them ([First deploy](#first-deploy) checks it).
+- **`pool`** waits until no local agent is present, naming the ones left each minute: stop every `prq wait` first. An
+  agent stays present 10 minutes after its last contact, one holding a job up to 70; the wait ends after 75 minutes.
+- **`summary`** waits for an empty pool, notes the repository's pull requests, and asks you to open a new one. It takes
+  the first new pull request that reaches the ledger, requires the cloud agent to own it (open another once the pool is
+  empty if a local agent does), and passes once the analysis job of GitHub's head (`gh pr view`) has stored its complete
+  result, written by the cloud agent with the model and the tokens in its metadata; a failed analysis fails it with its
+  reason's category and the `retry` command. No new pull request within 30 minutes, while the App's Recent deliveries
+  show no event for it, means the Pull request event was not subscribed when it was opened. The Worker's logs then show
+  `prq.workspace.prepared` and `prq.job.usage` for the job.
+- **`ask`** asks the question over the pull request's WebSocket as the web UI does, and passes once the answer job's
+  complete result names the question and was written at the commit the question was asked at: the head of the latest
+  completed analysis, else the pull request's head. The request's acknowledgement is not the answer. When that commit
+  moves while the question waits (an analysis completes), the commit the answer should be at is not decided, and the
+  assertion is unexercised: ask again once the pull request is quiet.
+- **`jobs`** lists a pull request's jobs with their state and revision; **`retry`** retries a claimed or failed one
+  from the revision it lists, as the web UI's Retry does. `retry` only puts the job back in line: follow it with
+  `jobs <pr>` until the job is done.
+
 ## First deploy
 
 Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `secrets check` passes:
@@ -393,8 +469,9 @@ Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `secrets 
 2. **The first release**, `v0.1.0`, as in [Releases](#releases): the release pull request, the check with `--pre-tag`,
    the tag.
 3. **The bootstrap**: `pnpm --dir packages/server run deploy -- --bootstrap`. Then, in the dashboard's Domains & Routes
-   for `prq`: workers.dev and Preview URLs disabled, no custom domain. Checking by request that the addresses it prints
-   answer nothing of prq comes with the deployed checks.
+   for `prq`: workers.dev and Preview URLs disabled, no custom domain. It prints, on a line of its own, the check that
+   the two addresses answer nothing of prq, `check:deployed endpoints <subdomain> --version <id>` with the subdomain you
+   gave and the version it made, or `endpoints none`, which leaves the dashboard as the evidence: run it.
 
    If the bootstrap stopped part-way and running it again is refused because the Worker has a live version tagged
    `prq-bootstrap`, run `pnpm --dir packages/server run deploy -- --bootstrap --resume`: it deploys the same Worker over
@@ -412,14 +489,26 @@ Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `secrets 
    record then says the provisioning is unverified, and `--read-back <record>` lets you answer again later.
 6. **What is served**: the dashboard's Domains & Routes for `prq` shows `<host>` as its custom domain, with workers.dev
    and Preview URLs still disabled; signing in at `https://<host>` with the one-time PIN shows the web UI with
-   `v0.1.0`. Checking the deployment through Access by request comes with the deployed checks.
+   `v0.1.0`, and the browser's developer tools show the Hub's WebSocket open, its `prq:version` message naming
+   `v0.1.0`: the cookie's way through Access, which `edge` does not check. Then run the two commands the deploy printed,
+   each on a line of its own and run in the clone it kept, `check:deployed edge --team-domain "$ACCESS_TEAM_DOMAIN"`
+   and `check:deployed endpoints "$WORKERS_SUBDOMAIN"`, with `PRQ_URL` and the service token in the shell,
+   `ACCESS_TEAM_DOMAIN` set to `https://<team>.cloudflareaccess.com` and `WORKERS_SUBDOMAIN` to the account's
+   workers.dev subdomain (the deploy prints neither).
 7. **The webhook**: turn it on as in [GitHub App](#6-github-app), in one save, then the Pull request event.
-8. **The first pull request**: stop every `prq wait` and let 10 minutes pass (an agent stays in the pool that long after
-   its last contact), so the cloud agent owns the next new pull request. Open one in the private test repository and
-   see its analysis prepare the workspace (`prq.workspace.prepared`) and finish (`prq.job.usage` with the outcome
-   `done`) in the logs ([Rotation](#rotation) says where). A pull request opened before the Pull request event was
-   subscribed has no delivery in the App's Recent deliveries: open a new one. Retrying an analysis that failed while
-   the container application was still provisioning comes with the deployed checks.
+8. **The first pull request**: stop every `prq wait`, and run `check:deployed pool` until it passes (an agent stays in
+   the pool 10 minutes after its last contact), so the cloud agent owns the next new pull request. Then
+   `check:deployed summary <owner>/<repo>` with the private test repository: open a new pull request there when it
+   asks. It passes once the analysis is stored; the logs ([Rotation](#rotation) says where) show it prepare the
+   workspace (`prq.workspace.prepared`) and finish (`prq.job.usage` with the outcome `done`). A pull request opened
+   before the Pull request event was subscribed has no delivery in the App's Recent deliveries: open a new one. An
+   analysis that failed while the container application was still provisioning is retried with
+   `check:deployed retry <pr> <jobId>` once the dashboard shows the application ready. `retry` only puts the job back
+   in line: follow it with `check:deployed jobs <pr>` until the job is done, then, for `summary`'s verdict, run
+   `summary` again with a new pull request once the pool is empty.
+9. **A question**: `check:deployed ask <pr> "<question>"` on that pull request, then
+   `check:deployed edge --team-domain https://<team>.cloudflareaccess.com --pr <pr>`, which adds its session's
+   WebSocket to E1 and E2.
 
 ## Each release
 
@@ -428,8 +517,8 @@ Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `secrets 
    complete.
 3. In a terminal with Docker running, with `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET` set as for `prq`:
    `pnpm --dir packages/server run deploy -- vX.Y.Z`. It exits 0 once the read-back is complete.
-4. Sign in at `https://<host>`: the web UI shows the new version. The checks after a deploy come with the deployed
-   checks.
+4. Sign in at `https://<host>`: the web UI shows the new version. Then run the two checks the deploy printed, as in
+   [First deploy](#first-deploy) step 6.
 5. Remove the clone the deploy printed once you no longer need it.
 
 ## Recovery
@@ -503,7 +592,9 @@ image. Otherwise release a fix.
   redeliver it. A 401 (the signature) or a 500 (a webhook secret or host ID missing or malformed) is redelivered once
   its cause is fixed. After a 503 or a timeout the Worker may still have stored the delivery: its redelivery answers
   `received` or `duplicate`, and either is one intake.
-- **A failed job** stays `failed` with its reason. Retrying it comes with the deployed checks.
+- **A failed job** stays `failed` with its reason. Once its cause is fixed, retry it from the web UI or with
+  `check:deployed retry <pr> <jobId>` from a checkout of the deployed tag, and follow it with
+  `check:deployed jobs <pr>` until it is done.
 - **A missing or malformed secret**: the Worker answers every protected request 500 when the Access team domain or
   audience is, and every delivery 500 when the webhook secret or the host's ID is; it logs `prq.config.invalid` naming
   the variable. `secrets status` names a missing secret: fix `worker.env`, then `secrets check` and `secrets put`.
@@ -527,7 +618,9 @@ streamed by `CLOUDFLARE_ACCOUNT_ID=<account-id> pnpm --dir packages/server exec 
    one keeps working until the grace period ends.
 2. Set the new `PRQ_ACCESS_CLIENT_SECRET` in every AI session's environment.
 3. Run `prq wait --timeout 60` there: it ends with a job (exit 0) or a timeout (exit 2). Exit 3 with an authentication
-   failure means Access refused the token.
+   failure means Access refused the token. With the new secret in the shell,
+   `check:deployed edge --team-domain https://<team>.cloudflareaccess.com` passes E4 to E6
+   ([The deployed checks](#the-deployed-checks)).
 4. Let the old secret expire.
 
 A lost secret: rotate without a grace period. A new token (a new Client ID) is added to the application's _Service
@@ -572,11 +665,12 @@ in Recent deliveries) before deleting `worker.env.previous`.
 1. Create a new key and replace `MODEL_API_KEY` in `worker.env`.
 2. `pnpm --dir packages/server run secrets put`.
 3. With no local agent waiting, push a commit to the cloud agent's test pull request and see its analysis finish
-   (`prq.job.usage` with the outcome `done` and the model's tokens).
+   (`prq.job.usage` with the outcome `done` and the model's tokens), or have
+   `check:deployed ask <pr> "<question>"` on it pass.
 4. Revoke the old key at the provider.
 
 ### Access team and audience
 
 `ACCESS_AUD` and `ACCESS_TEAM_DOMAIN` change only when the application or the team is created again. Update
 `worker.env`, run `secrets put`, then sign in to `https://<host>` from a browser and run `prq wait --timeout 60` as
-above.
+above, and `check:deployed edge --team-domain https://<new-team>.cloudflareaccess.com` with the new team domain.
