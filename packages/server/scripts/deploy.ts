@@ -1,32 +1,12 @@
-// The deploy (`pnpm run deploy` in packages/server; docs/operations.md, First deploy, Each release and Recovery): the
-// Worker prq on the account target.env names (CLOUDFLARE_ACCOUNT_ID), served at the hostname it names (PRQ_HOST).
+// The deploy (`pnpm run deploy` in packages/server): --bootstrap [--resume], a release <tag>, and --read-back <record>.
+// What each does, its record, read-back and exit codes are docs/operations.md's (The deploy command, First deploy and
+// Recovery); what a release is, docs/design.md's (Versions).
 //
-//   --bootstrap [--resume]  once, before prq's first upload: an inert Worker named prq (every request answers 404 with
-//                           an x-prq-bootstrap header; no assets, Durable Objects or container) with workers.dev and
-//                           preview URLs off, tagged prq-bootstrap; refused while a Worker prq has a live version. Its
-//                           version ID and the account's workers.dev subdomain (the owner's answer) are recorded.
-//                           --resume deploys it again over a live version tagged prq-bootstrap alone, so that its
-//                           settings apply after a bootstrap that stopped part-way.
-//   <tag>                   a release: in a terminal (wrangler asks there before it replaces a DNS record or another
-//                           Worker's domain), a clone of the tag from origin, kept and named; the release check
-//                           (release-check.ts) there; the clone's pinned tools (mise), its frozen lockfile and its
-//                           build; none of the four deployment values in its tracked files; the state before; the
-//                           owner's confirmation; no cloud work waiting or running (the idle check, from the ledger
-//                           with the service token prq uses, skipped while the live Worker is the bootstrap's); then the
-//                           clone's wrangler deploys it with the hostname as its custom domain, and the state after
-//                           is read back. --ignore-running turns a busy or failed idle check into a warning,
-//                           --immediate has Durable Objects take the new code at once, --keep-image deploys without
-//                           building or rolling out the container's image (once its application exists).
-//   --read-back <record>    the read-back of a deploy's record again, on the same account and application.
-//
-// Every run keeps a record in ~/.local/state/prq/deploys ($XDG_STATE_HOME/prq/deploys when that is set): the tag and
-// SHA, the live versions and the container application (its image, version and rollout) before and after, wrangler's
-// output file, the idle check and the read-back, written as each is known, a failed upload's included. The read-back:
-// the deployed version live alone, and the Workspace's container application created (its provisioning is what the
-// owner sees in the dashboard: observed, or unverified), unchanged, or changed: then its image the one this deploy set,
-// no active rollout, and every instance at the application's version. The exit code is wrangler's when the upload
-// failed, 0 once the read-back is complete, and 2 while it is not (the record then says why, and --read-back resumes
-// it).
+// Implementation: wrangler runs as operations.ts runs it, a release's upload in the foreground on the terminal, where
+// wrangler asks. The record is saved whole (written beside it, then renamed) as each part is known, the upload's result
+// before anything after it is read. What wrangler has no read-only command for (the Worker's workers.dev and preview
+// URLs, every container application) is read from Cloudflare's API with wrangler's own credentials, which stay in this
+// process.
 
 import { randomBytes } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";

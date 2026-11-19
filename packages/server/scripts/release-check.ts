@@ -1,17 +1,9 @@
-// The release check (`pnpm run release-check <tag> [--pre-tag <sha>]` in packages/server; docs/design.md, Versions):
-// whether a commit may be released as <tag>, in the git repository it runs in, whose origin is the GitHub repository.
+// The release check (`pnpm run release-check <tag> [--pre-tag <sha>]` in packages/server): whether a commit may be
+// released as <tag>, by the rules docs/design.md gives (Versions), in the git repository it runs in, whose origin is
+// the GitHub repository; docs/operations.md (Releases) runs it.
 //
-//   <tag>                  the tag is annotated, origin has the same tag object, it peels to HEAD (the commit being
-//                          built), and that commit passes the checks below
-//   <tag> --pre-tag <sha>  before the tag exists: the checks below for <sha> alone
-//
-// The checks of the commit: packages/server/package.json and packages/cli/package.json at it both have the tag's
-// version (the tag without its v); it is on origin's main (an ancestor of what `git ls-remote` reports, which must be
-// here); and GitHub reports a completed, successful `Check` run of GitHub Actions for that exact SHA (`gh api`, the
-// latest run of that name).
-//
-// It uses only Node's built-ins, git and gh, so it runs before any install (the deploy runs it in its clone, and the
-// release workflow on its checkout). Each git and gh call has a bound on its time; a signal to this process stops the
+// It uses only Node's built-ins, git and gh, so it runs before any install: the deploy runs it in its clone, and its
+// tests run a copy of this file alone. Each git and gh call has a bound on its time; a signal to this process stops the
 // call that runs and then ends this process as the signal would have.
 
 import { type ChildProcess, execFile } from "node:child_process";

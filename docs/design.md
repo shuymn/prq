@@ -595,7 +595,8 @@ UI, webhook and CLI input all enter through PrSession.
   its peeled `^{}`), and it peels to the commit being built; that commit is on `origin`'s `main`; and GitHub reports a
   completed, successful `Check` run of GitHub Actions for that exact SHA. With `--pre-tag <sha>`, before the tag is
   pushed, it checks the commit alone. It uses Node's built-ins, git and `gh` only, so it runs before any install. The
-  deploy builds and uploads only a clean clone of such a tag, with the tag's pinned tools and frozen lockfile
+  deploy builds and uploads only a clean clone of such a tag, with the tag's pinned tools and frozen lockfile, no git
+  hook run in it, and its tracked files checked against the commit before the build and before the upload
   ([operations.md](operations.md#the-deploy-command)).
 - Every `/cli/*` response, including errors and `wait` timeouts, carries the server's version in a `Prq-Version`
   header (named in `@prq/protocol`); response bodies do not change. Every `prq` command that calls `/cli/*` compares
@@ -1283,9 +1284,11 @@ Server:
 - The Worker is served only at the host's custom domain, never at a `workers.dev` address or a preview URL.
   `wrangler.jsonc` turns both off, and wrangler applies that on every deploy, but only after the upload, so a Worker's
   first upload could be reachable there until then. Before prq's first upload, an inert Worker of the same name with
-  both off (`deploy --bootstrap`) takes that first upload, and a release's deploy refuses a tag whose configuration
-  turns either on. The hostname comes from the host's private `target.env` and is attached as the custom domain by a
-  deploy run in a terminal, where wrangler asks before it replaces a DNS record.
+  both off (`deploy --bootstrap`) takes that first upload. A release's deploy refuses a tag whose configuration turns
+  either on or configures a route, and refuses to upload while the live Worker has either on or they cannot be read
+  (from Cloudflare's API with wrangler's own login, since no wrangler command reads them). The hostname comes from the
+  host's private `target.env` and is attached as the custom domain by a deploy run in a terminal, where wrangler asks
+  before it replaces a DNS record, and never where the environment marks the run as CI, where it would not ask.
 - On every protected path the Worker verifies `Cf-Access-Jwt-Assertion` with `jose`: an RS256 signature from the team's
   key set, the audience, a fixed issuer (the team's domain) and an expiry, which the token must carry. A caller that
   passes Access is treated as the host; the host and the service token are not told apart per path. The verification
@@ -1523,9 +1526,10 @@ Only a deployment can show these.
 - **Containers in production.** Start and rebuild times, and checkout time of a large repository. The local Docker
   numbers (`check:workspace`) are not production values.
 - **Deploying.** The bootstrap and the deploy have run only against stand-ins for wrangler, mise, pnpm and `gh`. The
-  first real deploy shows wrangler's answers as the command reads them, workers.dev and preview URLs off from the
-  bootstrap on, the image built for amd64 on the host's machine, a new container application's provisioning, and, on
-  the first deploy that changes the image, whether `active_rollout_id` clears when the rollout ends.
+  first real deploy shows wrangler's answers as the command reads them, Cloudflare's answers to the command's own reads
+  with wrangler's login (the Worker's settings and the container applications), workers.dev and preview URLs off from
+  the bootstrap on, the image built for amd64 on the host's machine, a new container application's provisioning, and,
+  on the first deploy that changes the image, whether `active_rollout_id` clears when the rollout ends.
 - **Bundling by wrangler.** The PKCS#8-only crypto path of `@octokit/auth-app`, bundled by wrangler, has minted a
   real installation token in wrangler's local runtime (`check:reconcile`); a deployed Worker has not minted one yet.
 - **Billing.** The Durable Object duration of the `wait` long-poll with one waiter, and the real cost of cloud turns.

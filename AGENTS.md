@@ -80,9 +80,10 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`; host
   [--ignore-running] [--immediate] [--keep-image] | --read-back <record>` there deploys the Worker
   (`docs/operations.md`) and is the host's to run. Their tests (`packages/server/scripts/release-check.node.test.ts`,
   `deploy.node.test.ts`) run them against stand-ins for wrangler, mise, pnpm and `gh` on `PATH`, an origin made with
-  `FixtureGit`, a local ledger and a terminal from python3's `pty` module, with `HOME` and the deploy directory in the
-  OS temp directory, and the deploy's test-only bounds and ledger origin (`PRQ_DEPLOY_WAIT_MS`, `PRQ_DEPLOY_STEP_MS`,
-  `PRQ_DEPLOY_POLL_MS`, `PRQ_DEPLOY_ORIGIN`); nothing reaches the network.
+  `FixtureGit`, a local server for the ledger and Cloudflare's API, and a terminal from python3's `pty` module, with
+  `HOME` and the deploy directory in the OS temp directory, and the deploy's test-only bounds and origins
+  (`PRQ_DEPLOY_WAIT_MS`, `PRQ_DEPLOY_STEP_MS`, `PRQ_DEPLOY_POLL_MS`, `PRQ_DEPLOY_ROLLOUT_MS`, `PRQ_DEPLOY_ORIGIN`,
+  `PRQ_DEPLOY_API`); nothing reaches the network.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
   change, and `mise exec -- gh-infra apply .github/infra.yaml` applies it once the owner approves.
 

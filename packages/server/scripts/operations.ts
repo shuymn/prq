@@ -9,7 +9,9 @@
 //
 // A program runs with a bound on its time, in a process group of its own unless it runs in the foreground; a timeout,
 // or a signal to this process, stops it with what it started (SIGTERM, then SIGKILL after a grace), and this process
-// then ends as the signal would have ended it. wrangler's environment is wranglerEnv()'s.
+// then ends as the signal would have ended it. A program in the foreground is stopped with the processes its tree holds
+// when each signal is sent: one that left the tree and ignores SIGTERM can outlive it. wrangler's environment is
+// wranglerEnv()'s.
 
 import { spawn, spawnSync } from "node:child_process";
 import { constants } from "node:fs";
