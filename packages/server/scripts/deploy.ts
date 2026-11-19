@@ -47,7 +47,6 @@ import {
   answerOf,
   ask,
   checkConfigAccount,
-  CONFIG,
   failed,
   hide,
   onInterrupt,
@@ -59,12 +58,14 @@ import {
   runCommand,
   succeeded,
   TARGET_ENV,
+  TOP_LEVEL,
   waitMs,
   WORKER,
   WORKER_ENV,
   wrangler,
+  wranglerArgv,
   wranglerEnv,
-  wranglerProgram,
+  wranglerJson,
 } from "./operations.ts";
 import { TAG } from "./release-check.ts";
 
@@ -80,9 +81,6 @@ const SUBDOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const COMPATIBILITY_DATE = "2026-11-10";
 const DASHBOARD = "Workers & Pages → prq → Settings → Domains & Routes";
 const RESUME = "pnpm --dir packages/server run deploy -- --read-back";
-// The repository's wrangler configuration at its top level, whatever CLOUDFLARE_ENV says, for every read on the account
-// (as the secrets command's calls).
-const TOP_LEVEL = ["--config", CONFIG, "--env", ""];
 // The rollout is read every poll interval, at most this many times (30 minutes at 10 s).
 const POLL_ROUNDS = 180;
 // How long the owner has to look at a new container application in the dashboard.
@@ -121,6 +119,8 @@ const ApplicationAnswer = v.object({
   active_rollout_id: v.nullish(v.string()),
 });
 const InstancesAnswer = v.array(v.object({ state: v.string(), version: v.nullish(v.number()) }));
+// An entry of wrangler's output file (WRANGLER_OUTPUT_FILE_PATH): the deploy's, with the version it created.
+const DeployEntry = v.object({ type: v.literal("deploy"), version_id: v.string() });
 
 const Deployment = v.object({
   id: v.nullable(v.string()),
@@ -185,13 +185,13 @@ type DeployRecord = v.InferOutput<typeof DeployRecord>;
 
 // A record file, replaced whole on each save: written next to it, then renamed over it. Saves run one after another,
 // so an earlier one never lands over a later one (a signal's save can start while another is under way).
-class Saved<T> {
+class Saved {
   readonly dir: string;
   readonly file: string;
-  data: T;
+  readonly data: DeployRecord;
   #saving: Promise<void> = Promise.resolve();
 
-  constructor(dir: string, file: string, data: T) {
+  constructor(dir: string, file: string, data: DeployRecord) {
     this.dir = dir;
     this.file = file;
     this.data = data;
@@ -262,8 +262,7 @@ async function deployedVersion(file: string): Promise<string | null> {
   let found: string | null = null;
   for (const line of text.split("\n")) {
     try {
-      const entry: unknown = JSON.parse(line);
-      const parsed = v.safeParse(v.object({ type: v.literal("deploy"), version_id: v.string() }), entry);
+      const parsed = v.safeParse(DeployEntry, JSON.parse(line));
       if (parsed.success) {
         found = parsed.output.version_id;
       }
@@ -276,11 +275,12 @@ async function deployedVersion(file: string): Promise<string | null> {
 
 // A version's tag, and whether it has no binding but secrets.
 async function version(accountId: string, versionId: string): Promise<{ tag: string | null; inert: boolean }> {
-  const outcome = await wrangler(["versions", "view", versionId, "--json", "--name", WORKER, ...TOP_LEVEL], accountId);
-  if (!succeeded(outcome)) {
-    throw failed("versions view", outcome);
-  }
-  const viewed = answerOf("versions view", VersionAnswer, outcome.stdout);
+  const viewed = await wranglerJson(
+    "versions view",
+    ["versions", "view", versionId, "--json", "--name", WORKER, ...TOP_LEVEL],
+    accountId,
+    VersionAnswer,
+  );
   return {
     tag: viewed.annotations?.["workers/tag"] ?? null,
     inert: (viewed.resources?.bindings ?? []).every((binding) => binding.type === "secret_text"),
@@ -310,21 +310,22 @@ async function liveDeployment(accountId: string): Promise<Deployment | null> {
 }
 
 async function applicationId(accountId: string): Promise<string | null> {
-  const outcome = await wrangler(["containers", "list", "--json", ...TOP_LEVEL], accountId);
-  if (!succeeded(outcome)) {
-    throw failed("containers list", outcome);
-  }
-  return (
-    answerOf("containers list", ApplicationsAnswer, outcome.stdout).find((app) => app.name === APPLICATION)?.id ?? null
+  const listed = await wranglerJson(
+    "containers list",
+    ["containers", "list", "--json", ...TOP_LEVEL],
+    accountId,
+    ApplicationsAnswer,
   );
+  return listed.find((app) => app.name === APPLICATION)?.id ?? null;
 }
 
 async function applicationInfo(accountId: string, id: string): Promise<Application> {
-  const outcome = await wrangler(["containers", "info", id, "--json", ...TOP_LEVEL], accountId);
-  if (!succeeded(outcome)) {
-    throw failed("containers info", outcome);
-  }
-  const app = answerOf("containers info", ApplicationAnswer, outcome.stdout);
+  const app = await wranglerJson(
+    "containers info",
+    ["containers", "info", id, "--json", ...TOP_LEVEL],
+    accountId,
+    ApplicationAnswer,
+  );
   return {
     id: app.id,
     version: app.version ?? null,
@@ -333,12 +334,13 @@ async function applicationInfo(accountId: string, id: string): Promise<Applicati
   };
 }
 
-async function instances(accountId: string, id: string): Promise<v.InferOutput<typeof InstancesAnswer>> {
-  const outcome = await wrangler(["containers", "instances", id, "--json", ...TOP_LEVEL], accountId);
-  if (!succeeded(outcome)) {
-    throw failed("containers instances", outcome);
-  }
-  return answerOf("containers instances", InstancesAnswer, outcome.stdout);
+function instances(accountId: string, id: string): Promise<v.InferOutput<typeof InstancesAnswer>> {
+  return wranglerJson(
+    "containers instances",
+    ["containers", "instances", id, "--json", ...TOP_LEVEL],
+    accountId,
+    InstancesAnswer,
+  );
 }
 
 // The live versions and the container application (the one known by its ID, else by its name), each null when there
@@ -363,13 +365,11 @@ async function readState(accountId: string, knownId: string | null = null): Prom
   return { deployment, application, unread };
 }
 
-function versionsLine(deployment: Deployment | null): string {
-  if (deployment === null || deployment.versions.length === 0) {
+function versionsLine(versions: Deployment["versions"] = []): string {
+  if (versions.length === 0) {
     return "none";
   }
-  return deployment.versions
-    .map((each) => `${each.versionId} (${each.tag ?? "untagged"}, ${each.percentage} %)`)
-    .join(", ");
+  return versions.map((each) => `${each.versionId} (${each.tag ?? "untagged"}, ${each.percentage} %)`).join(", ");
 }
 
 function applicationLine(app: Application | null): string {
@@ -537,23 +537,24 @@ function configCheck(clone: string): void {
   print(`configuration: the Worker ${WORKER}, with workers.dev and preview URLs off`);
 }
 
-// The clone's own wrangler, as its frozen install put it.
+// The clone's own wrangler, as its frozen install put it, run by the clone's Node (mise exec).
 function cloneWrangler(clone: string): [string, string[]] {
-  let cli = "";
-  try {
-    cli = createRequire(join(clone, "packages", "server", "package.json")).resolve("wrangler");
-  } catch {
-    // The override needs none; without it, the run says wrangler could not start.
-  }
-  return wranglerProgram(cli);
+  return wranglerArgv("node", () => {
+    try {
+      return createRequire(join(clone, "packages", "server", "package.json")).resolve("wrangler");
+    } catch {
+      // Without it, the run says wrangler could not start.
+      return "";
+    }
+  });
 }
 
 // The read-back's verdict, recorded.
 async function settle(
-  record: Saved<DeployRecord>,
+  record: Saved,
   state: "complete" | "incomplete",
   reason: string,
-  extra: Partial<NonNullable<DeployRecord["readBack"]>> = {},
+  extra: Partial<Pick<NonNullable<DeployRecord["readBack"]>, "provisioning" | "rounds">> = {},
 ): Promise<number> {
   record.data.readBack = {
     state,
@@ -576,7 +577,7 @@ async function settle(
 
 // Polls a changed application until its rollout is complete: the image this deploy set, no active rollout, and every
 // instance at the application's version, none starting or failed.
-async function pollRollout(record: Saved<DeployRecord>, expectedImage: string | null, id: string): Promise<number> {
+async function pollRollout(record: Saved, expectedImage: string | null, id: string): Promise<number> {
   const { accountId } = record.data;
   const rounds = record.data.readBack?.rounds ?? [];
   onInterrupt(async () => {
@@ -633,7 +634,7 @@ async function pollRollout(record: Saved<DeployRecord>, expectedImage: string | 
 }
 
 // A new application: the owner reads its provisioning in the dashboard, or it stays unverified.
-async function provisioning(record: Saved<DeployRecord>): Promise<number> {
+async function provisioning(record: Saved): Promise<number> {
   onInterrupt(async () => {
     process.exitCode = await settle(record, "incomplete", "the owner stopped before the provisioning was read", {
       provisioning: "unverified",
@@ -661,7 +662,7 @@ async function provisioning(record: Saved<DeployRecord>): Promise<number> {
 }
 
 // The read-back after a successful upload: the deployed version live alone, then the application as it was left.
-async function readBack(record: Saved<DeployRecord>): Promise<number> {
+async function readBack(record: Saved): Promise<number> {
   const { after, upload, application } = record.data;
   const state = record.data.reread ?? after;
   const versionId = upload?.versionId ?? null;
@@ -676,7 +677,7 @@ async function readBack(record: Saved<DeployRecord>): Promise<number> {
     return settle(
       record,
       "incomplete",
-      `the live versions are ${versionsLine(state?.deployment ?? null)}, not ${versionId} alone`,
+      `the live versions are ${versionsLine(state?.deployment?.versions)}, not ${versionId} alone`,
     );
   }
   const app = state?.application ?? null;
@@ -761,7 +762,7 @@ async function release(tag: string, flags: Flags): Promise<number> {
 
   const dir = join(root, `${stamp()}-${tag}`);
   await mkdir(dir, { mode: 0o700 });
-  const record = new Saved<DeployRecord>(dir, join(dir, "record.json"), {
+  const record = new Saved(dir, join(dir, "record.json"), {
     kind: "prq-deploy",
     tag,
     sha,
@@ -811,7 +812,7 @@ async function release(tag: string, flags: Flags): Promise<number> {
   const bootstrapped = live.every((each) => each.inert);
 
   print(`account: ${accountId} (${name})`);
-  print(`Worker: ${WORKER}, live: ${versionsLine(before.deployment)}`);
+  print(`Worker: ${WORKER}, live: ${versionsLine(before.deployment?.versions)}`);
   print(`hostname: ${host}, attached as the Worker's custom domain`);
   print(`release: ${tag} at ${sha}`);
   print(
@@ -889,7 +890,7 @@ async function release(tag: string, flags: Flags): Promise<number> {
       : `the upload failed (exit ${uploaded.code ?? uploaded.signal ?? "unknown"})`;
     await record.save();
     printError(`deploy: ${record.data.outcome}`);
-    printError(`deploy: live now: ${versionsLine(record.data.after.deployment)}`);
+    printError(`deploy: live now: ${versionsLine(record.data.after.deployment?.versions)}`);
     printError(`deploy: container application: ${applicationLine(record.data.after.application)}`);
     printError(`deploy: record: ${dir} (docs/operations.md, Recovery)`);
     return uploaded.code !== null && uploaded.code !== 0 ? uploaded.code : 1;
@@ -927,7 +928,7 @@ async function readBackAgain(path: string): Promise<number> {
   }
   const state = await readState(accountId, record.data.after?.application?.id ?? before.application?.id ?? null);
   record.data.reread = state;
-  print(`account: ${accountId}; live: ${versionsLine(state.deployment)}`);
+  print(`account: ${accountId}; live: ${versionsLine(state.deployment?.versions)}`);
   print(`container application ${APPLICATION}: ${applicationLine(state.application)}`);
   if (upload.exit !== 0) {
     const live = state.deployment?.versions ?? [];
@@ -966,7 +967,7 @@ async function bootstrap(resume: boolean): Promise<number> {
   const live = (await liveDeployment(accountId))?.versions ?? [];
   if (!resume && live.length > 0) {
     throw new Refusal(
-      `the Worker ${WORKER} has a live version (${versionsLine({ id: null, versions: live })}): the bootstrap only creates it`,
+      `the Worker ${WORKER} has a live version (${versionsLine(live)}): the bootstrap only creates it`,
       `after a bootstrap that stopped once its version was live: --bootstrap --resume`,
     );
   }
@@ -1020,7 +1021,7 @@ async function bootstrap(resume: boolean): Promise<number> {
   const after = (await liveDeployment(accountId))?.versions ?? [];
   if (versionId === null || after.length !== 1 || after[0]?.versionId !== versionId || after[0].tag !== BOOTSTRAP_TAG) {
     throw new Refusal(
-      `the live versions are ${versionsLine({ id: null, versions: after })}, not the bootstrap's ${versionId ?? "(unnamed)"} alone`,
+      `the live versions are ${versionsLine(after)}, not the bootstrap's ${versionId ?? "(unnamed)"} alone`,
     );
   }
   print(`version: ${versionId} (${BOOTSTRAP_TAG})`);

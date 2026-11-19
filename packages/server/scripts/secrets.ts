@@ -20,11 +20,8 @@ import {
   account,
   accountName,
   answer,
-  answerOf,
   checkConfigAccount,
-  CONFIG,
   exited,
-  failed,
   hide,
   onInterrupt,
   type Outcome,
@@ -35,10 +32,12 @@ import {
   runCommand,
   stopped,
   succeeded,
+  TOP_LEVEL,
   Unconfirmed,
   WORKER,
   WORKER_ENV,
   wrangler,
+  wranglerJson,
 } from "./operations.ts";
 
 const KEY = "GITHUB_APP_PRIVATE_KEY";
@@ -116,14 +115,13 @@ const SecretList = v.array(v.object({ name: v.string() }));
 
 // The names of the Worker's secrets; refused when the Worker cannot be read, a missing one included.
 async function secretNames(accountId: string): Promise<string[]> {
-  const outcome = await wrangler(
-    ["secret", "list", "--format", "json", "--config", CONFIG, "--env", "", "--name", WORKER],
+  const listed = await wranglerJson(
+    "secret list",
+    ["secret", "list", "--format", "json", ...TOP_LEVEL, "--name", WORKER],
     accountId,
+    SecretList,
   );
-  if (!succeeded(outcome)) {
-    throw failed("secret list", outcome);
-  }
-  return answerOf("secret list", SecretList, outcome.stdout).map((entry) => entry.name);
+  return listed.map((entry) => entry.name);
 }
 
 function namesLine(names: readonly string[]): string {
@@ -185,7 +183,7 @@ async function put(): Promise<void> {
   onInterrupt(async (signal) => {
     printError(`secrets: stopped by ${signal}: wrangler secret bulk was running, and ${UNCONFIRMED}`);
   });
-  const outcome = await wrangler(["secret", "bulk", "--config", CONFIG, "--env", "", "--name", WORKER], accountId, {
+  const outcome = await wrangler(["secret", "bulk", ...TOP_LEVEL, "--name", WORKER], accountId, {
     input: JSON.stringify(values),
   });
   onInterrupt(null);

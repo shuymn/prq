@@ -37,7 +37,8 @@ function field(value: unknown, key: string): unknown {
 
 type Result = { code: number; stdout: string; stderr: string };
 
-const running = new Set<ChildProcess>();
+// The git or gh call under way: one at a time, each awaited before the next starts.
+let running: ChildProcess | null = null;
 
 function call(program: string, args: readonly string[]): Promise<Result> {
   return new Promise((resolve, reject) => {
@@ -46,7 +47,7 @@ function call(program: string, args: readonly string[]): Promise<Result> {
       args,
       { timeout: CALL_MS, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" },
       (error, stdout, stderr) => {
-        running.delete(child);
+        running = null;
         if (error === null) {
           resolve({ code: 0, stdout, stderr });
         } else if (typeof error.code === "number") {
@@ -58,7 +59,7 @@ function call(program: string, args: readonly string[]): Promise<Result> {
         }
       },
     );
-    running.add(child);
+    running = child;
   });
 }
 
@@ -221,9 +222,7 @@ async function check(args: readonly string[]): Promise<string[]> {
 if (import.meta.main) {
   for (const signal of SIGNALS) {
     process.once(signal, () => {
-      for (const child of running) {
-        child.kill("SIGTERM");
-      }
+      running?.kill("SIGTERM");
       process.kill(process.pid, signal);
     });
   }

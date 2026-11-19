@@ -43,7 +43,9 @@ const EXIT_UNCONFIRMED = 2;
 // shorter wait.
 const directory = process.env["PRQ_DEPLOY_DIRECTORY"] ?? join(homedir(), ".config", "prq", "deploy");
 const wranglerOverride = process.env["PRQ_DEPLOY_WRANGLER"];
-export const CONFIG = process.env["PRQ_DEPLOY_WRANGLER_CONFIG"] ?? join(SERVER, "wrangler.jsonc");
+const CONFIG = process.env["PRQ_DEPLOY_WRANGLER_CONFIG"] ?? join(SERVER, "wrangler.jsonc");
+// The repository's wrangler configuration at its top level, whatever CLOUDFLARE_ENV says, for every call on the account.
+export const TOP_LEVEL: readonly string[] = ["--config", CONFIG, "--env", ""];
 export const waitMs = /^[1-9][0-9]*$/.test(process.env["PRQ_DEPLOY_WAIT_MS"] ?? "")
   ? Number(process.env["PRQ_DEPLOY_WAIT_MS"])
   : DEFAULT_WAIT_MS;
@@ -201,7 +203,7 @@ export type Outcome = {
 // timeoutMs. A program runs in a process group of its own unless it is in the foreground: then it shares this
 // process's group and its terminal, which it can read (wrangler asks there), and stopping it signals it and every
 // process it started.
-export type RunOptions = {
+type RunOptions = {
   cwd: string;
   env: NodeJS.ProcessEnv;
   input?: string | undefined;
@@ -360,18 +362,21 @@ export async function run(
   return { code, signal, stdout, stderr, timedOut };
 }
 
+// The command that runs wrangler: the program tests give in its place, else executable (Node) with the wrangler file
+// cli() resolves. wrangler's own bin runs that file in a second process; run directly, it is the one process to stop.
+export function wranglerArgv(executable: string, cli: () => string): [string, string[]] {
+  return wranglerOverride !== undefined ? [wranglerOverride, []] : [executable, ["--no-warnings", cli()]];
+}
+
+// The repository's own wrangler.
 function wranglerCommand(): [string, string[]] {
-  if (wranglerOverride !== undefined) {
-    return [wranglerOverride, []];
-  }
-  let cli: string;
-  try {
-    cli = fileURLToPath(import.meta.resolve("wrangler"));
-  } catch {
-    throw new Refusal(NOT_INSTALLED);
-  }
-  // wrangler's own bin runs this file in a second process; run directly, it is the one process to stop.
-  return [process.execPath, ["--no-warnings", cli]];
+  return wranglerArgv(process.execPath, () => {
+    try {
+      return fileURLToPath(import.meta.resolve("wrangler"));
+    } catch {
+      throw new Refusal(NOT_INSTALLED);
+    }
+  });
 }
 
 // wrangler's environment on the account. Each variable set, not left out: wrangler reads a variable its environment
@@ -419,11 +424,6 @@ export async function wrangler(
   });
 }
 
-// The command that runs wrangler: the override tests give, else Node with the given wrangler's own file.
-export function wranglerProgram(cli: string): [string, string[]] {
-  return wranglerOverride !== undefined ? [wranglerOverride, []] : ["node", ["--no-warnings", cli]];
-}
-
 // Whether a wrangler call succeeded: exit 0 within its wait.
 export function succeeded(outcome: Outcome): boolean {
   return outcome.code === 0 && !outcome.timedOut;
@@ -463,16 +463,27 @@ export function answerOf<S extends v.GenericSchema>(what: string, schema: S, tex
   return parsed.output;
 }
 
+// A wrangler read on the account that answers JSON, refused when it does not succeed or answers in another shape.
+export async function wranglerJson<S extends v.GenericSchema>(
+  what: string,
+  args: readonly string[],
+  accountId: string,
+  schema: S,
+): Promise<v.InferOutput<S>> {
+  const outcome = await wrangler(args, accountId);
+  if (!succeeded(outcome)) {
+    throw failed(what, outcome);
+  }
+  return answerOf(what, schema, outcome.stdout);
+}
+
 // `whoami --json`'s accounts.
 const WhoamiAnswer = v.object({ accounts: v.array(v.object({ id: v.string(), name: v.optional(v.string()) })) });
 
 // The account's name, from the accounts the login reaches.
 export async function accountName(accountId: string): Promise<string> {
-  const outcome = await wrangler(["whoami", "--json", "--config", CONFIG, "--env", ""], accountId);
-  if (!succeeded(outcome)) {
-    throw failed("whoami", outcome);
-  }
-  const found = answerOf("whoami", WhoamiAnswer, outcome.stdout).accounts.find((entry) => entry.id === accountId);
+  const answered = await wranglerJson("whoami", ["whoami", "--json", ...TOP_LEVEL], accountId, WhoamiAnswer);
+  const found = answered.accounts.find((entry) => entry.id === accountId);
   if (found === undefined) {
     throw new Refusal(
       `wrangler's login does not reach the account in ${TARGET_ENV} (pnpm --dir packages/server exec wrangler whoami)`,
