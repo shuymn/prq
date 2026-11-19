@@ -7,6 +7,8 @@
 //    and is answered.
 // 3. From inside the container, a request to another host or another github.com path gets 403, and no token is in the
 //    container's environment or the checkout's .git/config.
+// 4. With --browser, headed Chrome shows the pull request (owner-browser.ts) while the next push (nextPush()) is
+//    analyzed: the completed summary stays readable, "Summarizing" and the new SHA above it, until that analysis ends.
 // Docker runs only through the named operations below, on containers this check saw start.
 
 import { execFile, spawn } from "node:child_process";
@@ -16,6 +18,7 @@ import { promisify } from "node:util";
 import { type PrRef, type PrSessionView, sessionName } from "@prq/protocol";
 import * as v from "valibot";
 
+import { openOwnerBrowser, type OwnerBrowser } from "./owner-browser.ts";
 import { ask, deliver, getMessages, sessionView } from "./pr.ts";
 import type { GithubApp } from "./reconcile.ts";
 import { type ModelSettings, startWorker, type Worker } from "./worker.ts";
@@ -56,10 +59,11 @@ const Stored = v.array(
 );
 
 type Job = PrSessionView["jobs"][number];
+type Pull = v.InferOutput<typeof Pull>;
 type Container = { id: string; image: string; session: string; state: string };
 
 // The pull request's head, base and update time, from GitHub's API without credentials (a public repository).
-export async function readPull(pr: PrRef): Promise<v.InferOutput<typeof Pull>> {
+export async function readPull(pr: PrRef): Promise<Pull> {
   const res = await fetch(`https://api.github.com/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}`, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": "prq-workspace-check" },
   });
@@ -297,10 +301,48 @@ for method, url in zip(sys.argv[2::2], sys.argv[3::2]):
 
 export type WorkspaceCheck = { app: GithubApp; model: ModelSettings };
 
+// The push --browser delivers after the other steps: the head moved to the base, a commit of the repository the egress
+// fetches, a second after the pull request's update (whole seconds, as GitHub gives it).
+export function nextPush(pull: Pull) {
+  const at = new Date(Date.parse(pull.updated_at) + 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  return { action: "synchronize" as const, head: pull.base.sha, base: pull.base.sha, before: pull.head.sha, at };
+}
+
+// Step 4: the page keeps the completed summary while the next push's analysis runs, Summarizing its SHA.
+async function nextPushShown(
+  shown: OwnerBrowser,
+  worker: Worker,
+  pr: PrRef,
+  pull: Pull,
+  installation: number,
+  print: (line: string) => void,
+): Promise<boolean> {
+  const { page } = shown;
+  await page.goto(shown.url(`/pr/${pr.owner}/${pr.repo}/${pr.number}`));
+  const body = page.locator('[data-component="Summary"] .body');
+  await body.waitFor();
+  const first = (await body.innerText()).trim();
+  const push = nextPush(pull);
+  await deliver(worker, pr, { ...push, installation });
+  const progress = page.locator('[data-component="Summary"] .progress', { hasText: "Summarizing" });
+  await progress.waitFor({ timeout: JOB_MS });
+  const summarizing = await progress.locator('[data-component="Sha"]').getAttribute("aria-label");
+  const kept = (await body.innerText()).trim();
+  print(`  the page: Summarizing ${summarizing ?? "(no SHA)"} above the first summary (${first.length} characters)`);
+  const next = await untilEnded(
+    worker,
+    pr,
+    (job) => job.target.kind === "analysis" && job.target.headSha === push.head,
+  );
+  print(`  the next push's analysis: ${next?.state ?? "none"}${next?.failure == null ? "" : `: ${next.failure}`}`);
+  return first !== "" && kept === first && summarizing === push.head && next?.state === "done";
+}
+
 export async function checkWorkspace(
   settings: WorkspaceCheck,
   pr: PrRef,
   print: (line: string) => void,
+  { browser = false }: { browser?: boolean | undefined } = {},
 ): Promise<boolean> {
   const pull = await readPull(pr);
   const head = pull.head.sha;
@@ -312,7 +354,7 @@ export async function checkWorkspace(
   );
   const tracked = await workspaceContainers();
   const { workspaces } = tracked;
-  const results = { prepared: false, rebuilt: false, contained: false };
+  const results = { prepared: false, rebuilt: false, contained: false, streamed: !browser };
   // Installed before the Worker starts, so the Worker's own fetch wrapper passes GitHub's requests through it.
   const github = watchGithub();
   const githubSince = (from: number) => {
@@ -332,6 +374,7 @@ export async function checkWorkspace(
       throw error;
     },
   );
+  let shown: OwnerBrowser | null = null;
   try {
     // 1. The analysis prepares from empty at the head; a question is answered through the tools.
     print("step 1: the push's analysis prepares the container from empty, and a code question is answered");
@@ -457,13 +500,21 @@ export async function checkWorkspace(
       second.length === 1 &&
       second[0]?.id !== container.id;
     print(results.rebuilt ? "step 2: as expected" : "step 2: NOT as expected");
+
+    if (browser) {
+      print(`step 4: Chrome shows the pull request while the next push (to the base ${pull.base.sha}) is analyzed`);
+      shown = await openOwnerBrowser(worker);
+      results.streamed = await nextPushShown(shown, worker, pr, pull, settings.app.installationId, print);
+      print(results.streamed ? "step 4: as expected" : "step 4: NOT as expected");
+    }
   } finally {
+    await shown?.close();
     await worker.close();
     github.stop();
     const { seen, removed } = await tracked.remove();
     print(`containers of this check: ${seen}, removed after the Worker closed: ${removed}`);
   }
-  const ok = results.prepared && results.rebuilt && results.contained;
+  const ok = results.prepared && results.rebuilt && results.contained && results.streamed;
   print(ok ? "as expected" : "NOT as expected");
   return ok;
 }
