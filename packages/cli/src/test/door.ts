@@ -4,10 +4,14 @@
 // ways and either side's close passed on, with any Cf-Access-Jwt-Assertion the browser sent replaced by the harness's.
 //
 // A test can plan what happens to the next request a path matches (DoorPlan): gate it before it is forwarded, or hold
-// the Worker's answer before it is passed on, each until the test releases it. It can cut the open WebSockets of a
-// route (cut()), both sides at once, as a network failure would. And it can have the door serve a directory (serve())
-// in place of the Worker's static assets, as an earlier deploy's would be: every path outside the Worker's routes is
-// then a file of the directory, or its index.html.
+// the Worker's answer before it is passed on, each until the test releases it, or rewrite the headers of the Worker's
+// answer. It can cut the open WebSockets of a route (cut()), both sides at once, as a network failure would. And it can
+// have the door serve a directory (serve()) in place of the Worker's static assets, as an earlier deploy's would be:
+// every path outside the Worker's routes is then a file of the directory, or its index.html.
+//
+// A door may also decide each request before any of that (admit), as Access does at the edge: refuse it with an HTTP
+// answer, an upgrade included, or forward it with the application's token, an expired one or none. The browser's door
+// admits every request with the token. The service token's headers are never forwarded, as Access never passes them on.
 //
 // Each forward is bounded: from its arrival, the browser has its answer's headers or switched protocols within
 // DOOR_ANSWER_MS, a gate's or a hold's wait included, else it gets 504 and the upstream request is dropped. A Worker that
@@ -39,6 +43,8 @@ const HOP_BY_HOP = new Set([
   "proxy-authorization",
 ]);
 const ASSERTION = "cf-access-jwt-assertion";
+// The headers that carry the service token to Access, and the assertion that replaces them.
+const NOT_FORWARDED = new Set([ASSERTION, "cf-access-client-id", "cf-access-client-secret"]);
 
 // The Worker's routes (packages/server/wrangler.jsonc `run_worker_first`), which serve() leaves to the Worker.
 const WORKER_ROUTES = /^\/(?:api|agents|cli|webhook)(?:\/|$)/;
@@ -56,8 +62,20 @@ const MEDIA_TYPES: Record<string, string> = {
 
 // What happens to the next request a plan matches: gate holds it before it is forwarded, opening arrived when it
 // reaches the door, and forwards it once release opens; hold forwards it, opens answered once the Worker's answer
-// (its headers) arrived, and passes that answer on once release opens. A gate applies to an upgrade too.
-type DoorPlan = { kind: "gate"; arrived: Latch; release: Latch } | { kind: "hold"; answered: Latch; release: Latch };
+// (its headers) arrived, and passes that answer on once release opens; rewrite passes the answer on with the headers
+// it returns. A gate applies to an upgrade too.
+type DoorPlan =
+  | { kind: "gate"; arrived: Latch; release: Latch }
+  | { kind: "hold"; answered: Latch; release: Latch }
+  | { kind: "rewrite"; headers: (headers: [string, string][]) => [string, string][] };
+
+// What the door does with a request before anything else: forward it with the application's token (valid, expired or
+// none), or refuse it with this answer.
+export type Admission =
+  | { kind: "forward"; token: "valid" | "expired" | "none" }
+  | { kind: "deny"; status: number; headers: [string, string][]; body: string };
+
+const ADMIT_ALL = (): Admission => ({ kind: "forward", token: "valid" });
 
 // A forwarded request as the door saw it: the browser's path (with its query) and conditional header, the Worker's
 // status (null until it answered, or when it never did), and whether the browser went away before its answer came.
@@ -103,11 +121,12 @@ function pairsOf(raw: readonly string[]): [string, string][] {
   return pairs;
 }
 
-// The headers passed on: all but the hop-by-hop ones (kept for an upgrade, which needs them) and the assertion.
+// The headers passed on: all but the hop-by-hop ones (kept for an upgrade, which needs them), the assertion and the
+// service token.
 function forwardable(raw: readonly string[], upgrade: boolean): [string, string][] {
   return pairsOf(raw).filter(([name]) => {
     const lower = name.toLowerCase();
-    return lower !== ASSERTION && (upgrade || !HOP_BY_HOP.has(lower));
+    return !NOT_FORWARDED.has(lower) && (upgrade || !HOP_BY_HOP.has(lower));
   });
 }
 
@@ -152,7 +171,13 @@ function released(stage: Latch, release: Latch, signal: AbortSignal): Promise<bo
   });
 }
 
-export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } = {}): Promise<Door> {
+export async function startDoor(
+  worker: Upstream,
+  {
+    answerMs = DOOR_ANSWER_MS,
+    admit = ADMIT_ALL,
+  }: { answerMs?: number; admit?: (req: IncomingMessage) => Admission } = {},
+): Promise<Door> {
   // Its own agent, without keep-alive, so that no idle upstream connection outlives a forward or the door.
   const agent = new Agent({ keepAlive: false });
   // Every connection the door holds, the browser's and the Worker's, for close().
@@ -162,10 +187,12 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
     socket.once("close", () => connections.delete(socket));
   };
 
-  async function upstreamOptions(req: IncomingMessage, isUpgrade: boolean) {
+  async function upstreamOptions(req: IncomingMessage, isUpgrade: boolean, token: "valid" | "expired" | "none") {
     const target = new URL(worker.url());
     const headers = forwardable(req.rawHeaders, isUpgrade);
-    headers.push(["Cf-Access-Jwt-Assertion", await worker.token()]);
+    if (token !== "none") {
+      headers.push(["Cf-Access-Jwt-Assertion", await worker.token({ expired: token === "expired" })]);
+    }
     return {
       agent,
       host: target.hostname,
@@ -189,6 +216,12 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
 
   async function forward(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const path = req.url ?? "/";
+    const admission = admit(req);
+    if (admission.kind === "deny") {
+      req.resume();
+      res.writeHead(admission.status, admission.headers.flat()).end(admission.body);
+      return;
+    }
     const dir = staticDir;
     if (dir !== null && !WORKER_ROUTES.test(path) && (await serveStatic(dir, req, res))) {
       return;
@@ -232,7 +265,7 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
     if (plan?.kind === "gate" && !(await released(plan.arrived, plan.release, gone.signal))) {
       return;
     }
-    const options = await upstreamOptions(req, false);
+    const options = await upstreamOptions(req, false, admission.token);
     // The browser went away, or the bound passed, while the token was signed.
     if (gone.signal.aborted || res.destroyed) {
       return;
@@ -256,7 +289,12 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
           return;
         }
         entry.status = answer.statusCode ?? null;
-        res.writeHead(answer.statusCode ?? 502, answer.statusMessage, forwardable(answer.rawHeaders, false).flat());
+        const headers = forwardable(answer.rawHeaders, false);
+        res.writeHead(
+          answer.statusCode ?? 502,
+          answer.statusMessage,
+          (plan?.kind === "rewrite" ? plan.headers(headers) : headers).flat(),
+        );
         answer.pipe(res);
       })();
     });
@@ -266,6 +304,14 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
 
   async function forwardUpgrade(req: IncomingMessage, socket: Duplex, first: Buffer): Promise<void> {
     socket.on("error", () => socket.destroy());
+    // A refused handshake gets an HTTP answer, delimited by the close.
+    const admission = admit(req);
+    if (admission.kind === "deny") {
+      socket.end(
+        `${head(admission.status, "Refused", [...admission.headers, ["Connection", "close"]])}${admission.body}`,
+      );
+      return;
+    }
     const path = req.url ?? "/";
     const plan = planFor(path, true);
     const gone = new AbortController();
@@ -293,7 +339,7 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
     if (plan?.kind === "gate" && !(await released(plan.arrived, plan.release, gone.signal))) {
       return;
     }
-    const options = await upstreamOptions(req, true);
+    const options = await upstreamOptions(req, true, admission.token);
     if (gone.signal.aborted || socket.destroyed) {
       return;
     }

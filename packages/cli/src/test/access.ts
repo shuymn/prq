@@ -4,14 +4,20 @@
 // the tests' wait point and fault injector: per route, the next requests can be answered here, held, cut off or
 // rewritten (Plan), and every request is logged. Next to it, the browser's door (door.ts) forwards a browser's requests
 // and WebSockets with the application's token, as Access does for the host signed in.
+//
+// The edge (a third listener, a door that decides each request as Access does for the hostname's two applications)
+// stands in for the deployment the deployed checks reach: /webhook and every path under it pass without a token (the
+// bypass application); a request with the service token passes with the application's token (or, by mode, an expired
+// one or none, or is refused as a bad token is); a request with another token is refused 403, as strict mode does; and
+// one without a token, an upgrade too, is redirected to the team's sign-in.
 
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { text } from "node:stream/consumers";
 
-import { type Door, startDoor } from "./door.ts";
+import { type Admission, type Door, startDoor } from "./door.ts";
 import type { Latch } from "./latch.ts";
-import type { Worker } from "./worker.ts";
+import { TEAM_DOMAIN, type Worker } from "./worker.ts";
 
 // What the stand-in does with one request to a route.
 type Plan =
@@ -30,8 +36,9 @@ type Plan =
   | { kind: "body"; body: string };
 
 // How the stand-in treats the service token: forward (as Access does for a good one), refuse with 403 or a redirect
-// to a login page (what Access may answer for a bad one), or forward with an expired token (the Worker's 401).
-export type Mode = "forward" | "forbid" | "redirect" | "expired";
+// to a login page (what Access may answer for a bad one), forward with an expired token (the Worker's 401), or forward
+// with none (a request that reached the Worker around Access; the Worker's 401 too).
+export type Mode = "forward" | "forbid" | "redirect" | "expired" | "bare";
 
 // A request as the stand-in saw it: when it arrived (performance.now()), its route and agent ID, whether it carried the
 // service token, the status answered (null while pending or when cut off before the Worker answered), and whether its
@@ -49,6 +56,8 @@ export type Access = {
   url: string;
   // The browser's door to the Worker (door.ts): the requests it forwarded, its plans and the directory it serves.
   readonly door: Door;
+  // The edge the deployed checks reach, a door behind Access's decision (above).
+  readonly edge: Door;
   clientId: string;
   clientSecret: string;
   mode: Mode;
@@ -70,11 +79,15 @@ export async function startAccess(worker: Worker): Promise<Access> {
   const queued = new Map<string, Plan[]>();
   const persistent = new Map<string, Plan>();
   let door: Door | undefined;
+  let edge: Door | undefined;
 
   const access: Access = {
     url: "",
     get door() {
       return required(door);
+    },
+    get edge() {
+      return required(edge);
     },
     clientId,
     clientSecret,
@@ -88,8 +101,10 @@ export async function startAccess(worker: Worker): Promise<Access> {
     },
     log: [],
     clear() {
-      door?.log.splice(0);
-      door?.clear();
+      for (const front of [door, edge]) {
+        front?.log.splice(0);
+        front?.clear();
+      }
       queued.clear();
       persistent.clear();
       access.log.length = 0;
@@ -101,7 +116,7 @@ export async function startAccess(worker: Worker): Promise<Access> {
         server.close((error) => (error ? reject(error) : resolve())),
       );
       server.closeAllConnections();
-      await Promise.all([door?.close(), closed]);
+      await Promise.all([door?.close(), edge?.close(), closed]);
     },
   };
 
@@ -140,7 +155,7 @@ export async function startAccess(worker: Worker): Promise<Access> {
     entry.serviceToken =
       req.headers["cf-access-client-id"] === clientId && req.headers["cf-access-client-secret"] === clientSecret;
     if (!entry.serviceToken || access.mode === "forbid") {
-      answer(403, { "Content-Type": "text/html" }, "<html><body>Forbidden</body></html>");
+      answer(403, { "Content-Type": "text/html" }, FORBIDDEN);
       return;
     }
     if (access.mode === "redirect") {
@@ -176,7 +191,9 @@ export async function startAccess(worker: Worker): Promise<Access> {
         method: req.method ?? "POST",
         headers: {
           "Content-Type": req.headers["content-type"] ?? "application/json",
-          "Cf-Access-Jwt-Assertion": await worker.token({ expired: access.mode === "expired" }),
+          ...(access.mode === "bare"
+            ? {}
+            : { "Cf-Access-Jwt-Assertion": await worker.token({ expired: access.mode === "expired" }) }),
         },
         ...(req.method === "GET" || req.method === "HEAD" ? {} : { body }),
         redirect: "manual",
@@ -245,14 +262,44 @@ export async function startAccess(worker: Worker): Promise<Access> {
     throw new Error("the stand-in is not listening on a port");
   }
   access.url = `http://127.0.0.1:${address.port}`;
+  // Access's decision at the edge (above).
+  function admitAtEdge(req: IncomingMessage): Admission {
+    const path = new URL(req.url ?? "/", "http://edge").pathname;
+    if (path === "/webhook" || path.startsWith("/webhook/")) {
+      return { kind: "forward", token: "none" };
+    }
+    const id = req.headers["cf-access-client-id"];
+    const secret = req.headers["cf-access-client-secret"];
+    const signIn = new URL(`/cdn-cgi/access/login/${req.headers.host ?? "edge"}`, TEAM_DOMAIN);
+    signIn.searchParams.set("redirect_url", req.url ?? "/");
+    const redirect: Admission = { kind: "deny", status: 302, headers: [["Location", signIn.href]], body: "" };
+    if (id === undefined && secret === undefined) {
+      return redirect;
+    }
+    if (id !== clientId || secret !== clientSecret || access.mode === "forbid") {
+      return { kind: "deny", status: 403, headers: [["Content-Type", "text/html"]], body: FORBIDDEN };
+    }
+    if (access.mode === "redirect") {
+      return redirect;
+    }
+    return {
+      kind: "forward",
+      token: access.mode === "expired" ? "expired" : access.mode === "bare" ? "none" : "valid",
+    };
+  }
+
   try {
     door = await startDoor(worker);
+    edge = await startDoor(worker, { admit: admitAtEdge });
   } catch (error) {
     server.close();
+    await door?.close();
     throw error;
   }
   return access;
 }
+
+const FORBIDDEN = "<html><body>Forbidden</body></html>";
 
 function required(door: Door | undefined): Door {
   if (door === undefined) {

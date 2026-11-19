@@ -15,7 +15,7 @@ import { createTestHarness, experimental_readRawConfig } from "wrangler";
 import { requireClientBuild } from "./client-build.ts";
 
 // .example never resolves, so a key set fetch the wrapper does not answer cannot reach the network.
-const TEAM_DOMAIN = "https://team.prq.example";
+export const TEAM_DOMAIN = "https://team.prq.example";
 const AUDIENCE = "prq-test-audience";
 const KEY_ID = "test-key";
 export const WEBHOOK_SECRET = "prq-test-webhook-secret";
