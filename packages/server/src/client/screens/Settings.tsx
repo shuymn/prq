@@ -6,7 +6,7 @@ import { Button } from "../components/Button.tsx";
 import { Dialog } from "../components/Dialog.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
 import { Modal } from "../components/modal.tsx";
-import { ReadFailed } from "../components/Notice.tsx";
+import { Notice, ReadFailed } from "../components/Notice.tsx";
 import { PromptEditor } from "../components/PromptEditor.tsx";
 import { Skeleton } from "../components/Skeleton.tsx";
 import { SkillRegisterForm } from "../components/SkillRegisterForm.tsx";
@@ -138,6 +138,9 @@ export function Settings({
       ) : (
         <>
           {state.refreshFailed && <ReadFailed subject="settings" refresh onRetry={actions.reread} />}
+          {state.unconfirmed.map((title, index) => (
+            <Notice key={index} tone="attention" title={title} text="The next read of the list settles it." />
+          ))}
           <section className="prompts">
             <h2>Prompts</h2>
             {KINDS.map((kind) => {

@@ -38,9 +38,12 @@ export function PromptEditor({
 }) {
   const titleId = useId();
   const purposeId = useId();
+  // A busy Save takes no submit (Enter on it included): one save is out at a time.
   const save = (event: FormEvent) => {
     event.preventDefault();
-    onSave?.();
+    if (status !== "saving") {
+      onSave?.();
+    }
   };
   return (
     <form data-component="PromptEditor" data-status={status} aria-labelledby={titleId} onSubmit={save}>

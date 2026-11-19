@@ -56,9 +56,12 @@ export function SkillRow({
   onUpdate?: (() => void) | undefined;
   onRemove?: (() => void) | undefined;
 }) {
+  // A busy Review update takes no submit (Enter in the field included): one preview is out at a time.
   const review = (event: FormEvent) => {
     event.preventDefault();
-    refForm?.onReview?.();
+    if (refForm?.busy === false) {
+      refForm.onReview?.();
+    }
   };
   return (
     <li data-component="SkillRow" data-state={state}>

@@ -799,15 +799,20 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
 - **The settings page** (the web UI's `/settings`, loaded as a chunk of its own) reads `GET /api/instructions` when it
   opens and after each change to the skills. Each prompt saves on its own and the editor keeps the host's draft: a
   save sends the draft as it is then, typing stays open meanwhile, and a read replaces an editor's text only while the
-  editor holds no unsaved change. A confirm sends exactly what its preview showed (an update with the preview's
-  `current.rev` as `expectedRev`); editing the ref withdraws an update's preview still out. A register answered `409
-  skill_exists` reads the list again, and that skill listed at that commit counts as registered (a confirm the page
-  stopped waiting for that the server applied); `409 skill_changed` reads the list and asks for a fresh review; a
-  remove answered 204 or 404 reads the list. The page gives each request its route's bounds and 15 s more, then counts
-  it as unanswered: 45 s for a read, a save or a remove, 75 s for a preview (the registration's revision and the 30 s
-  read of the skill), 165 s for a confirm (an update's two revision checks and store around the 60 s fetch). Each kind
-  has one request out at a time; closing a dialog or leaving the page aborts what is out, and a dialog closed while its
-  confirm was out reads the list, since the server may have applied it.
+  editor holds no unsaved change and had no edit or save during the read. The drafts and the saves out last for the
+  app's life, so leaving the page and coming back within the app keeps the later text, and the read on return
+  reconciles with a save still out the same way. Each operation has one request until it is answered: Save, Review
+  skill or Review update while its request is out does nothing. A preview belongs to its form and the input it was sent
+  for: editing the link or the ref, opening another dialog, or leaving the page withdraws it. A confirm sends exactly
+  what its preview showed (an update with the preview's `current.rev` as `expectedRev`) and runs to its answer whether
+  its dialog stays open or not; the list is read after it. A register answered `409 skill_exists`, an update answered
+  `409 skill_changed`, or a confirm with no answer or a 5xx (the route may stop waiting for a Hub write that still
+  lands) is decided by that read: the requested pin listed, or for a removal the skill gone, counts as applied, and
+  otherwise the dialog, if open, shows why it was not; when that read fails too, the page says it couldn't confirm the
+  change until a read succeeds. A remove answered 204 or 404 is applied. A Hub write that lands after the deciding read
+  shows at the next one. The page gives each request its route's bounds and 15 s more, then counts it as unanswered:
+  45 s for a read, a save or a remove, 75 s for a preview (the registration's revision and the 30 s read of the skill),
+  165 s for a confirm (an update's two revision checks and store around the 60 s fetch).
 - **Context budget.** Only each skill's `name` and `description` stay in the model context. The body and the files it
   refers to are loaded on demand through two tools: `activate_skill(name)` returns the `SKILL.md` body, and
   `read_skill_resource(name, path)` returns a file inside that skill's directory (path-checked, so it cannot leave it),

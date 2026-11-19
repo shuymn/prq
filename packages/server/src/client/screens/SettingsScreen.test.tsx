@@ -1,5 +1,6 @@
-// The settings page over a fetch the test answers (plan P6.1–P6.6): drafts across saves and reads, a skill's register,
-// update and removal and what each request sends, the dialogs' dismissal and focus, and every request's bound.
+// The settings page over a fetch the test answers (plan P6.1–P6.6): drafts across saves, reads and leaving the page, one
+// request per operation, a skill's register, update and removal and what each request sends, a confirm's outcome, the
+// dialogs' dismissal and focus, and every request's bound.
 
 import type { Instructions, Skill } from "@prq/protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -34,14 +35,18 @@ const REVIEW = fixture("review");
 const YOMIYASU = fixture("yomiyasu");
 const CHANGELOG: Skill = { ...REGISTER_PREVIEW, rev: 9, registeredAt: 0, updatedAt: 0 };
 
-// The page, its first read answered with these instructions (or left out).
-async function settings(first: Instructions | null = instructions([REVIEW])) {
-  const fetch = controlledFetch();
-  const screen = await render(
+// The page over this fetch, as the app opens it.
+const openPage = (fetch: ReturnType<typeof controlledFetch>) =>
+  render(
     <FetchContext value={fetch.fetch}>
       <SettingsScreen />
     </FetchContext>,
   );
+
+// The page, its first read answered with these instructions (or left out).
+async function settings(first: Instructions | null = instructions([REVIEW])) {
+  const fetch = controlledFetch();
+  const screen = await openPage(fetch);
   if (first !== null) {
     (await fetch.request(0)).respond(first);
     await until(() => document.querySelector("[data-component=PromptEditor]") !== null);
@@ -71,6 +76,14 @@ const button = (name: string) => page.getByRole("button", { name, exact: true })
 afterEach(() => {
   vi.useRealTimers();
 });
+
+// The review skill removed: the read after it, which a save of a prompt can overlap.
+async function removeReview(next: Awaited<ReturnType<typeof settings>>["next"]) {
+  await userEvent.click(button("Remove"));
+  await userEvent.click(button("Remove skill"));
+  (await next("DELETE", "/api/skills/review")).respond(null, 204);
+  return next("GET", "/api/instructions");
+}
 
 describe("the prompts", () => {
   test("a save while the other editor is dirty, and typing while it is out, keep every later draft, through a read too; saving while the PUT is held, Saved at after; a failure offers Save again (P6.1)", async () => {
@@ -110,6 +123,92 @@ describe("the prompts", () => {
     expect(bodyOf(again)).toEqual({ text: "B1" });
     again.respond({ text: "B1", savedAt: new Date().setHours(10, 2, 0, 0) });
     await expect.element(editor("Answer prompt").getByText("Saved at 10:02")).toBeVisible();
+  });
+
+  test("a read answered while a save is out keeps the later draft, though it is the text read before (M1)", async () => {
+    const { next } = await settings(instructions([REVIEW], "A0"));
+    await userEvent.fill(field("Analysis prompt").element(), "A1");
+    await userEvent.click(editor("Analysis prompt").getByRole("button", { name: "Save prompt" }));
+    const save = await next("PUT", "/api/prompts/analysis");
+    await userEvent.fill(field("Analysis prompt").element(), "A0");
+    (await removeReview(next)).respond(instructions([], "A1"));
+    await until(() => document.querySelector("[data-component=SkillRow]") === null);
+    expect(draftOf("Analysis prompt")).toBe("A0");
+    save.respond({ text: "A1", savedAt: new Date().setHours(10, 2, 0, 0) });
+    await expect.element(editor("Analysis prompt").getByText("Saved at 10:02")).toBeVisible();
+    expect(draftOf("Analysis prompt")).toBe("A0");
+  });
+
+  test("a read that started before a save and is answered after it keeps the saved text (M1)", async () => {
+    const { next } = await settings(instructions([REVIEW], "A0"));
+    await userEvent.fill(field("Analysis prompt").element(), "A1");
+    const read = await removeReview(next);
+    await userEvent.click(editor("Analysis prompt").getByRole("button", { name: "Save prompt" }));
+    (await next("PUT", "/api/prompts/analysis")).respond({ text: "A1", savedAt: new Date().setHours(10, 2, 0, 0) });
+    await expect.element(editor("Analysis prompt").getByText("Saved at 10:02")).toBeVisible();
+    read.respond(instructions([], "A0"));
+    await until(() => document.querySelector("[data-component=SkillRow]") === null);
+    expect(draftOf("Analysis prompt")).toBe("A1");
+    await expect.element(editor("Analysis prompt").getByText("Saved at 10:02")).toBeVisible();
+  });
+
+  test("leaving the page while a save is out and coming back keeps the later draft; the read on return leaves it, and the save lands (M2)", async () => {
+    const { fetch, screen, next } = await settings(instructions([REVIEW], "A0"));
+    await userEvent.fill(field("Analysis prompt").element(), "A1");
+    await userEvent.click(editor("Analysis prompt").getByRole("button", { name: "Save prompt" }));
+    const save = await next("PUT", "/api/prompts/analysis");
+    await userEvent.fill(field("Analysis prompt").element(), "A2");
+    await screen.unmount();
+    expect(save.signal.aborted).toBe(false);
+
+    await openPage(fetch);
+    await expect.element(field("Analysis prompt")).toHaveValue("A2");
+    (await next("GET", "/api/instructions")).respond(instructions([REVIEW], "A0"));
+    await nextTask();
+    expect(draftOf("Analysis prompt")).toBe("A2");
+    save.respond({ text: "A1", savedAt: new Date().setHours(10, 2, 0, 0) });
+    await expect.element(editor("Analysis prompt").getByText("Saved at 10:02")).toBeVisible();
+    expect(draftOf("Analysis prompt")).toBe("A2");
+  });
+});
+
+describe("one request per operation", () => {
+  test("Save, Review skill and Review update while their request is out send nothing; typing goes on, and editing a preview's input withdraws it (M3)", async () => {
+    const { fetch, next } = await settings(instructions([REVIEW], "A0"));
+    const sent = fetch.requests.length;
+    const nothingMore = async (count: number) => {
+      await nextTask();
+      expect(fetch.requests).toHaveLength(count);
+    };
+
+    await userEvent.fill(field("Analysis prompt").element(), "A1");
+    await userEvent.click(editor("Analysis prompt").getByRole("button", { name: "Save prompt" }));
+    const save = await next("PUT", "/api/prompts/analysis");
+    await userEvent.fill(field("Analysis prompt").element(), "A2");
+    editor("Analysis prompt").getByRole("button", { name: "Save prompt" }).element().focus();
+    await userEvent.keyboard("{Enter}");
+    await nothingMore(sent + 1);
+    save.respond({ text: "A1", savedAt: new Date().setHours(10, 2, 0, 0) });
+    await expect.element(editor("Analysis prompt").getByText("Saved at 10:02")).toBeVisible();
+
+    await userEvent.click(button("Update"));
+    await userEvent.fill(field("Ref").element(), "v2");
+    await userEvent.keyboard("{Enter}");
+    const update = await next("POST", "/api/skills/review/preview");
+    await userEvent.keyboard("{Enter}");
+    await nothingMore(sent + 2);
+    await userEvent.fill(field("Ref").element(), "v3");
+    expect(update.signal.aborted).toBe(true);
+    await userEvent.click(button("Cancel"));
+
+    await userEvent.click(button("Add skill"));
+    await userEvent.fill(field("SKILL.md URL").element(), "https://github.com/a/b/blob/main/SKILL.md");
+    await userEvent.keyboard("{Enter}");
+    const register = await next("POST", "/api/skills/preview");
+    await userEvent.keyboard("{Enter}");
+    await nothingMore(sent + 3);
+    await userEvent.fill(field("SKILL.md URL").element(), "https://github.com/a/b/blob/v2/SKILL.md");
+    expect(register.signal.aborted).toBe(true);
   });
 });
 
@@ -220,7 +319,7 @@ describe("updating a skill", () => {
     const { name, source, ref, sha } = UPDATE_PREVIEW;
     expect(bodyOf(apply)).toEqual({ name, source, ref, sha, expectedRev: UPDATE_PREVIEW.current.rev });
     apply.respond({ error: "skill_changed" }, 409);
-    await next("GET", "/api/instructions");
+    (await next("GET", "/api/instructions")).respond(instructions([REVIEW]));
     await expect.element(page.getByText("Couldn't apply the update")).toBeVisible();
     await expect
       .element(
@@ -251,6 +350,107 @@ describe("updating a skill", () => {
     expect(fetch.requests).toHaveLength(requests);
     await expect.element(field("Ref")).toHaveValue("v2");
     await expect.element(button("Review update")).toBeVisible();
+  });
+});
+
+describe("a preview's form and input", () => {
+  test("Add skill withdraws an update's preview out and its busy state; the late review leaves Add skill and its link (M4)", async () => {
+    const { next } = await refForm();
+    await userEvent.fill(field("Ref").element(), "v2");
+    await userEvent.click(button("Review update"));
+    const update = await next("POST", "/api/skills/review/preview");
+    await userEvent.click(button("Add skill"));
+    expect(update.signal.aborted).toBe(true);
+    const URL = "https://github.com/shuymn/kopje/blob/main/skills/changelog/SKILL.md";
+    await userEvent.fill(field("SKILL.md URL").element(), URL);
+    update.respond(UPDATE_PREVIEW);
+    await nextTask();
+    await expect.element(page.getByRole("heading", { name: "Add a skill" })).toBeVisible();
+    await expect.element(field("SKILL.md URL")).toHaveValue(URL);
+
+    await userEvent.keyboard("{Escape}");
+    await until(() => dialog() === null);
+    expect(document.querySelector(".ref-form [data-component=Button][type=submit]")?.getAttribute("data-state")).toBe(
+      "rest",
+    );
+    await userEvent.click(button("Review update"));
+    expect(bodyOf(await next("POST", "/api/skills/review/preview"))).toEqual({ ref: "v2" });
+  });
+
+  test("a register's preview for a link the host has since edited is dropped (M4)", async () => {
+    const { next } = await settings(instructions([]));
+    await userEvent.click(button("Add skill"));
+    await userEvent.fill(field("SKILL.md URL").element(), "https://github.com/a/b/blob/main/SKILL.md");
+    await userEvent.click(button("Review skill"));
+    const preview = await next("POST", "/api/skills/preview");
+    const B = "https://github.com/a/b/blob/v2/SKILL.md";
+    await userEvent.fill(field("SKILL.md URL").element(), B);
+    expect(preview.signal.aborted).toBe(true);
+    preview.respond(REGISTER_PREVIEW);
+    await nextTask();
+    await expect.element(field("SKILL.md URL")).toHaveValue(B);
+    expect(page.getByRole("heading", { name: "changelog" }).elements()).toEqual([]);
+    expect(document.querySelector("dialog [data-component=Button][type=submit]")?.getAttribute("data-state")).toBe(
+      "rest",
+    );
+  });
+});
+
+describe("a confirm's outcome", () => {
+  test("a register's confirm runs on after Escape, and its answer reads the list, which shows the skill (M5)", async () => {
+    const { fetch, next } = await settings(instructions([]));
+    await userEvent.click(button("Add skill"));
+    await userEvent.fill(field("SKILL.md URL").element(), "https://github.com/a/b/blob/main/SKILL.md");
+    await userEvent.click(button("Review skill"));
+    (await next("POST", "/api/skills/preview")).respond(REGISTER_PREVIEW);
+    await userEvent.click(button("Register at c3d4e5f"));
+    const confirm = await next("POST", "/api/skills");
+    await userEvent.keyboard("{Escape}");
+    await until(() => dialog() === null);
+    await nextTask();
+    expect([confirm.signal.aborted, fetch.requests.length]).toEqual([false, 3]);
+    confirm.respond(CHANGELOG, 201);
+    (await next("GET", "/api/instructions")).respond(instructions([CHANGELOG]));
+    await expect.element(page.getByRole("heading", { name: "changelog" })).toBeVisible();
+  });
+
+  test("a closed removal with no outcome whose read fails says it couldn't confirm it, until the next read settles it (M5)", async () => {
+    const { next } = await settings(instructions([REVIEW, YOMIYASU]));
+    await userEvent.click(
+      page.getByRole("listitem").filter({ hasText: "review" }).getByRole("button", { name: "Remove" }),
+    );
+    await userEvent.click(button("Remove skill"));
+    const remove = await next("DELETE", "/api/skills/review");
+    await userEvent.keyboard("{Escape}");
+    await until(() => dialog() === null);
+    remove.respond({ error: "unavailable", detail: "the Hub did not answer in time" }, 503);
+    (await next("GET", "/api/instructions")).fail();
+    await expect.element(page.getByText("Couldn't confirm that review was removed")).toBeVisible();
+    await expect.element(page.getByText("The next read of the list settles it.")).toBeVisible();
+    await userEvent.click(button("Try again"));
+    (await next("GET", "/api/instructions")).respond(instructions([YOMIYASU]));
+    await until(() => document.querySelectorAll("[data-component=SkillRow]").length === 1);
+    expect(document.body.textContent).not.toContain("Couldn't confirm");
+  });
+
+  test("an update whose answer was lost and whose read failed can't be confirmed; a retry answered 409 whose read lists the reviewed commit is applied (M5)", async () => {
+    const { next } = await refForm();
+    await userEvent.fill(field("Ref").element(), "v2");
+    await userEvent.click(button("Review update"));
+    (await next("POST", "/api/skills/review/preview")).respond(UPDATE_PREVIEW);
+    await userEvent.click(button("Apply update to e4f5a6b"));
+    (await next("PUT", "/api/skills/review")).fail();
+    (await next("GET", "/api/instructions")).fail();
+    await expect.element(page.getByText("Couldn't confirm the update")).toBeVisible();
+    await expect.element(page.getByText("Couldn't reach the server to check. Try again.")).toBeVisible();
+    await userEvent.click(button("Apply update to e4f5a6b"));
+    (await next("PUT", "/api/skills/review")).respond({ error: "skill_changed" }, 409);
+    const { name, source, ref, sha } = UPDATE_PREVIEW;
+    (await next("GET", "/api/instructions")).respond(instructions([{ ...REVIEW, name, source, ref, sha, rev: 2 }]));
+    await until(() => dialog() === null);
+    expect(page.getByRole("textbox", { name: "Ref" }).elements()).toEqual([]);
+    expect(textOf("[data-component=SkillRow] .source")).toContain("e4f5a6b");
+    expect(document.body.textContent).not.toContain("Couldn't confirm");
   });
 });
 
@@ -312,8 +512,8 @@ describe("the dialogs", () => {
     }
   });
 
-  test("closing one ends its request, and a confirm's close reads the list again; leaving the page ends what is out; a late answer changes nothing", async () => {
-    const { screen, next } = await settings(instructions([REVIEW]));
+  test("closing one ends its preview; leaving the page ends its read and its previews, not a save; a late answer changes nothing", async () => {
+    const { screen, next } = await settings(instructions([REVIEW, YOMIYASU]));
     await userEvent.click(button("Add skill"));
     await userEvent.fill(field("SKILL.md URL").element(), "https://github.com/a/b/blob/main/SKILL.md");
     await userEvent.click(button("Review skill"));
@@ -325,17 +525,21 @@ describe("the dialogs", () => {
     await nextTask();
     expect(dialog()).toBeNull();
 
-    await userEvent.click(button("Remove"));
+    await userEvent.click(
+      page.getByRole("listitem").filter({ hasText: "review" }).getByRole("button", { name: "Remove" }),
+    );
     await userEvent.click(button("Remove skill"));
-    const remove = await next("DELETE", "/api/skills/review");
-    await userEvent.keyboard("{Escape}");
-    expect(remove.signal.aborted).toBe(true);
+    (await next("DELETE", "/api/skills/review")).respond(null, 204);
     const read = await next("GET", "/api/instructions");
-
+    await userEvent.click(
+      page.getByRole("listitem").filter({ hasText: "yomiyasu" }).getByRole("button", { name: "Update" }),
+    );
+    await userEvent.click(button("Review update"));
+    const update = await next("POST", "/api/skills/yomiyasu/preview");
     await userEvent.click(editor("Analysis prompt").getByRole("button", { name: "Save prompt" }));
     const save = await next("PUT", "/api/prompts/analysis");
     await screen.unmount();
-    expect([read.signal.aborted, save.signal.aborted]).toEqual([true, true]);
+    expect([read.signal.aborted, update.signal.aborted, save.signal.aborted]).toEqual([true, true, false]);
   });
 });
 
@@ -352,6 +556,8 @@ describe("the bounds", () => {
     bound: number;
     open?: (next: Opened["next"]) => Promise<void>;
     sends: () => Locator;
+    // A confirm's outcome is the read's after it: here its list lacks the change.
+    confirm?: true;
     failed: () => boolean;
   };
   const server = shows("Couldn't reach the server. Try again.");
@@ -378,6 +584,7 @@ describe("the bounds", () => {
         (await next("POST", "/api/skills/preview")).respond(REGISTER_PREVIEW);
       },
       sends: () => button("Register at c3d4e5f"),
+      confirm: true,
       failed: server,
     },
     "an update's preview": {
@@ -396,6 +603,7 @@ describe("the bounds", () => {
         (await next("POST", "/api/skills/review/preview")).respond(UPDATE_PREVIEW);
       },
       sends: () => button("Apply update to e4f5a6b"),
+      confirm: true,
       failed: server,
     },
     "a removal": {
@@ -403,6 +611,7 @@ describe("the bounds", () => {
       bound: ANSWER_MS,
       open: () => userEvent.click(button("Remove")),
       sends: () => button("Remove skill"),
+      confirm: true,
       failed: server,
     },
   };
@@ -421,11 +630,19 @@ describe("the bounds", () => {
       sender.click();
       await until(() => fetch.requests.at(-1)?.url.pathname === unit.path);
       const request = await fetch.request(fetch.requests.length - 1);
+      const sent = fetch.requests.length;
       await vi.advanceTimersByTimeAsync(unit.bound - 1);
       expect([unit.failed(), request.signal.aborted]).toEqual([false, false]);
       await vi.advanceTimersByTimeAsync(1);
-      await until(unit.failed);
       expect(request.signal.aborted).toBe(true);
+      if (unit.confirm === true) {
+        const read = await fetch.request(sent);
+        if (read.url.pathname !== "/api/instructions") {
+          throw new Error(`the confirm was followed by ${read.method} ${read.url.pathname}, not the list's read`);
+        }
+        read.respond(instructions([REVIEW]));
+      }
+      await until(unit.failed);
     },
   );
 

@@ -28,9 +28,12 @@ export function SkillRegisterForm({
   onChange?: ((url: string) => void) | undefined;
   onReview?: (() => void) | undefined;
 }) {
+  // A busy Review skill takes no submit (Enter in the field included): one preview is out at a time.
   const review = (event: FormEvent) => {
     event.preventDefault();
-    onReview?.();
+    if (state !== "registering") {
+      onReview?.();
+    }
   };
   return (
     <form data-component="SkillRegisterForm" data-state={state} className="dialog-box" onSubmit={review}>

@@ -275,7 +275,13 @@ skill of that name) or "Couldn't reach the server. Try again."; "Couldn't apply 
 since this review. Cancel, then choose Review update for a fresh review." or the same server line; "Couldn't remove the
 skill" with the server line. An error that repeating cannot fix (the name taken, the skill changed) disables the confirm
 (Button primary md disabled), and Cancel returns to the row, where the Ref field keeps its ref; the server line keeps
-the confirm, which tries again.
+the confirm, which tries again. A confirm that got no answer, a server error or that conflict shows its error only once
+the list read after it lacks the change; a list that holds it closes the dialog as applied. When that read fails as
+well, the `error` Notice says "Couldn't confirm the registration", "Couldn't confirm the update" or "Couldn't confirm
+the removal" with "Couldn't reach the server to check. Try again." and keeps the confirm, and once the dialog is closed
+a Notice attention under any refresh failure, above the prompts, says "Couldn't confirm that review was registered" (or
+"was updated to e4f5a6b", "was removed") with "The next read of the list settles it."; the next read that succeeds
+removes it.
 
 ## Annotations
 
