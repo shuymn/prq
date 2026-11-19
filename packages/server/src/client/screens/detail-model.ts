@@ -131,19 +131,22 @@ function versionStatus(job: JobView): VersionStatus {
   }
 }
 
-type Indexed = { job: JobView; index: number };
+// An analysis job, its head and its position in the view.
+type Indexed = { job: JobView; sha: string; index: number };
 
-const versionOf = ({ job }: Indexed): Version => ({
+const versionOf = ({ job, sha }: Indexed): Version => ({
   jobId: job.jobId,
   status: versionStatus(job),
-  sha: job.target.kind === "analysis" ? job.target.headSha : "",
+  sha,
   at: job.updatedAt,
 });
 
 // The analyses newest first; the default is the latest completed one by completion (updatedAt, then position), the
 // order the workspace SHA follows; a picked one stays picked.
 function versionsOf(view: PrSessionView, picked: string | null) {
-  const analyses = view.jobs.flatMap((job, index) => (job.target.kind === "analysis" ? [{ job, index }] : []));
+  const analyses = view.jobs.flatMap((job, index): Indexed[] =>
+    job.target.kind === "analysis" ? [{ job, sha: job.target.headSha, index }] : [],
+  );
   const newest = analyses.toSorted((a, b) => b.job.createdAt - a.job.createdAt || b.index - a.index);
   const completed = analyses
     .filter(({ job }) => job.state === "done")
@@ -404,7 +407,7 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
       loading: false,
       answeredAt:
         completed !== undefined && shown !== undefined && shown.job.jobId !== completed.job.jobId
-          ? versionOf(completed).sha
+          ? completed.sha
           : null,
     },
     body: {
@@ -412,7 +415,7 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
       refreshFailed: session.refreshFailed,
       versions: newest.map(versionOf),
       shown: shown === undefined ? null : versionOf(shown),
-      summarizing: newer === undefined ? null : versionOf(newer).sha,
+      summarizing: newer?.sha ?? null,
       summary: summaryOf(shown, session, view, hub),
       conversation: conversationOf(session, view, slot, hub),
       jobs: jobsOf(session, view, hub),

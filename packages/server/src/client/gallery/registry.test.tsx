@@ -2,7 +2,7 @@
 // them; each component entry renders its name's props; each PR list state shows what tells it apart.
 
 import { describe, expect, test } from "vitest";
-import { render } from "vitest-browser-react";
+import { render, type RenderResult } from "vitest-browser-react";
 import { page } from "vitest/browser";
 
 import componentsMd from "../../../../../design/components.md?raw";
@@ -66,7 +66,10 @@ describe("the gallery's registry", () => {
       }
       const screen = await render(entry.render());
       const root = screen.container.querySelector<HTMLElement>(`[data-component="${component}"]`);
-      expect({ name: entry.name, values: props.map((prop) => root?.dataset[prop]) }).toEqual({
+      // A Disclosure's state is its <details> element's own.
+      const valueOf = (prop: string) =>
+        component === "Disclosure" ? String(root?.querySelector("details")?.open) : root?.dataset[prop];
+      expect({ name: entry.name, values: props.map(valueOf) }).toEqual({
         name: entry.name,
         values,
       });
@@ -241,11 +244,12 @@ const textOf = (selector: string) => document.querySelector(selector)?.textConte
 const visible = async (text: string) => {
   await expect.element(page.getByText(text, { exact: true })).toBeVisible();
 };
+const details = () => document.querySelector<HTMLDetailsElement>("[data-component=Disclosure] > details");
 const none = (name: string) => expect(page.getByRole("button", { name }).elements()).toEqual([]);
 
 describe("the PR detail's states", () => {
   // What tells each state apart, without Retry (plan P3.15).
-  const checks: Record<string, () => Promise<void>> = {
+  const checks: Record<string, (screen: RenderResult) => Promise<void>> = {
     "detail.default": async () => {
       expect(
         [...document.querySelectorAll("[data-component=Message] .question")].map((node) => node.textContent),
@@ -315,11 +319,16 @@ describe("the PR detail's states", () => {
       await visible("You can send once the question above is sent or discarded.");
       expect(textOf("[data-component=Notice] .text")).toMatch(/Reloading loses your unsent question\.$/);
     },
-    "panel.default": async () => {
+    "panel.default": async (screen) => {
       expect(document.querySelector("[data-component=AppHeader]")).toBeNull();
       expect(document.querySelector("[data-component=PrHeader]")?.getAttribute("data-density")).toBe("compact");
-      expect(document.querySelector("[data-component=Disclosure]")?.getAttribute("data-open")).toBe("true");
       expect(textOf("[data-component=Message] .answered-at")).toBe("Answered at e4f5a6b");
+      // The summary starts open; closed, it stays closed when the page renders again.
+      expect(details()?.open).toBe(true);
+      await page.getByText("Summary", { exact: true }).click();
+      expect(details()?.open).toBe(false);
+      await screen.rerender(entry("panel.default"));
+      expect(details()?.open).toBe(false);
     },
     "panel.version-menu": async () => {
       await expect.element(page.getByRole("menuitemradio", { name: /^e4f5a6b/ })).toBeVisible();
@@ -369,7 +378,6 @@ describe("the PR detail's states", () => {
   test.each(Object.keys(checks))("%s shows what tells it apart", async (name) => {
     const check = checks[name];
     expect(check).toBeDefined();
-    await render(entry(name));
-    await check?.();
+    await check?.(await render(entry(name)));
   });
 });

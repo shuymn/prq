@@ -23,7 +23,7 @@ import { VersionMenu } from "../components/VersionMenu.tsx";
 import type { Layout } from "../layout.ts";
 import type { AnswerItem, DetailContent, DetailModel, JobItem, QuestionItem } from "./detail-model.ts";
 
-export type DetailActions = {
+type DetailActions = {
   onDraft?: ((value: string) => void) | undefined;
   onSend?: ((text: string) => void) | undefined;
   onPick?: ((jobId: string) => void) | undefined;

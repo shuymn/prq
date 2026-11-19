@@ -9,14 +9,6 @@ import { CodeBlock } from "./CodeBlock.tsx";
 type Element = NonNullable<ExtraProps["node"]>;
 type ElementContent = Element["children"][number];
 
-// The text of a syntax tree's node, as a code block holds it.
-function textOf(node: Element | ElementContent): string {
-  if (node.type === "text") {
-    return node.value;
-  }
-  return "children" in node ? node.children.map(textOf).join("") : "";
-}
-
 // A link's text, an image in it given by its alt text: a linked image is one link, not a link holding another.
 function labelOf(node: ElementContent): string {
   if (node.type === "text") {
@@ -36,17 +28,19 @@ function absolute(href: string | undefined, schemes: readonly string[]): string 
 }
 
 const COMPONENTS: Components = {
-  // A fenced block: its text once, and its language from the class the parser gives its code.
+  // A fenced block: the parser's one code element, its one text (less the newline it ends with) and its language class.
   pre({ node }) {
-    const code = node?.children.find((child): child is Element => child.type === "element" && child.tagName === "code");
-    const classes = code?.properties["className"];
+    const code = node?.children[0];
+    const element = code?.type === "element" ? code : undefined;
+    const text = element?.children[0];
+    const classes = element?.properties["className"];
     const language = Array.isArray(classes)
       ? classes
           .map(String)
           .find((name) => name.startsWith("language-"))
           ?.slice("language-".length)
       : undefined;
-    return <CodeBlock code={(code === undefined ? "" : textOf(code)).replace(/\n$/, "")} language={language} />;
+    return <CodeBlock code={text?.type === "text" ? text.value.replace(/\n$/, "") : ""} language={language} />;
   },
   // A table scrolls sideways within its own box when it is wider than the content.
   table({ children }) {

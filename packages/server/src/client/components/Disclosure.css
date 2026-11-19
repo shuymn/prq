@@ -31,6 +31,12 @@
       color: var(--color-fg-muted);
     }
 
+    /* The chevron points down while open, right while closed. */
+    & > details[open] > summary > .lead > [data-name="chevron-right"],
+    & > details:not([open]) > summary > .lead > [data-name="chevron-down"] {
+      display: none;
+    }
+
     & > details > summary > .label {
       anchor-name: --disclosure-label;
       font: var(--text-body-strong);

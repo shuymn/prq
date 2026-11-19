@@ -6,7 +6,7 @@ import { Sha } from "./Sha.tsx";
 import { Skeleton } from "./Skeleton.tsx";
 import { Status } from "./Status.tsx";
 
-export type SummaryState = "ready" | "loading" | "streaming" | "empty";
+type SummaryState = "ready" | "loading" | "streaming" | "empty";
 
 // The pull request's summary (design/components.md, PR detail), pinned above the conversation: its heading with the
 // version menu, then the shown version's text and the model and tokens muted at its end. While a newer head is

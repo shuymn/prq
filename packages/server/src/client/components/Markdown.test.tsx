@@ -1,6 +1,6 @@
 // An agent's Markdown (plan P3.11): raw HTML, images and links other than absolute http(s) URLs render no element of
 // their own and no unsafe or relative link; a valid https link is followed in a new tab, a linked image is one link;
-// inline code stays inline.
+// inline code stays inline and a fenced block is its source and language.
 
 import { expect, test } from "vitest";
 import { render } from "vitest-browser-react";
@@ -16,7 +16,11 @@ const TEXT = `<b>bold</b> <img src="https://example.com/x.png" onerror="alert(1)
 
 [![Architecture](https://example.com/architecture.png)](https://example.com/architecture)
 
-Call \`retry()\` first.`;
+Call \`retry()\` first.
+
+\`\`\`ts
+const next = retry(job);
+\`\`\``;
 
 test("renders an agent's Markdown with no element or link of its own making (P3.11)", async () => {
   const screen = await render(<Markdown text={TEXT} />);
@@ -34,8 +38,8 @@ test("renders an agent's Markdown with no element or link of its own making (P3.
   }));
   expect(links).toEqual([
     { text: "a diagram", href: "https://example.com/diagram.png", target: "_blank", rel: "noreferrer" },
-    { text: "Architecture", href: "https://example.com/architecture", target: "_blank", rel: "noreferrer" },
     { text: "docs", href: "https://example.com/docs", target: "_blank", rel: "noreferrer" },
+    { text: "Architecture", href: "https://example.com/architecture", target: "_blank", rel: "noreferrer" },
   ]);
   for (const text of ["a local one", "a plain one", "run", "relative", "mail"]) {
     await expect.element(page.getByText(text, { exact: true })).toBeVisible();
@@ -43,5 +47,8 @@ test("renders an agent's Markdown with no element or link of its own making (P3.
 
   const code = root?.querySelector("p > code");
   expect(code?.textContent).toBe("retry()");
-  expect(root?.querySelector("pre")).toBeNull();
+  const blocks = [...(root?.querySelectorAll<HTMLElement>("[data-component=CodeBlock]") ?? [])];
+  expect(blocks.map((block) => [block.dataset["language"], block.querySelector("pre")?.textContent])).toEqual([
+    ["ts", "const next = retry(job);"],
+  ]);
 });
