@@ -2,8 +2,11 @@
 
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, request, type Server, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import { text } from "node:stream/consumers";
 
@@ -283,12 +286,192 @@ describe("a WebSocket upgrade through the door", () => {
   });
 });
 
+// A stand-in Worker that answers every request at once with its path, and the paths it was asked for.
+async function echoPaths(): Promise<Upstream & { asked: string[] }> {
+  const asked: string[] = [];
+  const worker = await upstream(
+    (req, res) => {
+      asked.push(req.url ?? "");
+      res.end(`worker: ${req.url}`);
+    },
+    (req, socket) => {
+      asked.push(req.url ?? "");
+      echoUpgrade(req, socket);
+    },
+  );
+  return Object.assign(worker, { asked });
+}
+
+const anyPath = () => true;
+
+describe("a gated request", () => {
+  test("reaches the Worker only once released, an upgrade too", async () => {
+    const worker = await echoPaths();
+    const front = await door(worker.url);
+    const gate = { kind: "gate", arrived: latch(), release: latch() } as const;
+    front.plan((path) => path === "/x", gate);
+    const sent = send(`${front.url}/x`);
+    await gate.arrived.promise;
+    expect(worker.asked).toEqual([]);
+    gate.release.open();
+    expect(await sent).toMatchObject({ status: 200, body: "worker: /x" });
+
+    const upgradeGate = { kind: "gate", arrived: latch(), release: latch() } as const;
+    front.plan(anyPath, upgradeGate);
+    const opened = upgrade(`${front.url}/agents/hub/hub`);
+    await upgradeGate.arrived.promise;
+    expect(worker.asked).toEqual(["/x"]);
+    upgradeGate.release.open();
+    switched(await opened).destroy();
+    expect(worker.asked).toEqual(["/x", "/agents/hub/hub"]);
+  });
+
+  test("not released by the bound, gets 504 and never reaches the Worker", async () => {
+    const worker = await echoPaths();
+    const front = await door(worker.url);
+    const gate = { kind: "gate", arrived: latch(), release: latch() } as const;
+    front.plan(anyPath, gate);
+    const from = performance.now();
+    expect((await send(`${front.url}/x`)).status).toBe(504);
+    expect(performance.now() - from).toBeGreaterThanOrEqual(ANSWER_MS - 1);
+    gate.release.open();
+    expect((await send(`${front.url}/y`)).body).toBe("worker: /y");
+    expect(worker.asked).toEqual(["/y"]);
+  });
+
+  test("released just inside the bound, is answered", async () => {
+    const worker = await echoPaths();
+    const front = await door(worker.url);
+    const gate = { kind: "gate", arrived: latch(), release: latch() } as const;
+    front.plan(anyPath, gate);
+    setTimeout(() => gate.release.open(), ANSWER_MS - 100);
+    expect(await send(`${front.url}/x`)).toMatchObject({ status: 200, body: "worker: /x" });
+  });
+
+  test("never reaches the Worker when the browser went away", async () => {
+    const worker = await echoPaths();
+    const front = await door(worker.url);
+    const gate = { kind: "gate", arrived: latch(), release: latch() } as const;
+    front.plan(anyPath, gate);
+    const abort = new AbortController();
+    const sent = send(`${front.url}/x`, { signal: abort.signal });
+    await gate.arrived.promise;
+    abort.abort();
+    await expect(sent).rejects.toThrow("aborted");
+    await expect.poll(() => front.log[0]?.cancelled).toBe(true);
+    gate.release.open();
+    expect((await send(`${front.url}/y`)).body).toBe("worker: /y");
+    expect(worker.asked).toEqual(["/y"]);
+  });
+});
+
+describe("a held answer", () => {
+  test("reaches the browser only once released", async () => {
+    const worker = await echoPaths();
+    const front = await door(worker.url);
+    const hold = { kind: "hold", answered: latch(), release: latch() } as const;
+    front.plan((path) => path.startsWith("/page?"), hold);
+    let arrived = false;
+    const sent = send(`${front.url}/page?cursor=2`).then((answer) => {
+      arrived = true;
+      return answer;
+    });
+    await hold.answered.promise;
+    expect(worker.asked).toEqual(["/page?cursor=2"]);
+    // A request the plan does not match passes meanwhile.
+    expect((await send(`${front.url}/page`)).body).toBe("worker: /page");
+    expect(arrived).toBe(false);
+    hold.release.open();
+    expect(await sent).toMatchObject({ status: 200, body: "worker: /page?cursor=2" });
+  });
+
+  test("not released by the bound, gets 504 and the Worker's answer is dropped", async () => {
+    const worker = await echoPaths();
+    const front = await door(worker.url);
+    const hold = { kind: "hold", answered: latch(), release: latch() } as const;
+    front.plan(anyPath, hold);
+    const from = performance.now();
+    expect((await send(`${front.url}/x`)).status).toBe(504);
+    expect(performance.now() - from).toBeGreaterThanOrEqual(ANSWER_MS - 1);
+    await expect.poll(() => worker.connections.every((connection) => connection.closed)).toBe(true);
+  });
+
+  test("is dropped when the browser went away", async () => {
+    const worker = await echoPaths();
+    const front = await door(worker.url);
+    const hold = { kind: "hold", answered: latch(), release: latch() } as const;
+    front.plan(anyPath, hold);
+    const abort = new AbortController();
+    const sent = send(`${front.url}/x`, { signal: abort.signal });
+    await hold.answered.promise;
+    abort.abort();
+    await expect(sent).rejects.toThrow("aborted");
+    await expect.poll(() => front.log[0]?.cancelled).toBe(true);
+    await expect.poll(() => worker.connections.every((connection) => connection.closed)).toBe(true);
+  });
+});
+
+describe("a served directory", () => {
+  test("stands in for the static assets, leaves the Worker's routes to it, and stops when switched off", async () => {
+    // The served directory, and a file next to it that no path reaches.
+    const base = await mkdtemp(join(tmpdir(), "prq-door-"));
+    started.push({ close: () => rm(base, { recursive: true, force: true }) });
+    const dir = join(base, "served");
+    await mkdir(join(dir, "assets"), { recursive: true });
+    await writeFile(join(dir, "index.html"), "<p>old shell</p>");
+    await writeFile(join(dir, "assets", "old-index.js"), "export {};");
+    await writeFile(join(base, "outside.txt"), "outside");
+    const worker = await echoPaths();
+    const front = await door(worker.url);
+    front.serve(dir);
+
+    expect(await send(`${front.url}/assets/old-index.js`)).toMatchObject({
+      status: 200,
+      headers: { "content-type": "text/javascript" },
+      body: "export {};",
+    });
+    for (const path of ["/", "/pr/a/b/1", "/%2e%2e/outside.txt"]) {
+      expect({ path, answer: await send(`${front.url}${path}`) }).toMatchObject({
+        path,
+        answer: { status: 200, headers: { "content-type": "text/html; charset=utf-8" }, body: "<p>old shell</p>" },
+      });
+    }
+    for (const path of ["/api/ledger", "/agents/hub/hub", "/cli/wait", "/webhook"]) {
+      expect((await send(`${front.url}${path}`)).body).toBe(`worker: ${path}`);
+    }
+    expect(worker.asked).toEqual(["/api/ledger", "/agents/hub/hub", "/cli/wait", "/webhook"]);
+
+    front.serve(null);
+    expect((await send(`${front.url}/`)).body).toBe("worker: /");
+  });
+
+  test("clear() stops serving it and drops the plans no request took", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "prq-door-"));
+    started.push({ close: () => rm(dir, { recursive: true, force: true }) });
+    await writeFile(join(dir, "index.html"), "<p>old shell</p>");
+    const worker = await echoPaths();
+    const front = await door(worker.url);
+    front.serve(dir);
+    front.plan(anyPath, { kind: "gate", arrived: latch(), release: latch() });
+    front.clear();
+    expect((await send(`${front.url}/x`)).body).toBe("worker: /x");
+  });
+});
+
 test("closing the door ends the connections it holds", async () => {
   const worker = await upstream(() => {}, echoUpgrade);
   const front = await startDoor({ url: () => worker.url, token: () => Promise.resolve(TOKEN) });
   const opened = await upgrade(`${front.url}/agents/hub/hub`);
   const closed = once(switched(opened), "close");
+  const gate = { kind: "gate", arrived: latch(), release: latch() } as const;
+  front.plan(anyPath, gate);
+  const gated = send(`${front.url}/x`).then(
+    () => "answered",
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
+  await gate.arrived.promise;
   await front.close();
   await closed;
+  expect(await gated).toBe("socket hang up");
   await expect.poll(() => worker.connections.every((connection) => connection.closed)).toBe(true);
 });

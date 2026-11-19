@@ -38,12 +38,16 @@ type DeliveryOptions = {
   before?: string;
   // The GitHub App installation the delivery names; none when left out.
   installation?: number;
+  // The pull request's title and URL ("A change" and its GitHub URL when left out).
+  title?: string;
+  url?: string;
 };
 
 // A pull_request delivery as GitHub signs and sends it, of a pull request the host authored, accepted by the Worker.
 export async function deliver(worker: Worker, pr: PrRef, options: DeliveryOptions): Promise<void> {
   const { action, head, base = sha("base"), at, before, installation } = options;
   const fullName = `${pr.owner}/${pr.repo}`;
+  const { title = "A change", url = `https://github.com/${fullName}/pull/${pr.number}` } = options;
   const body = JSON.stringify({
     action,
     number: pr.number,
@@ -51,10 +55,10 @@ export async function deliver(worker: Worker, pr: PrRef, options: DeliveryOption
     pull_request: {
       number: pr.number,
       updated_at: at,
-      title: "A change",
+      title,
       state: "open",
       merged: false,
-      html_url: `https://github.com/${fullName}/pull/${pr.number}`,
+      html_url: url,
       user: { id: HOST_ID, login: "host" },
       head: { sha: head, ref: "topic" },
       base: { sha: base, ref: "main" },
@@ -81,10 +85,16 @@ export async function deliver(worker: Worker, pr: PrRef, options: DeliveryOption
 
 // An opened delivery a second after the last one; then the session takes it in, as the wake its inbox armed would.
 // With a local agent present, a new head is an analysis job for it.
-export async function push(worker: Worker, pr: PrRef, head: string, base = sha("base")): Promise<void> {
+export async function push(
+  worker: Worker,
+  pr: PrRef,
+  head: string,
+  base = sha("base"),
+  details: Pick<DeliveryOptions, "title" | "url"> = {},
+): Promise<void> {
   clock += 1000;
   const at = new Date(clock).toISOString().replace(/\.\d{3}Z$/, "Z");
-  await deliver(worker, pr, { action: "opened", head, base, at });
+  await deliver(worker, pr, { action: "opened", head, base, at, ...details });
   const session = await worker.durableObject("PrSession", sessionName(pr));
   await session["settle"]?.();
 }
