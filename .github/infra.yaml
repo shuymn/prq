@@ -36,7 +36,7 @@ spec:
     squash_merge_commit_message: COMMIT_MESSAGES
     merge_commit_title: MERGE_MESSAGE
     merge_commit_message: PR_TITLE
-  release_immutability: false
+  release_immutability: true
   security:
     vulnerability_alerts: true
     automated_security_fixes: true
@@ -113,6 +113,7 @@ spec:
       github_owned_allowed: false
       verified_allowed: false
       patterns_allowed:
+        - actions/attest@*
         - actions/cache@*
         - actions/checkout@*
         - actions/create-github-app-token@*
