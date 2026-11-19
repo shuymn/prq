@@ -186,12 +186,13 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   retry. Try again." at that Retry.
 - A retry carries the job's `rev` from the view the UI shows (`expectedRev`). The session applies it only while the job
   is still at that revision, checked in the statement that changes it, and otherwise answers 409 `stale_job` (or
-  `not_retryable` once the job is no longer claimed or failed). After a 409 the UI withdraws that Retry until it shows a
-  view with a newer `rev` of the job; when none has come within 3 s, it reconnects the session socket, whose state
-  brings the job as it is, and while the socket is down its reopen does the same. A retry sent again, or one that lands
-  late, therefore never undoes a change made after the view it came from (a claim, another retry, a new failure), even
-  when the job is back in the state the view showed. A refused retry changes no job state; any wake it armed only runs
-  `settle`.
+  `not_retryable` once the job is no longer claimed or failed). What comes of a retry holds only for the `rev` it was
+  sent from: a view with a newer `rev` of the job ends it, so an answer that arrives after that view changes nothing.
+  After a 2xx or a 409 the UI withdraws that Retry until it shows such a view; when none has come within 3 s, it
+  reconnects the session socket, whose state brings the job as it is, and while the socket is down its reopen does the
+  same. A retry sent again, or one that lands late, therefore never undoes a change made after the view it came from (a
+  claim, another retry, a new failure), even when the job is back in the state the view showed. A refused retry changes
+  no job state; any wake it armed only runs `settle`.
 - A cloud session hands its next waiting job to the cloud agent in the same step that made the job waiting, one job
   at a time (the job is `running` until its turn ends). While no cloud agent is configured, that step instead marks
   the job `failed` with "cloud agent not configured"; no model is called and nothing is streamed. A running job that

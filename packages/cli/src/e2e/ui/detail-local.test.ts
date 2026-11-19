@@ -383,13 +383,12 @@ const retries = (jobId: string) =>
     .door.log.filter((entry) => entry.path === `/api/pr/${PR.owner}/${PR.repo}/${PR.number}/jobs/${jobId}/retry`);
 
 describe("jobs and Retry", () => {
-  test("a local claim offers Retry before the stall mark; a retry gated while prq resumes the claim gets 409 stale_job, sends nothing again, and Retry comes back from the new rev; one gated while prq submits gets 409 not_retryable, and the answer shows (P4.2, P4.4)", async () => {
+  test("a local claim offers Retry before the stall mark; a retry held at the door while prq resumes the claim ends when the page shows the new rev, sends nothing again, and Retry comes back from that rev; one held while prq submits ends the same way, and the answer shows (P4.2, P4.4)", async () => {
     const worker = stack.worker();
     await present();
     await ask(worker, PR, "q1", "What changed?");
     await claim();
     const page = browser.page();
-    browser.expectConsoleError((message) => message.includes("409"));
     const posts: unknown[] = [];
     page.on("request", (request) => {
       if (request.method() === "POST" && request.url().endsWith("/retry")) {
@@ -412,8 +411,9 @@ describe("jobs and Retry", () => {
     const resumed = await claim();
     const [moved] = (await sessionView(worker, PR)).jobs;
     expect(moved).toMatchObject({ state: "claimed", rev: (before?.rev ?? 0) + 1 });
+    // The view of the new rev ends the retry: the page drops its request before the door forwards it.
+    await vi.waitFor(() => expect(retries(jobId)).toMatchObject([{ status: null, cancelled: true }]));
     first.release.open();
-    await vi.waitFor(() => expect(retries(jobId)).toMatchObject([{ status: 409 }]));
     await retry.and(page.locator('[data-state="rest"]')).waitFor();
     expect(await page.getByText("Couldn't retry. Try again.").count()).toBe(0);
 
@@ -423,6 +423,12 @@ describe("jobs and Retry", () => {
     await second.arrived.promise;
     await writeFile(resumed.answer, "It renames the flag.\n");
     await submit();
+    await vi.waitFor(() =>
+      expect(retries(jobId)).toMatchObject([
+        { status: null, cancelled: true },
+        { status: null, cancelled: true },
+      ]),
+    );
     second.release.open();
     await vi.waitFor(async () =>
       expect(await conversation(page)).toEqual([
@@ -430,7 +436,6 @@ describe("jobs and Retry", () => {
         { role: "answer", state: "complete", text: "It renames the flag." },
       ]),
     );
-    await vi.waitFor(() => expect(retries(jobId)).toMatchObject([{ status: 409 }, { status: 409 }]));
     await page.getByText("1 done").waitFor();
     expect(await page.getByRole("button", { name: "Retry" }).count()).toBe(0);
     expect(posts).toEqual([{ expectedRev: before?.rev }, { expectedRev: moved?.rev }]);

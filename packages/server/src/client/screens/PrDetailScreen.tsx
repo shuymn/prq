@@ -80,16 +80,18 @@ export function PrDetailScreen({
       announce(FAILURES[failure], "assertive");
     }
   }, [failure]);
-  // A retry that failed, each time one does.
-  const retryFailed = Math.max(
-    0,
-    ...Object.values(session.retries).flatMap((mark) => (mark.phase === "failed" ? [mark.attempt] : [])),
-  );
+  // Each retry that failed, once, in the order they failed.
+  const announcedFailure = useRef(0);
+  const retries = session.retries;
   useEffect(() => {
-    if (retryFailed > 0) {
+    const failed = Object.values(retries).flatMap((mark) =>
+      mark.phase === "failed" && mark.failure > announcedFailure.current ? [mark.failure] : [],
+    );
+    for (const order of failed.toSorted((a, b) => a - b)) {
+      announcedFailure.current = order;
       announce(RETRY_ERROR, "assertive");
     }
-  }, [retryFailed]);
+  }, [retries]);
 
   // An answer whose job was running and is now done.
   const running = useRef(new Set<string>());

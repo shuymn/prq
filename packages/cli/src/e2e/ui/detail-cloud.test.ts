@@ -137,8 +137,9 @@ test("an answer whose model fails after its text keeps it under its question wit
     { timeout: 10_000 },
   );
   expect(posts).toEqual([{ expectedRev: job?.rev }]);
-  const retries = stack.access().door.log.filter((entry) => entry.path.endsWith(`/jobs/${job?.jobId}/retry`));
-  expect(retries).toMatchObject([{ status: 200 }]);
+  // One request reached the Worker, which took it (the retried run completed); the page may drop the request once the
+  // view of the job's new rev comes, before or after the answer.
+  expect(stack.access().door.log.filter((entry) => entry.path.endsWith(`/jobs/${job?.jobId}/retry`))).toHaveLength(1);
 
   await ask(worker, PR, "q3", Q3);
   await vi.waitFor(async () =>

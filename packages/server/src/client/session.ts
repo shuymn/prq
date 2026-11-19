@@ -8,10 +8,10 @@
 // late, stale or failed read changes nothing shown; reads never cancel each other. A run's streamed text, by
 // (jobId, run) from its stream's start, gives way only to a stored row of that run.
 //
-// A job's Retry (plan §1.9) is one POST from the revision the page shows, never sent again. While it is out the job is
-// busy; a 409 withdraws Retry while the view still shows that revision, and a reconnect after RETRY_STALE_MS brings the
-// job's current state when no newer view came; any other failure marks the job with the retry error while the view
-// shows that revision. A view with another revision for the job ends either mark.
+// A job's Retry (plan §1.9) is one POST from the revision the page shows, never sent again, and what comes of it holds
+// only for that revision: a view with another revision of the job ends it, whether its request is out (busy) or
+// answered. Once the server took or refused it (2xx or 409), Retry is withdrawn until that view, and a reconnect after
+// RETRY_STALE_MS brings the job's current state when none came; any other failure marks the job with the retry error.
 
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import {
@@ -45,9 +45,9 @@ export const RETRY_ANSWER_MS = 45_000;
 
 export type Connection = "connecting" | "open" | "reconnecting" | "failed";
 
-// A job's retry: its request out (busy), refused by a 409 (withdrawn) or failed otherwise, from the revision `rev`.
-// `attempt` numbers the page's retries.
-type RetryMark = { rev: number; phase: "busy" | "withdrawn" | "failed"; attempt: number };
+// A job's retry from the revision `rev`: its request out (busy), answered by the server (withdrawn) or failed
+// otherwise. `failure` numbers the page's failed retries in the order they failed (0 for the others).
+type RetryMark = { rev: number; phase: "busy" | "withdrawn" | "failed"; failure: number };
 
 // A stored message as the page shows it: its text parts joined, and its metadata as the protocol reads it.
 export type StoredMessage = {
@@ -154,7 +154,7 @@ class SessionStore {
     string,
     { mark: RetryMark; request: AbortController | null; timer: ReturnType<typeof setTimeout> | undefined }
   >();
-  #attempts = 0;
+  #failures = 0;
   // Each streamed message's current request and run, and each request's run.
   readonly #streams = new Map<string, { wire: string; key: string }>();
   readonly #wires = new Map<string, string>();
@@ -242,7 +242,7 @@ class SessionStore {
     this.#arm();
   }
 
-  // A view: a job shown at another revision than a mark's (or no longer shown) ends that mark, but a busy one's.
+  // A view: a job shown at another revision than a mark's (or no longer shown) ends that mark, busy or answered.
   viewed(state: unknown): void {
     const view = v.safeParse(PrSessionView, state);
     if (!view.success) {
@@ -250,7 +250,7 @@ class SessionStore {
     }
     for (const [jobId, { mark }] of this.#retries) {
       const job = view.output.jobs.find((candidate) => candidate.jobId === jobId);
-      if (mark.phase !== "busy" && job?.rev !== mark.rev) {
+      if (job?.rev !== mark.rev) {
         this.#forget(jobId);
       }
     }
@@ -263,8 +263,7 @@ class SessionStore {
       return;
     }
     this.#forget(jobId);
-    this.#attempts += 1;
-    const mark: RetryMark = { rev, phase: "busy", attempt: this.#attempts };
+    const mark: RetryMark = { rev, phase: "busy", failure: 0 };
     const request = new AbortController();
     const timer = setTimeout(() => this.#answered(jobId, mark, null), RETRY_ANSWER_MS);
     this.#retries.set(jobId, { mark, request, timer });
@@ -398,48 +397,46 @@ class SessionStore {
     const { owner, repo, number } = this.ref;
     const path = [owner, repo, String(number), "jobs", jobId].map(encodeURIComponent).join("/");
     const body: RetryRequest = { expectedRev: mark.rev };
-    let status: number | null = null;
+    let response: Response | null = null;
     try {
-      const response = await this.fetcher(`/api/pr/${path}/retry`, {
+      response = await this.fetcher(`/api/pr/${path}/retry`, {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal,
       });
-      ({ status } = response);
     } catch {
       // The request failed.
     }
-    this.#answered(jobId, mark, status);
+    this.#answered(jobId, mark, response);
   }
 
-  // A retry's answer (its status; null when the request failed or RETRY_ANSWER_MS passed first), taken only while it is
-  // still the job's latest retry: 2xx ends the mark (the view the session pushes shows the job's new state), and so does
-  // a 409 once the view already shows the job at a newer revision; a 409 before that withdraws Retry until a newer
-  // view, and anything else shows the retry error.
-  #answered(jobId: string, mark: RetryMark, status: number | null): void {
-    const entry = this.#retries.get(jobId);
-    if (entry?.mark !== mark) {
+  // A retry's answer (null when the request failed or RETRY_ANSWER_MS passed first), taken only while it is still the
+  // job's mark, so the view still shows the revision it was sent from: the server took it (2xx) or refused it (409),
+  // and Retry is withdrawn until the view shows the job's newer revision; anything else shows the retry error.
+  #answered(jobId: string, mark: RetryMark, response: Response | null): void {
+    if (this.#retries.get(jobId)?.mark !== mark) {
       return;
     }
-    entry.request?.abort();
-    clearTimeout(entry.timer);
-    const shown = this.#session.view?.jobs.find((job) => job.jobId === jobId)?.rev;
-    if ((status !== null && status >= 200 && status < 300) || (status === 409 && shown !== mark.rev)) {
-      this.#retries.delete(jobId);
-    } else if (status === 409) {
+    this.#forget(jobId);
+    if (response !== null && (response.ok || response.status === 409)) {
       const withdrawn: RetryMark = { ...mark, phase: "withdrawn" };
       const timer = setTimeout(() => this.#stale(jobId, withdrawn), RETRY_STALE_MS);
       this.#retries.set(jobId, { mark: withdrawn, request: null, timer });
     } else {
-      this.#retries.set(jobId, { mark: { ...mark, phase: "failed" }, request: null, timer: undefined });
+      this.#failures += 1;
+      this.#retries.set(jobId, {
+        mark: { ...mark, phase: "failed", failure: this.#failures },
+        request: null,
+        timer: undefined,
+      });
     }
     this.#update({ retries: this.#retryMarks() });
   }
 
-  // No newer view came since the 409: the socket connects again, whose Agent state brings the job as it is. A socket
-  // that is down brings it when it opens.
+  // No newer view came since the server answered: the socket connects again, whose Agent state brings the job as it
+  // is. A socket that is down brings it when it opens.
   #stale(jobId: string, mark: RetryMark): void {
     const entry = this.#retries.get(jobId);
     if (entry?.mark !== mark) {

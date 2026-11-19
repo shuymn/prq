@@ -3,11 +3,13 @@
 // model, streamed text by run, versions, the connection's states, a job's Retry and the rail.
 
 import { type HubView, PrSessionView } from "@prq/protocol";
+import { useEffect } from "react";
 import * as v from "valibot";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import { page, userEvent } from "vitest/browser";
 
+import { useAnnouncements } from "../announce.ts";
 import { RETRY_ERROR } from "../components/retry.tsx";
 import type { Hub } from "../hub.ts";
 import { FetchContext } from "../reads.ts";
@@ -927,6 +929,78 @@ describe("a job's Retry", () => {
     retryPosts(fetch)[0]?.respond({ error: "stale_job" }, 409);
     await vi.advanceTimersByTimeAsync(2 * RETRY_STALE_MS);
     expect(sockets.sockets).toHaveLength(1);
+  });
+});
+
+describe("a retry's outcome", () => {
+  test("holds for the rev it was sent from: a newer view while it is out ends it, so its late 503 marks nothing; after a 200, Retry stays withdrawn through a socket drop until the reopen's view (M2)", async () => {
+    const { fetch, sockets, socket } = await failed();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    retryButtons()[0]?.click();
+    await until(() => retryPosts(fetch).length === 1);
+    socket.receive({
+      type: "cf_agent_state",
+      state: sessionView([
+        { id: "j1", question: "q1", state: "failed", rev: 6, run: 2, failure: "step limit reached" },
+      ]),
+    });
+    await until(() => document.querySelectorAll("[data-component=Button][data-state=busy]").length === 0);
+    expect(retryPosts(fetch)[0]?.signal.aborted).toBe(true);
+    retryPosts(fetch)[0]?.respond({ error: "unavailable" }, 503);
+    await vi.advanceTimersByTimeAsync(0);
+    await nextTask();
+    expect(textOf(".pr-detail")).not.toContain(RETRY_ERROR);
+    expect(retryButtons()).toHaveLength(2);
+
+    retryButtons()[0]?.click();
+    await until(() => retryPosts(fetch).length === 2);
+    expect(JSON.parse(retryPosts(fetch)[1]?.body ?? "")).toEqual({ expectedRev: 6 });
+    retryPosts(fetch)[1]?.respond({ status: "retried" });
+    await until(() => retryButtons().length === 0);
+    socket.drop();
+    const reopened = await reconnect(sockets, 1);
+    expect(retryButtons()).toEqual([]);
+    reopened.open();
+    reopened.receive({
+      type: "cf_agent_state",
+      state: sessionView([{ id: "j1", question: "q1", state: "running", rev: 7, run: 3 }]),
+    });
+    await until(() => textOf(".conversation").includes("Answering"));
+    expect(retryButtons()).toEqual([]);
+    expect(retryPosts(fetch)).toHaveLength(2);
+    expect(sockets.sockets).toHaveLength(2);
+  });
+
+  test("each failed retry is announced once, in the order they fail, whichever was sent first (L2)", async () => {
+    const counts: number[] = [];
+    function Announced() {
+      const { assertive } = useAnnouncements();
+      useEffect(() => {
+        counts.push(assertive.count);
+      }, [assertive.count]);
+      return null;
+    }
+    await render(<Announced />);
+    const { fetch, sockets } = await detail();
+    await connect(sockets, 0, [
+      { id: "j1", question: "q1", state: "failed", rev: 3, failure: "step limit reached" },
+      { id: "j2", question: "q2", state: "failed", rev: 3, failure: "step limit reached" },
+    ]);
+    const history = [question("q1", "Why?"), question("q2", "How?")];
+    (await fetch.request(0)).respond(history);
+    (await fetch.request(1)).respond(history);
+    await expect.poll(() => document.querySelectorAll(".rail [data-component=JobRow] button")).toHaveLength(2);
+    const [first, second] = document.querySelectorAll<HTMLButtonElement>(".rail [data-component=JobRow] button");
+    first?.click();
+    second?.click();
+    const post = (jobId: string) =>
+      fetch.requests.find((request) => request.url.pathname === `/api/pr/shuymn/prq/42/jobs/${jobId}/retry`);
+    await expect.poll(() => post("j2")).toBeDefined();
+    const before = counts.at(-1) ?? 0;
+    post("j2")?.respond({ error: "unavailable" }, 503);
+    await expect.poll(() => counts.at(-1)).toBe(before + 1);
+    post("j1")?.respond({ error: "unavailable" }, 503);
+    await expect.poll(() => counts.at(-1)).toBe(before + 2);
   });
 });
 
