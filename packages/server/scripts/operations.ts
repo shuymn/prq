@@ -29,7 +29,7 @@ const NOT_INSTALLED = "wrangler is not installed: run pnpm install --frozen-lock
 
 const SERVER = fileURLToPath(new URL("..", import.meta.url));
 // The production API, which every wrangler call is pinned to.
-const API = "https://api.cloudflare.com/client/v4";
+export const API = "https://api.cloudflare.com/client/v4";
 // How long wrangler, or the answer to a question, is waited for.
 const DEFAULT_WAIT_MS = 5 * 60_000;
 // How long a program has to end after SIGTERM before SIGKILL.

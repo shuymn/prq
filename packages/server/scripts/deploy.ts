@@ -44,10 +44,12 @@ import { unstable_readConfig } from "wrangler";
 import {
   account,
   accountName,
+  API,
   answer,
   answerOf,
   ask,
   checkConfigAccount,
+  exited,
   failed,
   hide,
   onInterrupt,
@@ -120,9 +122,11 @@ const pollMs = setting("PRQ_DEPLOY_POLL_MS", 10_000);
 // The rollout is read every poll interval until it is complete or this long has passed since the poll began.
 const rolloutMs = setting("PRQ_DEPLOY_ROLLOUT_MS", 30 * 60_000);
 const originOverride = process.env["PRQ_DEPLOY_ORIGIN"];
+// Only for tests: the API the deploy's own reads go to (wrangler's calls stay pinned to the production one).
+const api = process.env["PRQ_DEPLOY_API"] ?? API;
 
-// What wrangler answers: `deployments status --json`, `versions view --json`, `containers list --json`,
-// `containers info --json` and a page of `containers instances --json --per-page` (a Durable Object with no instance
+// What wrangler answers: `deployments status --json`, `versions view --json`, `auth token --json` (wrangler's
+// credentials: an OAuth or API token, or a global API key with its email), `containers info --json` and a page of `containers instances --json --per-page` (a Durable Object with no instance
 // is a row of its own, its state "inactive").
 const DeploymentAnswer = v.object({
   id: v.nullish(v.string()),
@@ -132,7 +136,10 @@ const VersionAnswer = v.object({
   annotations: v.nullish(v.record(v.string(), v.string())),
   resources: v.nullish(v.object({ bindings: v.nullish(v.array(v.object({ type: v.string() }))) })),
 });
-const ApplicationsAnswer = v.array(v.object({ id: v.string(), name: v.string() }));
+const AuthAnswer = v.variant("type", [
+  v.object({ type: v.picklist(["oauth", "api_token"]), token: v.string() }),
+  v.object({ type: v.literal("api_key"), key: v.string(), email: v.string() }),
+]);
 const ApplicationAnswer = v.object({
   id: v.string(),
   version: v.nullish(v.number()),
@@ -147,6 +154,12 @@ const InstancesPage = v.object({
 });
 // An entry of wrangler's output file (WRANGLER_OUTPUT_FILE_PATH): the deploy's, with the version it created.
 const DeployEntry = v.object({ type: v.literal("deploy"), version_id: v.string() });
+// What Cloudflare's API answers the deploy's own reads, the two wrangler's deploy makes: the Worker's settings, its
+// workers.dev and preview URLs among them, and every container application.
+const WorkerAnswer = v.object({
+  subdomain: v.object({ enabled: v.nullish(v.boolean()), previews_enabled: v.nullish(v.boolean()) }),
+});
+const ApplicationsAnswer = v.array(v.object({ id: v.string(), name: v.string() }));
 
 const Deployment = v.object({
   id: v.nullable(v.string()),
@@ -163,9 +176,13 @@ const Application = v.object({
   activeRollout: v.nullable(v.string()),
 });
 type Application = v.InferOutput<typeof Application>;
+// Whether the Worker's workers.dev address and preview URLs are on.
+const Endpoints = v.object({ workersDev: v.boolean(), previews: v.boolean() });
+type Endpoints = v.InferOutput<typeof Endpoints>;
 // What a read found: a value, or null when there is none, with what could not be read.
 const State = v.object({
   deployment: v.nullable(Deployment),
+  endpoints: v.nullable(Endpoints),
   application: v.nullable(Application),
   unread: v.array(v.string()),
 });
@@ -335,13 +352,96 @@ async function liveDeployment(accountId: string): Promise<Deployment | null> {
   return { id: answered.id ?? null, versions };
 }
 
-async function applicationId(accountId: string): Promise<string | null> {
-  const listed = await wranglerJson(
-    "containers list",
-    ["containers", "list", "--json", ...TOP_LEVEL],
-    accountId,
-    ApplicationsAnswer,
+// The headers of a read with wrangler's login: its credentials, from `wrangler auth token --json`, held in this
+// process alone (in no argument, other process's environment, file or line printed), read once.
+let credentials: Promise<Record<string, string>> | null = null;
+
+function authHeaders(accountId: string): Promise<Record<string, string>> {
+  credentials ??= (async () => {
+    // No log file: its output is the credentials.
+    const outcome = await wrangler(["auth", "token", "--json", ...TOP_LEVEL], accountId, {
+      env: { WRANGLER_WRITE_LOGS: "false" },
+    });
+    if (!succeeded(outcome)) {
+      // Its output is not shown: it can hold the credentials.
+      throw new Refusal(
+        `wrangler auth token ${outcome.timedOut ? "did not finish" : `failed (${exited(outcome)})`}: log wrangler in (docs/operations.md, Cloudflare account)`,
+      );
+    }
+    let json: unknown = null;
+    try {
+      json = JSON.parse(outcome.stdout);
+    } catch {
+      // Refused below.
+    }
+    const parsed = v.safeParse(AuthAnswer, json);
+    if (!parsed.success) {
+      throw new Refusal("wrangler auth token did not answer in the shape this command reads");
+    }
+    const auth = parsed.output;
+    if (auth.type === "api_key") {
+      hide([auth.key, auth.email]);
+      return { "X-Auth-Key": auth.key, "X-Auth-Email": auth.email };
+    }
+    hide([auth.token]);
+    return { Authorization: `Bearer ${auth.token}` };
+  })();
+  return credentials;
+}
+
+// A GET of Cloudflare's API on the account with wrangler's login, its result as schema reads it; null when the API
+// answers 404.
+async function apiRead<S extends v.GenericSchema>(
+  what: string,
+  accountId: string,
+  path: string,
+  schema: S,
+): Promise<v.InferOutput<S> | null> {
+  const headers = await authHeaders(accountId);
+  let response: Response;
+  try {
+    response = await fetch(`${api}/accounts/${accountId}${path}`, {
+      headers,
+      redirect: "manual",
+      signal: AbortSignal.timeout(waitMs),
+    });
+  } catch (error) {
+    throw new Refusal(
+      `Cloudflare's API could not be read for ${what} (${error instanceof Error ? error.name : "error"})`,
+    );
+  }
+  if (response.status === 404) {
+    return null;
+  }
+  if (response.status !== 200) {
+    throw new Refusal(`Cloudflare's API answered HTTP ${response.status} for ${what}`);
+  }
+  const parsed = v.safeParse(
+    v.object({ success: v.literal(true), result: schema }),
+    await response.json().catch(() => null),
   );
+  if (!parsed.success) {
+    throw new Refusal(`Cloudflare's API answered ${what} in another shape`);
+  }
+  return parsed.output.result;
+}
+
+// The Worker's workers.dev address and preview URLs, as wrangler's deploy reads them (each off unless set); null when
+// there is no Worker prq.
+async function endpoints(accountId: string): Promise<Endpoints | null> {
+  const worker = await apiRead("the Worker's settings", accountId, `/workers/workers/${WORKER}`, WorkerAnswer);
+  return worker === null
+    ? null
+    : { workersDev: worker.subdomain.enabled ?? false, previews: worker.subdomain.previews_enabled ?? false };
+}
+
+// The application's ID, from every container application, as wrangler's deploy finds it (`containers list --json`
+// prints the first page alone).
+async function applicationId(accountId: string): Promise<string | null> {
+  const listed = await apiRead("the container applications", accountId, "/containers/applications", ApplicationsAnswer);
+  if (listed === null) {
+    throw new Refusal("Cloudflare's API answered HTTP 404 for the container applications");
+  }
   return listed.find((app) => app.name === APPLICATION)?.id ?? null;
 }
 
@@ -409,10 +509,11 @@ async function readState(accountId: string, knownId: string | null = null): Prom
     }
   };
   const deployment = await attempt("the live versions", () => liveDeployment(accountId));
+  const ingress = await attempt("the Worker's workers.dev and preview URLs", () => endpoints(accountId));
   const id = knownId ?? (await attempt("the container applications", () => applicationId(accountId)));
   const application =
     id === null ? null : await attempt("the container application", () => applicationInfo(accountId, id));
-  return { deployment, application, unread };
+  return { deployment, endpoints: ingress, application, unread };
 }
 
 function versionsLine(versions: Deployment["versions"] = []): string {
@@ -420,6 +521,13 @@ function versionsLine(versions: Deployment["versions"] = []): string {
     return "none";
   }
   return versions.map((each) => `${each.versionId} (${each.tag ?? "untagged"}, ${each.percentage} %)`).join(", ");
+}
+
+function endpointsLine(ingress: Endpoints | null): string {
+  if (ingress === null) {
+    return "workers.dev and preview URLs unknown";
+  }
+  return `workers.dev ${ingress.workersDev ? "on" : "off"}, preview URLs ${ingress.previews ? "on" : "off"}`;
 }
 
 function applicationLine(app: Application | null): string {
@@ -776,6 +884,10 @@ async function readBack(record: Saved): Promise<number> {
       `the live versions are ${versionsLine(state?.deployment?.versions)}, not ${versionId} alone`,
     );
   }
+  const ingress = state?.endpoints ?? null;
+  if (ingress === null || ingress.workersDev || ingress.previews) {
+    return settle(record, "incomplete", `the Worker has ${endpointsLine(ingress)} after the deploy`);
+  }
   const app = state?.application ?? null;
   switch (application) {
     case "created":
@@ -889,7 +1001,7 @@ async function release(tag: string, flags: Flags): Promise<number> {
     clone,
     startedAt: now(),
     flags,
-    before: { deployment: null, application: null, unread: [] },
+    before: { deployment: null, endpoints: null, application: null, unread: [] },
     outcome: "reading the state before",
     idle: null,
     upload: null,
@@ -926,6 +1038,14 @@ async function release(tag: string, flags: Flags): Promise<number> {
       `the account has no live Worker ${WORKER}: run the deploy with --bootstrap first (docs/operations.md, First deploy)`,
     );
   }
+  // A Worker that serves at workers.dev or a preview URL would serve the new version there too, from its upload until
+  // wrangler turns them off, or for good if the deploy stops between.
+  if (before.endpoints === null || before.endpoints.workersDev || before.endpoints.previews) {
+    await stop(
+      "refused: workers.dev or preview URLs not off",
+      `the Worker ${WORKER} has ${endpointsLine(before.endpoints)}: finish the bootstrap (--bootstrap --resume, docs/operations.md, First deploy), or turn them off in the dashboard (${DASHBOARD})`,
+    );
+  }
   if (flags.keepImage && before.application === null) {
     await stop(
       "refused: --keep-image without an application",
@@ -937,7 +1057,7 @@ async function release(tag: string, flags: Flags): Promise<number> {
 
   print(`account: ${accountId} (${name})`);
   print(`Worker: ${WORKER}, live: ${versionsLine(before.deployment?.versions)}`);
-  print(`hostname: ${host}, attached as the Worker's custom domain`);
+  print(`hostname: ${host}, attached as the Worker's custom domain; ${endpointsLine(before.endpoints)}`);
   print(`release: ${tag} at ${sha}`);
   print(
     `Access: the applications "prq" (${host}) and "prq webhook" (${host}/webhook) protect the hostname (docs/operations.md, Setup)`,
@@ -1017,6 +1137,7 @@ async function release(tag: string, flags: Flags): Promise<number> {
     await record.save();
     printError(`deploy: ${record.data.outcome}`);
     printError(`deploy: live now: ${versionsLine(record.data.after.deployment?.versions)}`);
+    printError(`deploy: Worker: ${endpointsLine(record.data.after.endpoints)}`);
     printError(`deploy: container application: ${applicationLine(record.data.after.application)}`);
     printError(`deploy: record: ${dir} (docs/operations.md, Recovery)`);
     return uploaded.code !== null && uploaded.code !== 0 ? uploaded.code : 1;

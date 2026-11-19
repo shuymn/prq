@@ -5,6 +5,7 @@
 // Nothing reaches the network or an account.
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import { join } from "node:path";
@@ -26,12 +27,19 @@ const HOST = "prq.sentinel-zone.example";
 const TEAM = "https://sentinel-team.cloudflareaccess.example";
 const AUD = "sentinel-aud-5e3c0b9a7d1f4e2a";
 const TOKEN = { id: "sentinel-client-id.access", secret: "sentinel-client-secret-77aa" };
+// wrangler's credentials as the stand-in's `auth token --json` gives them: a token, or a global API key and its email.
+const API_TOKEN = "sentinel-api-token-6b2f9e";
+const API_KEY = { key: "sentinel-api-key-0d4c81", email: "owner@sentinel-mail.example" };
+// Whether a stand-in's environment holds any of them, as each stand-in records it.
+const CREDENTIAL_IN_ENV = `Object.values(process.env).some((value) => [${JSON.stringify(API_TOKEN)}, ${JSON.stringify(API_KEY.key)}].some((secret) => value?.includes(secret)))`;
 const APPLICATION = "prq-workspace";
 // The tag's Worker configuration: what the deploy checks of it.
 const WORKER_CONFIG = '{ "name": "prq", "workers_dev": false, "preview_urls": false }\n';
 
-// The stand-in for wrangler. Its state (FAKE_WRANGLER_STATE): the live versions, each version's tag, the container
-// applications, how many reads of a changed application still find its rollout active, whether a deploy changes the
+// The stand-in for wrangler. Its state (FAKE_WRANGLER_STATE): the live versions, each version's tag, the Worker's
+// workers.dev and preview URLs (subdomain, which a deploy sets from its configuration once it is done, or to
+// subdomainAfterDeploy), the credentials
+// `auth token` gives (auth), the container applications, how many reads of a changed application still find its rollout active, whether a deploy changes the
 // image, the pages of instances it lists (by default an instance at the application's version once its rollout is
 // done, then an inactive Durable Object), a behavior per call ("fail", "hang", or for deploy "fail-after-upload" and
 // "hang-after-upload"), and the behaviors a deploy sets once it has uploaded (afterDeploy). Each call appends its arguments,
@@ -42,14 +50,15 @@ import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
-const call = ["containers", "deployments", "versions"].includes(args[0]) ? args[0] + " " + args[1] : args[0];
+const call = ["auth", "containers", "deployments", "versions"].includes(args[0]) ? args[0] + " " + args[1] : args[0];
 const flag = (name) => args.find((arg) => arg.startsWith("--" + name + "="))?.slice(name.length + 3) ?? null;
 const config = call === "deploy" && flag("config") !== null ? readFileSync(flag("config"), "utf8") : null;
 const env = {};
 for (const name of ["CLOUDFLARE_ACCOUNT_ID", "WRANGLER_OUTPUT_FILE_PATH", "WRANGLER_LOG_SANITIZE", "PRQ_ACCESS_CLIENT_SECRET"]) {
   env[name] = process.env[name] ?? null;
 }
-appendFileSync(process.env.FAKE_WRANGLER_LOG, JSON.stringify({ call, args, cwd: process.cwd(), ppid: process.ppid, env, config }) + "\\n");
+const credentialInEnv = ${CREDENTIAL_IN_ENV};
+appendFileSync(process.env.FAKE_WRANGLER_LOG, JSON.stringify({ call, args, cwd: process.cwd(), ppid: process.ppid, env, config, credentialInEnv }) + "\\n");
 const statePath = process.env.FAKE_WRANGLER_STATE;
 const state = JSON.parse(readFileSync(statePath, "utf8"));
 const save = () => writeFileSync(statePath, JSON.stringify(state));
@@ -65,6 +74,8 @@ if (behavior === "hang") {
 } else if (behavior === "fail") {
   console.error("✘ [ERROR] A request to the Cloudflare API failed. [code: 10000]");
   process.exit(1);
+} else if (call === "auth token") {
+  json(state.auth === "api_key" ? { type: "api_key", ...${JSON.stringify(API_KEY)} } : { type: "oauth", token: ${JSON.stringify(API_TOKEN)} });
 } else if (call === "whoami") {
   json({ loggedIn: true, accounts: [{ id: process.env.CLOUDFLARE_ACCOUNT_ID, name: "Synthetic Account" }] });
 } else if (call === "deployments status") {
@@ -81,7 +92,8 @@ if (behavior === "hang") {
   const bindings = tag === undefined || tag === "prq-bootstrap" ? [{ type: "secret_text" }] : [{ type: "durable_object_namespace" }, { type: "assets" }];
   json({ id: args[2], annotations: { "workers/tag": tag }, resources: { bindings } });
 } else if (call === "containers list") {
-  json(state.applications.map((app) => ({ id: app.id, name: app.name, state: "ready", version: app.version })));
+  // As wrangler prints it: the first page alone.
+  json(state.applications.slice(0, 25).map((app) => ({ id: app.id, name: app.name, state: "ready", version: app.version })));
 } else if (call === "containers info") {
   const app = state.applications.find((each) => each.id === args[2]);
   const rolling = state.rolloutReads > 0;
@@ -127,6 +139,9 @@ if (behavior === "hang") {
     console.error("✘ [ERROR] The container image could not be pushed.");
     process.exit(1);
   }
+  const settings = JSON.parse(config ?? "{}");
+  state.subdomain = state.subdomainAfterDeploy ?? { enabled: settings.workers_dev ?? true, previews_enabled: settings.preview_urls ?? true };
+  save();
   appendFileSync(process.env.WRANGLER_OUTPUT_FILE_PATH, JSON.stringify({ type: "deploy", version: 1, worker_name: "prq", version_id: id }) + "\\n");
   console.log("Current Version ID: " + id);
   if (behavior === "hang-after-upload") {
@@ -141,7 +156,8 @@ import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
-appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "mise", args, cwd: process.cwd(), pid: process.pid, ppid: process.ppid }) + "\\n");
+const credentialInEnv = ${CREDENTIAL_IN_ENV};
+appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "mise", args, cwd: process.cwd(), pid: process.pid, ppid: process.ppid, credentialInEnv }) + "\\n");
 if (args[0] === "exec") {
   const rest = args.slice(args.indexOf("--") + 1);
   const child = spawn(rest[0], rest.slice(1), { stdio: "inherit" });
@@ -156,7 +172,8 @@ import { appendFileSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const env = { PRQ_BUILD_VERSION: process.env.PRQ_BUILD_VERSION ?? null, PRQ_BUILD_PREFIX: process.env.PRQ_BUILD_PREFIX ?? null };
-appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "pnpm", args, cwd: process.cwd(), env }) + "\\n");
+const credentialInEnv = ${CREDENTIAL_IN_ENV};
+appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "pnpm", args, cwd: process.cwd(), env, credentialInEnv }) + "\\n");
 if (process.env.FAKE_PNPM_CHANGE === (args[0] === "install" ? "install" : "build")) {
   writeFileSync("packages/cli/package.json", JSON.stringify({ version: "0.1.0", changed: true }) + "\\n");
 }
@@ -165,7 +182,8 @@ if (process.env.FAKE_PNPM_CHANGE === (args[0] === "install" ? "install" : "build
 const FAKE_GH = `#!${process.execPath}
 import { appendFileSync } from "node:fs";
 
-appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "gh", args: process.argv.slice(2), cwd: process.cwd() }) + "\\n");
+const credentialInEnv = ${CREDENTIAL_IN_ENV};
+appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "gh", args: process.argv.slice(2), cwd: process.cwd(), credentialInEnv }) + "\\n");
 process.stdout.write(process.env.FAKE_GH_ANSWER ?? "{}");
 `;
 
@@ -176,6 +194,7 @@ const WranglerCall = v.object({
   ppid: v.number(),
   env: v.record(v.string(), v.nullable(v.string())),
   config: v.nullable(v.string()),
+  credentialInEnv: v.boolean(),
 });
 type WranglerCall = v.InferOutput<typeof WranglerCall>;
 const ToolCall = v.object({
@@ -184,6 +203,7 @@ const ToolCall = v.object({
   cwd: v.string(),
   ppid: v.optional(v.number()),
   env: v.optional(v.record(v.string(), v.nullable(v.string()))),
+  credentialInEnv: v.boolean(),
 });
 type ToolCall = v.InferOutput<typeof ToolCall>;
 
@@ -198,6 +218,9 @@ type State = {
   behavior: Record<string, string>;
   afterDeploy: Record<string, string>;
   instancePages: { state: string; version: number | null }[][] | null;
+  subdomain: { enabled: boolean; previews_enabled: boolean };
+  subdomainAfterDeploy: { enabled: boolean; previews_enabled: boolean } | null;
+  auth: "oauth" | "api_key";
 };
 type Result = { code: number | null; signal: NodeJS.Signals | null; output: string };
 
@@ -213,6 +236,7 @@ let server: Server;
 let port: number;
 let ledger: { rows: unknown[]; nextCursor: string | null }[];
 let ledgerRequests: { url: string; headers: IncomingHttpHeaders }[];
+let apiRequests: { method: string; url: string; headers: IncomingHttpHeaders }[];
 
 const LIVE = "00000009-0000-4000-8000-000000000000";
 const APP = {
@@ -221,6 +245,35 @@ const APP = {
   version: 3,
   image: "registry.example/prq-workspace:00000009",
 };
+
+// The stand-in for Cloudflare's API, from the stand-in for wrangler's state: the Worker's settings (none without a
+// live Worker) and every container application. A behavior "api workers" or "api applications" of "fail" answers 500.
+const ApiState = v.looseObject({
+  deployment: v.nullable(v.array(v.string())),
+  applications: v.array(v.unknown()),
+  subdomain: v.unknown(),
+  behavior: v.record(v.string(), v.string()),
+});
+
+function cloudflare(url: string): [number, unknown] {
+  const state = v.parse(ApiState, JSON.parse(readFileSync(join(root, "wrangler-state.json"), "utf8")));
+  const failed = (name: string) => state.behavior[name] === "fail";
+  const prefix = `/client/v4/accounts/${ACCOUNT}`;
+  if (url === `${prefix}/workers/workers/prq`) {
+    if (failed("api workers")) {
+      return [500, { success: false, errors: [{ code: 10000, message: "Internal error" }] }];
+    }
+    return state.deployment === null
+      ? [404, { success: false, errors: [{ code: 10007, message: "This Worker does not exist on your account." }] }]
+      : [200, { success: true, errors: [], result: { id: "prq", name: "prq", subdomain: state.subdomain } }];
+  }
+  if (url === `${prefix}/containers/applications`) {
+    return failed("api applications")
+      ? [500, { success: false, errors: [{ code: 1000, message: "Internal error" }] }]
+      : [200, { success: true, errors: [], result: state.applications }];
+  }
+  return [404, { success: false, errors: [{ code: 7003, message: "No route for that URI" }] }];
+}
 
 // A ledger row of a pull request, its owner and its jobs.
 function ledgerRow(number: number, owner: string, waiting: number, running: number) {
@@ -261,6 +314,12 @@ beforeAll(async () => {
     });
   }
   server = createServer((request, response) => {
+    if (request.url?.startsWith("/client/v4/") === true) {
+      apiRequests.push({ method: request.method ?? "", url: request.url, headers: request.headers });
+      const [status, body] = cloudflare(request.url);
+      response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+      return;
+    }
     ledgerRequests.push({ url: request.url ?? "", headers: request.headers });
     const cursor = new URL(request.url ?? "/", "http://localhost").searchParams.get("cursor");
     const page = ledger[cursor === null ? 0 : Number(cursor)] ?? { rows: [], nextCursor: null };
@@ -305,6 +364,7 @@ beforeEach(async () => {
   await saveState({});
   ledger = [{ rows: [], nextCursor: null }];
   ledgerRequests = [];
+  apiRequests = [];
   env = {
     ...fixture.env,
     PATH: `${bin}:${fixture.env["PATH"] ?? ""}`,
@@ -315,6 +375,7 @@ beforeEach(async () => {
     PRQ_DEPLOY_POLL_MS: "50",
     PRQ_DEPLOY_ROLLOUT_MS: "20000",
     PRQ_DEPLOY_ORIGIN: `http://127.0.0.1:${port}`,
+    PRQ_DEPLOY_API: `http://127.0.0.1:${port}/client/v4`,
     PRQ_ACCESS_CLIENT_ID: TOKEN.id,
     PRQ_ACCESS_CLIENT_SECRET: TOKEN.secret,
     FAKE_WRANGLER_STATE: join(root, "wrangler-state.json"),
@@ -356,6 +417,9 @@ async function saveState(state: Partial<State>): Promise<void> {
     behavior: {},
     afterDeploy: {},
     instancePages: null,
+    subdomain: { enabled: false, previews_enabled: false },
+    subdomainAfterDeploy: null,
+    auth: "oauth",
     ...state,
   };
   await writeFile(join(root, "wrangler-state.json"), JSON.stringify(full));
@@ -408,7 +472,7 @@ function start(args: string[], { terminal = true, answers = [] as string[] } = {
     child.on("close", (code, signal) => resolve({ code, signal, output: output.replaceAll("\r\n", "\n") }));
   }).then((outcome) => {
     child.stdin.destroy();
-    for (const secret of [TEAM, "sentinel-team", AUD, TOKEN.secret]) {
+    for (const secret of [TEAM, "sentinel-team", AUD, TOKEN.secret, API_TOKEN, API_KEY.key, API_KEY.email]) {
       expect(outcome.output).not.toContain(secret);
     }
     return outcome;
@@ -478,6 +542,20 @@ async function onlyRecord(): Promise<{ dir: string; data: v.InferOutput<typeof R
   expect(dirs).toHaveLength(1);
   const dir = dirs[0] ?? "";
   return { dir, data: await record(dir) };
+}
+
+// The files under dir (symbolic links not followed) that hold text.
+async function filesHolding(dir: string, text: string): Promise<string[]> {
+  const found: string[] = [];
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      found.push(...(await filesHolding(path, text)));
+    } else if (entry.isFile() && (await readFile(path)).includes(text)) {
+      found.push(path);
+    }
+  }
+  return found;
 }
 
 // What is left in the deploy's temp directory besides its clones.
@@ -800,6 +878,65 @@ describe("deploy <tag>", () => {
     });
     expect(ledgerRequests).toEqual([]);
     expect(await leftInTmp()).toEqual([]);
+    // wrangler's credentials went to Cloudflare's API alone, in a header of each read: in no argument, no other
+    // process's environment and no file.
+    expect(apiRequests.map(({ method, url }) => `${method} ${url}`)).toEqual(
+      expect.arrayContaining([
+        `GET /client/v4/accounts/${ACCOUNT}/workers/workers/prq`,
+        `GET /client/v4/accounts/${ACCOUNT}/containers/applications`,
+      ]),
+    );
+    for (const request of apiRequests) {
+      expect(request).toMatchObject({ method: "GET", headers: { authorization: `Bearer ${API_TOKEN}` } });
+    }
+    const calls = [...(await wranglerCalls()), ...(await toolCalls())];
+    expect(calls.filter((each) => each.credentialInEnv || each.args.some((arg) => arg.includes(API_TOKEN)))).toEqual(
+      [],
+    );
+    expect(await filesHolding(root, API_TOKEN)).toEqual([]);
+  });
+
+  it.each([
+    ["workers.dev", { enabled: true, previews_enabled: false }, "oauth", "workers.dev on, preview URLs off"],
+    ["preview URLs", { enabled: false, previews_enabled: true }, "api_key", "workers.dev off, preview URLs on"],
+  ] as const)("refuses to upload while the live Worker has %s on", async (_what, subdomain, auth, line) => {
+    await bootstrapped({ subdomain, auth });
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(
+      `deploy: the Worker prq has ${line}: finish the bootstrap (--bootstrap --resume, docs/operations.md, First deploy), or turn them off in the dashboard (Workers & Pages → prq → Settings → Domains & Routes)`,
+    );
+    expect(await deployCalls()).toEqual([]);
+    expect((await onlyRecord()).data.outcome).toBe("refused: workers.dev or preview URLs not off");
+    expect(apiRequests[0]?.headers).toMatchObject(
+      auth === "api_key"
+        ? { "x-auth-key": API_KEY.key, "x-auth-email": API_KEY.email }
+        : { authorization: `Bearer ${API_TOKEN}` },
+    );
+  });
+
+  it.each([
+    [
+      "Cloudflare's API fails",
+      { "api workers": "fail" },
+      "the Worker's workers.dev and preview URLs: Cloudflare's API answered HTTP 500 for the Worker's settings",
+    ],
+    [
+      "wrangler has no login",
+      { "auth token": "fail" },
+      "the Worker's workers.dev and preview URLs: wrangler auth token failed (exit 1): log wrangler in (docs/operations.md, Cloudflare account)",
+    ],
+  ])("refuses to upload when the Worker's addresses cannot be read: %s", async (_what, behavior, line) => {
+    await bootstrapped({ behavior });
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(`deploy: ${line}\n`);
+    expect(await deployCalls()).toEqual([]);
+    expect((await onlyRecord()).data.outcome).toBe("refused: the state before could not be read");
   });
 
   it("deploys nothing when the owner does not confirm", async () => {
@@ -1011,6 +1148,29 @@ describe("deploy <tag>", () => {
     });
   });
 
+  it.each([
+    [
+      "cannot be read",
+      { afterDeploy: { "api workers": "fail" } },
+      "what is live could not be read: the Worker's workers.dev and preview URLs: Cloudflare's API answered HTTP 500 for the Worker's settings",
+    ],
+    [
+      "are not off",
+      { subdomainAfterDeploy: { enabled: true, previews_enabled: false } },
+      "the Worker has workers.dev on, preview URLs off after the deploy",
+    ],
+  ])(
+    "leaves the read-back incomplete when the Worker's addresses %s after the upload",
+    async (_what, state, reason) => {
+      await released(state);
+
+      const result = await deploy([TAG], { answers: ["y"] });
+
+      expect(result.code).toBe(2);
+      expect((await onlyRecord()).data.readBack).toMatchObject({ state: "incomplete", reason });
+    },
+  );
+
   it("leaves the read-back incomplete while the deployed version is not live alone", async () => {
     await released({ behavior: { deploy: "split" } });
 
@@ -1024,8 +1184,15 @@ describe("deploy <tag>", () => {
     });
   });
 
-  it("completes at once for an unchanged application", async () => {
-    await released();
+  it("completes at once for an unchanged application, found among every application the account has", async () => {
+    // More applications before it than wrangler's containers list prints.
+    const others = Array.from({ length: 30 }, (_, index) => ({
+      id: `0e000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      name: `other-${index}`,
+      version: 1,
+      image: "registry.example/other:1",
+    }));
+    await released({ applications: [...others, { ...APP }] });
 
     const result = await deploy([TAG], { answers: ["y"] });
 
