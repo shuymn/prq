@@ -16,6 +16,7 @@ import { Markdown } from "../components/Markdown.tsx";
 import { Message } from "../components/Message.tsx";
 import { Notice } from "../components/Notice.tsx";
 import { PrHeader } from "../components/PrHeader.tsx";
+import { useElapsed } from "../components/RelativeTime.tsx";
 import { Skeleton } from "../components/Skeleton.tsx";
 import { Summary } from "../components/Summary.tsx";
 import { VersionItem } from "../components/VersionItem.tsx";
@@ -67,8 +68,11 @@ function ConversationItem({ item, actions }: { item: QuestionItem | AnswerItem; 
   );
 }
 
+// A running job's meta ends with how long it has run ("(12 min)").
 function Job({ job }: { job: JobItem }) {
-  return <JobRow state={job.state} density="compact" target={job.target} meta={job.meta} at={job.at} />;
+  const elapsed = useElapsed(job.since);
+  const meta = elapsed === null ? job.meta : `${job.meta} (${elapsed})`;
+  return <JobRow state={job.state} density="compact" target={job.target} meta={meta} at={job.at} />;
 }
 
 function Rail({ body, onPick }: { body: DetailContent | null; onPick?: ((jobId: string) => void) | undefined }) {

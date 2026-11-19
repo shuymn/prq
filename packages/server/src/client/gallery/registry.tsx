@@ -183,7 +183,7 @@ const VERSIONS = (now: number): Version[] => [
 
 const JOB_META: Record<JobRowState, string> = {
   waiting: "Waiting for a local agent since 10:02",
-  running: "agent-7f3a · running since 10:02",
+  running: "agent-7f3a · running since 10:02 (12 min)",
   stalled: "agent-7f3a · running since 09:02",
   failed: "Step limit reached · agent-7f3a",
   done: "agent-7f3a · 12,480 tokens",

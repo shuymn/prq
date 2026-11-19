@@ -291,7 +291,7 @@ describe("the PR detail's states", () => {
     "detail.running": async () => {
       expect(textOf("[data-component=Summary] .progress")).toBe("Summarizing c4d5e6f");
       expect(textOf("[data-component=JobRow][data-state=running] .meta")).toMatch(
-        /^agent-7f3a · running since \d\d:\d\d$/,
+        /^agent-7f3a · running since \d\d:\d\d \(10 min\)$/,
       );
       none("Retry");
     },

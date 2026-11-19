@@ -50,7 +50,15 @@ export type AnswerItem = {
   tokens: number | null;
 };
 
-export type JobItem = { jobId: string; state: JobRowState; target: JobTargetLabel; meta: string; at: string | null };
+// `since`: a running job's start, from which the rail gives its elapsed time.
+export type JobItem = {
+  jobId: string;
+  state: JobRowState;
+  target: JobTargetLabel;
+  meta: string;
+  since: number | null;
+  at: string | null;
+};
 
 export type DetailContent = {
   versions: Version[];
@@ -85,11 +93,16 @@ const RUNNING = new Set<JobView["state"]>(["claimed", "running"]);
 
 const waitingForAgent = (since: number) => `Waiting for a local agent since ${clockTime(since)}`;
 
-// Who runs a job and since when: a cloud turn from its start (the job's last change), a local claim by its agent.
+const isCloud = (job: JobView, owner: Owner | null) => owner === "cloud" || job.agentId === null;
+
+// When a running job started: a cloud turn at the job's last change, a local claim when its agent claimed it.
+const startOf = (job: JobView, owner: Owner | null) =>
+  isCloud(job, owner) ? job.updatedAt : (job.since ?? job.updatedAt);
+
+// Who runs a job and since when.
 function runningLine(job: JobView, owner: Owner | null): string {
-  return owner === "cloud" || job.agentId === null
-    ? `cloud · started ${clockTime(job.updatedAt)}`
-    : `${job.agentId} · running since ${clockTime(job.since ?? job.updatedAt)}`;
+  const at = clockTime(startOf(job, owner));
+  return isCloud(job, owner) ? `cloud · started ${at}` : `${job.agentId} · running since ${at}`;
 }
 
 // A pending job of a local session waits for an agent when none is present.
@@ -344,6 +357,7 @@ function jobsOf(session: Session, view: PrSessionView, hub: HubView | null): Det
                 question: session.messages.find((message) => message.id === question)?.text ?? "",
               },
         meta,
+        since: state === "running" ? startOf(job, view.owner) : null,
         at: answered?.kind === "answer" ? answered.sha : null,
       },
     ];
