@@ -141,6 +141,7 @@ function RailHead({
   );
 }
 
+// The rail: its head, then, expanded, the versions and the jobs (skeletons until the session's first view).
 function Rail({
   body,
   collapsed,
@@ -151,37 +152,40 @@ function Rail({
   actions: DetailActions;
 }) {
   const attention = body?.jobs.active.some((job) => job.state === "failed" || job.state === "stalled") === true;
-  const head = <RailHead collapsed={collapsed} attention={attention} onToggle={actions.onToggleRail} />;
-  if (collapsed) {
-    return <aside className="rail">{head}</aside>;
-  }
-  if (body === null) {
-    return (
-      <aside className="rail" aria-busy="true">
-        {head}
-        <section>
-          <h2>Versions</h2>
-          <div className="skeleton">
-            <Skeleton shape="line" />
-            <Skeleton shape="line" />
-            <Skeleton shape="line" />
-          </div>
-        </section>
-        <section>
-          <h2>Jobs</h2>
-          <div className="skeleton">
-            <Skeleton shape="line" />
-            <Skeleton shape="line" />
-          </div>
-        </section>
-      </aside>
-    );
-  }
-  const { versions, shown, jobs } = body;
-  const onPick = actions.onPick;
   return (
-    <aside className="rail">
-      {head}
+    <aside className="rail" aria-busy={!collapsed && body === null ? true : undefined}>
+      <RailHead collapsed={collapsed} attention={attention} onToggle={actions.onToggleRail} />
+      {!collapsed && (body === null ? <RailLoading /> : <RailContent body={body} actions={actions} />)}
+    </aside>
+  );
+}
+
+function RailLoading() {
+  return (
+    <>
+      <section>
+        <h2>Versions</h2>
+        <div className="skeleton">
+          <Skeleton shape="line" />
+          <Skeleton shape="line" />
+          <Skeleton shape="line" />
+        </div>
+      </section>
+      <section>
+        <h2>Jobs</h2>
+        <div className="skeleton">
+          <Skeleton shape="line" />
+          <Skeleton shape="line" />
+        </div>
+      </section>
+    </>
+  );
+}
+
+function RailContent({ body, actions }: { body: DetailContent; actions: DetailActions }) {
+  const { versions, shown, jobs } = body;
+  return (
+    <>
       {versions.length > 0 && (
         <section>
           <h2>Versions</h2>
@@ -193,7 +197,7 @@ function Rail({
                 selected={version.jobId === shown?.jobId}
                 sha={version.sha}
                 at={version.at}
-                onSelect={() => onPick?.(version.jobId)}
+                onSelect={() => actions.onPick?.(version.jobId)}
               />
             ))}
           </div>
@@ -218,7 +222,7 @@ function Rail({
           </div>
         </section>
       )}
-    </aside>
+    </>
   );
 }
 
