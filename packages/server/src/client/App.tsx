@@ -3,7 +3,7 @@ import { lazy, Suspense, useEffect, useRef } from "react";
 import { Frame } from "./frame.tsx";
 import { useHub } from "./hub.ts";
 import { useLayout } from "./layout.ts";
-import { BuildNotice, ChunkBoundary, useAssetFailed } from "./notices.tsx";
+import { BuildNotice, ChunkBoundary, chunkFailed, useAssetFailed } from "./notices.tsx";
 import { type Route, useRoute } from "./routes.ts";
 import { NotFound } from "./screens/NotFound.tsx";
 import { PrDetailScreen } from "./screens/PrDetailScreen.tsx";
@@ -11,7 +11,7 @@ import { PrListScreen } from "./screens/PrListScreen.tsx";
 import { useUnsent } from "./slots.ts";
 
 // The settings come in a chunk of their own, loaded when the page opens.
-const SettingsScreen = lazy(() => import("./screens/SettingsScreen.tsx"));
+const SettingsScreen = lazy(() => import("./screens/SettingsScreen.tsx").catch(chunkFailed));
 
 // The route's view as a key: a change of it is a navigation to another view.
 const viewKey = (route: Route) => (route.name === "detail" ? `detail:${JSON.stringify(route.ref)}` : route.name);

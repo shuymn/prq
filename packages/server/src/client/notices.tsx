@@ -20,24 +20,44 @@ export function useAssetFailed(): [boolean, () => void] {
   return [failed, fail];
 }
 
-// A lazily loaded part of the page (the settings): when it cannot load, or fails as it renders, `fallback` shows in its
-// place, and `onError` reports it.
+// A lazily loaded part's module that could not load.
+class ChunkFailed extends Error {
+  override name = "ChunkFailed";
+}
+
+// Marks a lazily loaded part's failed import: `lazy(() => import(…).catch(chunkFailed))`. The import's message, which
+// names the module, stays the error's.
+export function chunkFailed(error: unknown): never {
+  throw new ChunkFailed(error instanceof Error ? error.message : String(error), { cause: error });
+}
+
+// A lazily loaded part of the page (the settings): when it cannot load, `fallback` shows in its place, and `onError`
+// reports it. Any other error as it renders goes on past it, as it would anywhere else in the page.
 export class ChunkBoundary extends Component<
   { onError: () => void; fallback: ReactNode; children: ReactNode },
-  { failed: boolean }
+  { caught: { error: unknown } | null }
 > {
-  override state = { failed: false };
+  override state: { caught: { error: unknown } | null } = { caught: null };
 
-  static getDerivedStateFromError(): { failed: boolean } {
-    return { failed: true };
+  static getDerivedStateFromError(error: unknown): { caught: { error: unknown } } {
+    return { caught: { error } };
   }
 
-  override componentDidCatch(): void {
-    this.props.onError();
+  override componentDidCatch(error: unknown): void {
+    if (error instanceof ChunkFailed) {
+      this.props.onError();
+    }
   }
 
   override render(): ReactNode {
-    return this.state.failed ? this.props.fallback : this.props.children;
+    const { caught } = this.state;
+    if (caught === null) {
+      return this.props.children;
+    }
+    if (caught.error instanceof ChunkFailed) {
+      return this.props.fallback;
+    }
+    throw caught.error;
   }
 }
 
