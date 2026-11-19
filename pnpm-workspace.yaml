@@ -40,6 +40,21 @@ catalog:
   # why a skill's paths are at most 100 bytes.
   nanotar: 0.3.0
 
+  # The web UI (packages/server/src/client): React, built by Vite into Workers Static Assets; the design tokens turned
+  # into CSS custom properties by Style Dictionary at build; Inter and JetBrains Mono self-hosted.
+  "@fontsource/inter": 5.3.0
+  "@fontsource/jetbrains-mono": 5.3.0
+  "@types/react": 19.3.0
+  "@types/react-dom": 19.3.0
+  "@vitejs/plugin-react": 6.3.0
+  react: 19.3.1
+  react-dom: 19.3.1
+  style-dictionary: 5.8.0
+  vite: 8.3.8
+  # The machine's Chrome, driven for the UI's browser check and to render the favicon's rasters; no browser is
+  # downloaded.
+  playwright: 1.65.1
+
   # Tests and TypeScript; fast-check generates the interleavings of the head reconciliation's oracle test.
   fast-check: 4.10.2
   typescript: 7.0.2
@@ -59,6 +74,8 @@ catalog:
   oxfmt: 0.78.0
   oxlint: 1.93.0
   oxlint-tsgolint: 7.0.2007
+  # The UI's stylesheets: raw colors, sizes and fonts refused in favour of the design tokens (stylelint.config.mjs).
+  stylelint: 18.0.0
 
 # Dependency build scripts, each reviewed: none runs. esbuild, lefthook and workerd take their platform binaries from
 # optionalDependencies; core-js-pure's postinstall only prints a funding message.

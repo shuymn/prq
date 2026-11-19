@@ -4,6 +4,6 @@
     "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"]
   },
   "include": ["src", "scripts", "vitest.config.ts"],
-  // Run in Node, checked by tsconfig.node.json.
-  "exclude": ["src/**/*.node.test.ts"]
+  // Run in Node, checked by tsconfig.node.json; the web UI runs in the browser, checked by tsconfig.client.json.
+  "exclude": ["src/**/*.node.test.ts", "src/client"]
 }

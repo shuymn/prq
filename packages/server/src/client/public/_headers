@@ -1,0 +1,8 @@
+# Every static path: the shell and its fallbacks are revalidated (no-cache), and every response carries the CSP. The
+# build appends one rule per file it emitted under /assets/, which caches that file for a year
+# (packages/server/build/static-assets.ts). The Worker's own routes never get these: they answer no-store.
+/*
+  Cache-Control: no-cache
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; require-trusted-types-for 'script'; trusted-types 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: same-origin

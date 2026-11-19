@@ -9,14 +9,21 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
 - `mise trust` once, then `mise install` installs the pinned Node.js, pnpm and check tools (`mise.toml`, `mise.lock`);
   `pnpm install` installs the workspace and the Git hooks. The hooks go into the repository's shared `.git/hooks`, so
   they also run in other worktrees, and a branch from before this toolchain cannot commit through them.
-- `pnpm run lint` (oxlint, type-aware), `pnpm run fmt` (oxfmt check; `pnpm run fmt:fix` formats), `pnpm run knip`
-  (unused files, dependencies and exports), `pnpm run typecheck` and `pnpm run test` are the checks CI's `Check` job
-  runs.
+- `pnpm run lint` (oxlint, type-aware), `pnpm run lint:css` (stylelint on the web UI's stylesheets), `pnpm run fmt`
+  (oxfmt check; `pnpm run fmt:fix` formats), `pnpm run knip` (unused files, dependencies and exports), `pnpm run
+  typecheck` and `pnpm run test` are the checks CI's `Check` job runs. `pnpm run test` builds the web UI first.
+- `pnpm run build` in `packages/server` builds the web UI (`src/client`, Vite) into `dist/client`, which the Worker
+  serves as its static assets with the generated `_headers`. Whatever runs the Worker (the tests, `pnpm run stack`, the
+  owner's checks) needs that build; the tests stop without it, saying so, and the stack and the checks build it first.
+  `pnpm run icons` there writes the favicon set into `src/client/public` from the BrandMark, rendered in Chrome.
 - `pnpm run build` in `packages/cli` compiles `prq` with Bun into the single file `packages/cli/dist/prq`; put it on
   `PATH` or run it by path. Node 24 runs the source as well (`node packages/cli/src/main.ts`), so it uses no Bun-only
   API. The CLI's tests run in Node within `pnpm run test`: they compile the binary first, then run it as a child process
   against the real Worker, which wrangler's test harness runs locally behind a stand-in for Access; nothing reaches the
-  network.
+  network. The web UI's browser check (`packages/cli/src/e2e/ui`) drives the machine's Chrome (playwright's `chrome`
+  channel; no browser is downloaded) against the same Worker through the stand-in's browser door, which forwards a
+  browser's requests and WebSockets with the application's token; a failed test leaves a screenshot in
+  `packages/cli/test-output/ui`.
 - A test runs git only through the named operations of `FixtureGit` and `FixtureRepo` (`packages/cli/src/test/git.ts`),
   never with arguments of its own; a test that needs another git call adds an operation. Paths are names in a fresh
   directory of the OS temp directory, outside every repository, checked to resolve inside it, and git gets an
@@ -73,7 +80,9 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
   in `design/components.md`) and search for anything new, then follow them.
 - UI code uses only the design tokens (the CSS custom properties generated from `design/tokens.json`) and the
   components in `design/components.md`. Anything missing is added to the design and the inventory first
-  (`design/README.md`).
+  (`design/README.md`). `pnpm run lint:css` and `pnpm run lint` refuse a raw value where styles are authored.
+- The web UI supports the latest stable Chrome only: it uses the platform's newest features natively, without polyfills
+  or fallbacks (`docs/decisions.md`).
 - `design/prq.pen` is written only by the Pencil app, and oxfmt skips it. Commit it as Pencil saved it, minus its
   top-level `fileToken`, which the pre-commit hook rejects (`design/README.md`).
 - Commits, pull requests, docs and issues are public and in English. They describe the change and its reasons with

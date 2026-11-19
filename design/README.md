@@ -75,10 +75,24 @@ followed by the segments joined with `-`, so two paths must never join to the sa
 
 ### Generating CSS
 
-The code generates its CSS custom properties from `tokens.json` (set up in #7) with Style Dictionary 5, which reads the
-file as it is (`usesDtcg: true`, transform group `css`); the table above is its output. The font family tokens carry
-the fallback stacks (Inter and JetBrains Mono are self-hosted). A `text.*` variable is a `font` shorthand, which
-cannot hold letter spacing; Style Dictionary warns about it, and the value is 0.
+The code generates its CSS custom properties from `tokens.json` with Style Dictionary 5, which reads the file as it is
+(`usesDtcg: true`, transform group `css`, format `css/variables`); the table above is its output. The web UI's build
+does it in memory and serves the result as the module `virtual:prq/tokens.css`, in the `tokens` cascade layer
+(`packages/server/build/tokens.ts`); nothing generated is committed, and the build's minifier may shorten a value
+(`#ffffff` to `#fff`). The font family tokens carry the fallback stacks (Inter and JetBrains Mono are self-hosted). A
+`text.*` variable is a `font` shorthand, which cannot hold letter spacing (the value is 0; Style Dictionary's warning
+about it is off). The shorthand also resets `font-size-adjust`, so a rule that sets `font` sets
+`font-size-adjust: from-font` after it.
+
+Stylesheets take every color, size, font, shadow and motion value from a token: `pnpm run lint:css` (stylelint's
+built-in rules, `stylelint.config.mjs`) refuses a hex, named or system color, a color or easing function, a length or
+time unit, a percentage size other than `100%`, a font value, a raw shadow, and a custom property that holds anything
+but a token, whatever the case of the property's name. A few intrinsic values stay: `fr`, `deg` on `rotate`, `0`,
+`auto`, `none`, `100%`, line counts (`1lh`) for block sizes, the `80ch` measure, `inherit`, `currentColor` and
+`transparent` for a color, `font-size-adjust: from-font`, an upright or italic `font-style`, and the AppHeader mark's
+`translate: 0 1px` in that stylesheet alone. In TSX, `pnpm run lint` refuses a `style` prop or element,
+`dangerouslySetInnerHTML`, a `fill`, `stroke`, `width` or `height` attribute, except the BrandMark's sizes, and a
+spread onto an HTML or SVG element, which could carry any of them.
 
 ## Pencil
 

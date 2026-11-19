@@ -1,0 +1,11 @@
+// The web UI (src/client), in the browser: the DOM's types, React's JSX, and Vite's types for what the client imports
+// (stylesheets, the build's defines in src/client/env.d.ts).
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "DOM"],
+    "jsx": "react-jsx",
+    "types": ["vite/client"]
+  },
+  "include": ["src/client"]
+}

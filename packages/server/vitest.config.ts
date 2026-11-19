@@ -41,16 +41,20 @@ export default defineConfig(async () => {
           test: {
             name: "workerd",
             include: ["src/**/*.test.ts"],
-            exclude: ["src/**/*.node.test.ts"],
+            // The web UI runs in the browser, not in the Worker.
+            exclude: ["src/**/*.node.test.ts", "src/client/**"],
             setupFiles: ["src/test/setup.ts"],
+            // The Worker serves the web UI's build: the run stops first, saying how to build it, when it is missing.
+            globalSetup: ["../cli/src/test/client-build.ts"],
           },
         },
         {
           // The cloud workspace's git procedure with the machine's git, against file:// repositories in the OS temp
-          // directory, through the CLI's git fixture; the CLI's canary fails the run if the repository changed.
+          // directory, through the CLI's git fixture; the CLI's canary fails the run if the repository changed. And the
+          // web UI's build: its tokens, its output, the style check and the favicon.
           test: {
             name: "node",
-            include: ["src/**/*.node.test.ts"],
+            include: ["src/**/*.node.test.ts", "build/**/*.node.test.ts"],
             environment: "node",
             globalSetup: ["../cli/src/test/canary.ts"],
             // Real git processes: room for a slow CI runner, as the CLI's git tests have.

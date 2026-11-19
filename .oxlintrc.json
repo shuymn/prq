@@ -8,5 +8,40 @@
   "options": {
     "typeAware": true,
     "reportUnusedDisableDirectives": "error"
-  }
+  },
+  // The web UI takes its styles from stylesheets bound to the design tokens (stylelint.config.mjs): no style prop or
+  // element, no presentation attribute holding a raw color or size, and no HTML string. An override's rules apply only
+  // with its plugins listed. packages/server/build/style-check.node.test.ts runs this configuration on fixtures.
+  "overrides": [
+    {
+      "files": ["packages/server/src/client/**"],
+      "plugins": ["react"],
+      "rules": {
+        // The automatic JSX runtime (tsconfig.client.json) needs no React in scope.
+        "react/react-in-jsx-scope": "off",
+        // A stylesheet is imported for its effect.
+        "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
+        // The build's define (src/client/env.d.ts) follows Vite's naming.
+        "no-underscore-dangle": ["error", { "allow": ["__PRQ_VERSION__"] }],
+        "react/forbid-dom-props": ["error", { "forbid": ["style", "fill", "stroke", "width", "height"] }],
+        "react/forbid-component-props": ["error", { "forbid": ["style"] }],
+        "react/forbid-elements": ["error", { "forbid": ["style"] }],
+        // A spread onto an HTML or SVG element, a literal object included, could carry a style the rules above never
+        // see; components forward their own props.
+        "react/jsx-props-no-spreading": [
+          "error",
+          { "html": "enforce", "custom": "ignore", "explicitSpread": "enforce" }
+        ],
+        "react/no-danger": "error"
+      }
+    },
+    {
+      // BrandMark is pixel art: its SVG's width and height are whole multiples of its 16px grid (design/README.md).
+      "files": ["packages/server/src/client/components/BrandMark.tsx"],
+      "plugins": ["react"],
+      "rules": {
+        "react/forbid-dom-props": ["error", { "forbid": ["style", "fill", "stroke"] }]
+      }
+    }
+  ]
 }

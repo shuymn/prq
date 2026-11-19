@@ -36,15 +36,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The versions mise.lock pins; the job's checks run on these.
+      # The versions mise.lock pins; the job's checks run on these. The web UI's browser check and the favicon script
+      # drive the runner's own Chrome.
       - name: Print tool versions
         run: |
           node --version
           pnpm --version
           bun --version
+          google-chrome --version
 
       - name: Run linter
         run: pnpm run lint
+
+      # The web UI's stylesheets take only design tokens (stylelint.config.mjs).
+      - name: Check stylesheets
+        run: pnpm run lint:css
 
       - name: Run formatter
         run: pnpm run fmt
@@ -55,6 +61,7 @@ jobs:
       - name: Run type checker
         run: pnpm run typecheck
 
-      # The CLI's tests first compile the prq binary with Bun (packages/cli/src/test/build.ts), then run it.
+      # Builds the web UI the Worker serves, then runs the tests. The CLI's tests first compile the prq binary with Bun
+      # (packages/cli/src/test/build.ts), then run it; the UI's browser check (packages/cli/src/e2e/ui) runs Chrome.
       - name: Run tests
         run: pnpm run test

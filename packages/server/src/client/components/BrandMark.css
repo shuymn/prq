@@ -1,0 +1,17 @@
+@layer components {
+  [data-component="BrandMark"] {
+    display: block;
+
+    & .tile {
+      fill: var(--color-accent-emphasis);
+    }
+
+    & .face {
+      fill: var(--color-fg-on-emphasis);
+    }
+
+    &[data-variant="face"] .face {
+      fill: var(--color-accent-fg);
+    }
+  }
+}
