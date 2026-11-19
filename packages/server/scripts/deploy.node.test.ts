@@ -67,7 +67,8 @@ if (behavior === "hang") {
     console.error("  This Worker does not exist on your account. [code: 10007]");
     process.exit(1);
   }
-  json({ id: "deployment-" + state.uploads, versions: state.deployment.map((id) => ({ version_id: id, percentage: 100 })) });
+  const percentage = 100 / state.deployment.length;
+  json({ id: "deployment-" + state.uploads, versions: state.deployment.map((id) => ({ version_id: id, percentage })) });
 } else if (call === "versions view") {
   // The bootstrap's Worker and a version secrets put made of it have no binding but secrets; a release has prq's.
   const tag = state.versions[args[2]] ?? undefined;
@@ -90,7 +91,8 @@ if (behavior === "hang") {
   state.uploads += 1;
   const id = String(state.uploads).padStart(8, "0") + "-0000-4000-8000-000000000000";
   state.versions[id] = flag("tag");
-  state.deployment = [id];
+  // "split": the new version shares the traffic with what was live, as after a gradual deployment.
+  state.deployment = behavior === "split" ? [...(state.deployment ?? []), id] : [id];
   if (flag("tag") !== "prq-bootstrap" && !args.includes("--containers-rollout=none")) {
     const app = state.applications.find((each) => each.name === "prq-workspace");
     if (app === undefined) {
@@ -549,6 +551,11 @@ describe("deploy --bootstrap", () => {
   });
 
   it("resumes only over a live version tagged prq-bootstrap", async () => {
+    const none = await deploy(["--bootstrap", "--resume"], { terminal: false });
+    expect(none.code).toBe(1);
+    expect(none.output).toContain("deploy: the Worker prq has no live version to resume: run --bootstrap");
+    expect(await deployCalls()).toEqual([]);
+
     await released();
     const refused = await deploy(["--bootstrap", "--resume"], { terminal: false });
     expect(refused.code).toBe(1);
@@ -734,13 +741,15 @@ describe("deploy <tag>", () => {
     await released();
     ledger = [
       { rows: [ledgerRow(1, "local", 1, 1), ledgerRow(2, "cloud", 0, 0)], nextCursor: "1" },
-      { rows: [ledgerRow(3, "cloud", 0, 1)], nextCursor: null },
+      { rows: [ledgerRow(3, "cloud", 0, 1), ledgerRow(4, "cloud", 2, 0)], nextCursor: null },
     ];
 
     const result = await deploy([TAG], { answers: ["y"] });
 
     expect(result.code).toBe(1);
-    expect(result.output).toContain("deploy: cloud work is waiting or running: prq-test/app#3 (waiting 0, running 1)");
+    expect(result.output).toContain(
+      "deploy: cloud work is waiting or running: prq-test/app#3 (waiting 0, running 1), prq-test/app#4 (waiting 2, running 0)",
+    );
     expect(ledgerRequests.map((request) => request.url)).toEqual([
       "/api/ledger?state=all",
       "/api/ledger?state=all&cursor=1",
@@ -751,6 +760,20 @@ describe("deploy <tag>", () => {
     });
     expect(await deployCalls()).toEqual([]);
     expect((await onlyRecord()).data.outcome).toMatch(/^refused: cloud work is waiting or running/);
+  });
+
+  it("refuses without the service token to read the ledger with", async () => {
+    await released();
+    delete env["PRQ_ACCESS_CLIENT_ID"];
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(
+      "deploy: the idle check reads the ledger with the service token: set PRQ_ACCESS_CLIENT_ID and PRQ_ACCESS_CLIENT_SECRET as for prq",
+    );
+    expect(ledgerRequests).toEqual([]);
+    expect(await deployCalls()).toEqual([]);
   });
 
   it("deploys with a warning past busy cloud work under --ignore-running", async () => {
@@ -776,6 +799,19 @@ describe("deploy <tag>", () => {
     expect(data).toMatchObject({ application: "changed", readBack: { state: "complete" } });
     expect(data.readBack?.rounds).toHaveLength(2);
     expect(result.output).toContain("read-back complete: the application's rollout of version 4 is complete");
+  });
+
+  it("leaves the read-back incomplete while the deployed version is not live alone", async () => {
+    await released({ behavior: { deploy: "split" } });
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(2);
+    const version = "00000010-0000-4000-8000-000000000000";
+    expect((await onlyRecord()).data.readBack).toMatchObject({
+      state: "incomplete",
+      reason: `the live versions are ${LIVE} (v0.0.9, 50 %), ${version} (${TAG}, 50 %), not ${version} alone`,
+    });
   });
 
   it("completes at once for an unchanged application", async () => {
