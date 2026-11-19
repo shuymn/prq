@@ -17,6 +17,7 @@ import { RECONNECT_FAILED_MS, RETRY_ANSWER_MS, RETRY_STALE_MS, SocketContext } f
 import { SEND_SETTLE_MS, SendSlots, SlotsContext } from "../slots.ts";
 import { controlledFetch, settled } from "../test/fetch.ts";
 import { controlledSockets, type TestSocket } from "../test/socket.ts";
+import { nextTask, until } from "../test/wait.ts";
 import { PrDetailScreen } from "./PrDetailScreen.tsx";
 
 const REF = { owner: "shuymn", repo: "prq", number: 42 };
@@ -139,28 +140,7 @@ async function connect(sockets: ReturnType<typeof controlledSockets>, index: num
   return socket;
 }
 
-// A task of the page's event loop: React renders and runs effects in tasks, which fake timers do not move.
-const nextTask = () =>
-  new Promise<void>((resolve) => {
-    const channel = new MessageChannel();
-    channel.port1.addEventListener("message", () => resolve(), { once: true });
-    channel.port1.start();
-    channel.port2.postMessage(null);
-  });
-
 const textOf = (selector: string) => document.querySelector(selector)?.textContent ?? "";
-
-// Under fake timers, waits for the page without moving the clock: expect.poll, expect.element and the locators'
-// actions advance fake time by their interval on each retry, which would move a bound the test measures.
-async function until(check: () => boolean) {
-  const end = performance.now() + 10_000;
-  while (!check()) {
-    if (performance.now() > end) {
-      throw new Error("the page did not get there within 10 s");
-    }
-    await nextTask();
-  }
-}
 
 // Under fake timers: PartySocket's reconnect delay passes, a task at a time, until the page connects again.
 async function reconnect(sockets: ReturnType<typeof controlledSockets>, index: number) {

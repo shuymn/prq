@@ -6,7 +6,7 @@ import { Button } from "./Button.tsx";
 import { Notice } from "./Notice.tsx";
 import { TextField } from "./TextField.tsx";
 
-export type RegisterFormState = "idle" | "registering" | "failed";
+type RegisterFormState = "idle" | "registering" | "failed";
 
 // The "Add skill" dialog (design/components.md, Settings): the link to a SKILL.md, then Review skill, busy while the
 // server resolves the ref and fetches the skill; a refused link shows the server's reason. Cancel closes the dialog

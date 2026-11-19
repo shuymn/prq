@@ -8,28 +8,14 @@ import { type Locator, page, userEvent } from "vitest/browser";
 
 import { REGISTER_PREVIEW, SKILLS, UPDATE_PREVIEW } from "../gallery/settings-fixtures.ts";
 import { FetchContext } from "../reads.ts";
-import { ANSWER_MS, CONFIRM_ANSWER_MS, PREVIEW_ANSWER_MS } from "../settings.ts";
 import { controlledFetch, type Pending } from "../test/fetch.ts";
+import { nextTask, until } from "../test/wait.ts";
 import SettingsScreen from "./SettingsScreen.tsx";
 
-const nextTask = () =>
-  new Promise<void>((resolve) => {
-    const channel = new MessageChannel();
-    channel.port1.addEventListener("message", () => resolve(), { once: true });
-    channel.port1.start();
-    channel.port2.postMessage(null);
-  });
-
-// Waits, a task at a time, until the page gets there.
-async function until(check: () => boolean) {
-  const end = performance.now() + 10_000;
-  while (!check()) {
-    if (performance.now() > end) {
-      throw new Error("the page did not get there within 10 s");
-    }
-    await nextTask();
-  }
-}
+// Each request's bound (docs/design.md, The settings page): a read, a save or a removal; a preview; a confirm.
+const ANSWER_MS = 45_000;
+const PREVIEW_ANSWER_MS = 75_000;
+const CONFIRM_ANSWER_MS = 165_000;
 
 const textOf = (selector: string) => document.querySelector(selector)?.textContent ?? "";
 const instructions = (skills: Skill[], analysis = "", answer = ""): Instructions => ({
@@ -142,9 +128,6 @@ describe("registering a skill", () => {
   test("is busy while the preview is out; the confirm sends exactly the preview's name, source, ref and SHA; a 409 skill_exists whose read lists that skill at that commit counts as registered (P6.2)", async () => {
     const { preview, next } = await reviewed();
     expect(bodyOf(preview)).toEqual({ url: URL });
-    expect(document.querySelector("[data-component=SkillRegisterForm]")?.getAttribute("data-state")).toBe(
-      "registering",
-    );
     await expect.element(page.getByText("Resolving the ref and fetching the skill…")).toBeVisible();
     expect(document.querySelector("dialog [data-component=Button][type=submit]")?.getAttribute("data-state")).toBe(
       "busy",
@@ -178,7 +161,6 @@ describe("registering a skill", () => {
     preview.respond({ error: "not_found", detail: "no SKILL.md in shuymn/kopje/skills/changelog at main" }, 404);
     await expect.element(page.getByText("Register failed")).toBeVisible();
     await expect.element(page.getByText("No SKILL.md in shuymn/kopje/skills/changelog at main.")).toBeVisible();
-    expect(document.querySelector("[data-component=SkillRegisterForm]")?.getAttribute("data-state")).toBe("failed");
     await userEvent.click(button("Review skill"));
     (await next("POST", "/api/skills/preview")).fail();
     await expect.element(page.getByText("Couldn't reach the server. Try again.")).toBeVisible();

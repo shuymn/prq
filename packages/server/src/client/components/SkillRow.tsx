@@ -9,10 +9,10 @@ import { Sha } from "./Sha.tsx";
 import { refText, sourceText } from "./skill-text.ts";
 import { TextField } from "./TextField.tsx";
 
-export type SkillRowState = "rest" | "update-ref" | "update-review";
+type SkillRowState = "rest" | "update-ref" | "update-review";
 
 // The ref form Update opens under the row: the ref, its preview out (busy) or refused (the reason).
-export type RefForm = {
+type RefForm = {
   value: string;
   busy: boolean;
   error: string | null;

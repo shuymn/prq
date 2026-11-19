@@ -379,17 +379,13 @@ function SettingsPage({ state }: { state: SettingsState }) {
   );
 }
 
-const settingsPage = (fixture: string) => {
-  const state = SETTINGS_STATES[fixture];
-  if (state === undefined) {
-    throw new Error(`no settings fixture ${fixture}`);
-  }
-  return () => <SettingsPage state={state()} />;
-};
-const settingsState = (name: string, modal = false): Entry => ({
+type SettingsFixture = keyof typeof SETTINGS_STATES;
+const settingsPage = (fixture: SettingsFixture) => () => <SettingsPage state={SETTINGS_STATES[fixture]()} />;
+// A state with a dialog open shows only on its own page.
+const settingsState = (name: SettingsFixture): Entry => ({
   name: `settings.${name}`,
   render: settingsPage(name),
-  modal,
+  modal: SETTINGS_STATES[name]().dialog !== null,
 });
 
 const SKILL_URL = "https://github.com/acme/skills/blob/main/skills/review/SKILL.md";
@@ -661,13 +657,13 @@ export const REGISTRY: Entry[] = [
   // 4. Settings
   settingsState("default"),
   settingsState("empty"),
-  settingsState("registering", true),
-  settingsState("register-review", true),
-  settingsState("register-failed", true),
+  settingsState("registering"),
+  settingsState("register-review"),
+  settingsState("register-failed"),
   settingsState("saving"),
   settingsState("save-failed"),
-  settingsState("update", true),
-  settingsState("remove", true),
+  settingsState("update"),
+  settingsState("remove"),
   // 5. Panel
   { name: "panel.default", render: panel("panel-default") },
   { name: "panel.version-menu", render: panel("panel-default", true) },

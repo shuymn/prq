@@ -91,7 +91,7 @@ const READY: SettingsState = {
 
 const REGISTER_URL = "https://github.com/shuymn/kopje/blob/main/skills/changelog/SKILL.md";
 
-export const SETTINGS_STATES: Record<string, () => SettingsState> = {
+export const SETTINGS_STATES = {
   default: () => READY,
   empty: () => ({ ...INITIAL, read: "ready" }),
   registering: () => ({
@@ -133,4 +133,4 @@ export const SETTINGS_STATES: Record<string, () => SettingsState> = {
   loading: () => INITIAL,
   "load-failed": () => ({ ...INITIAL, read: "failed" }),
   "refresh-failed": () => ({ ...READY, refreshFailed: true }),
-};
+} satisfies Record<string, () => SettingsState>;

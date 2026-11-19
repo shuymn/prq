@@ -14,7 +14,7 @@ import { SkillReview } from "../components/SkillReview.tsx";
 import { SkillRow } from "../components/SkillRow.tsx";
 import { PROMPT_TITLES, type SettingsDialog, type SettingsState, type SettingsStore } from "../settings.ts";
 
-export type SettingsActions = Pick<
+type SettingsActions = Pick<
   SettingsStore,
   | "reread"
   | "editPrompt"
@@ -109,10 +109,7 @@ function DialogContent({
   );
 }
 
-// The settings page (design/screens.md, Settings): the host's two prompts, each saved on its own, and the registered
-// skills with Add skill, Update and Remove, whose dialogs open over the page. Until the first read completes the
-// editors and the list are placeholders; a failed first read takes their place, a failed later one sits above them.
-// A notice about the build, when there is one, comes first.
+// The settings page (design/screens.md, Settings; its states: design/components.md, Settings and Feedback).
 export function Settings({
   state,
   actions = {},

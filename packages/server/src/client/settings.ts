@@ -1,16 +1,4 @@
-// The settings' data (plan §1.14): the host's two prompts and registered skills from GET /api/instructions, read when
-// the page opens and after each change to the skills, and the writes: a prompt's save, a skill's two-step register and
-// update, and its removal. The routes are the server's (docs/design.md, Instructions and skills).
-//
-// - A prompt's editor keeps the host's draft. A save sends the draft as it is then and leaves typing open; once saved,
-//   the editor is clean only if its draft is still the text sent. A read updates an editor only while it is clean.
-// - A confirm sends exactly what its preview showed: a register the preview's name, source, ref and SHA; an update the
-//   same and the registration's revision the preview was made against. Editing the ref withdraws an update's preview
-//   still out. A register answered 409 skill_exists reads the list again: that skill listed at that commit means the
-//   registration happened (a resend after a confirm the page stopped waiting for).
-// - Every request has a bound past the route's own (each answers within its bound, plus the client's margin), after
-//   which it counts as unanswered. Each kind of request has one out at a time: a new one, a closed dialog or the page
-//   leaving aborts the one before, and an answer counts only while its request is still the one out.
+// The settings page's data and requests (docs/design.md, The settings page; the routes: Instructions and skills).
 
 import {
   ErrorResponse,
@@ -31,15 +19,15 @@ import type { Fetch } from "./reads.ts";
 // The client's margin past a route's own bound: the route's 503 arrives first, and a missing answer is the network's.
 const MARGIN_MS = 15_000;
 // A read, a prompt's save and a removal: one call to the Hub.
-export const ANSWER_MS = ROUTE_CALL_MS + MARGIN_MS;
+const ANSWER_MS = ROUTE_CALL_MS + MARGIN_MS;
 // A preview: the registration's revision from the Hub and GitHub's read of the skill (SKILL_PREVIEW_MS, 30 s), in either
 // order.
-export const PREVIEW_ANSWER_MS = ROUTE_CALL_MS + 30_000 + MARGIN_MS;
+const PREVIEW_ANSWER_MS = ROUTE_CALL_MS + 30_000 + MARGIN_MS;
 // A confirm: an update checks the revision, reads every file (SKILL_FETCH_MS, 60 s), checks again if that failed, and
 // stores; a register reads and stores.
-export const CONFIRM_ANSWER_MS = 3 * ROUTE_CALL_MS + 60_000 + MARGIN_MS;
+const CONFIRM_ANSWER_MS = 3 * ROUTE_CALL_MS + 60_000 + MARGIN_MS;
 
-export type Editor = {
+type Editor = {
   // The host's text, and the text it was read or saved as: it is dirty while they differ.
   draft: string;
   base: string;
@@ -84,6 +72,15 @@ const SERVER_LINE = "Couldn't reach the server. Try again.";
 // A request's answer: its status and body (undefined when it has none it could read), or null when there was none
 // within its bound.
 type Answer = { status: number; body: unknown } | null;
+
+// A 200 answer's body as the schema reads it, or null.
+function decoded<S extends v.GenericSchema>(answer: Answer, schema: S): v.InferOutput<S> | null {
+  if (answer?.status !== 200) {
+    return null;
+  }
+  const read = v.safeParse(schema, answer.body);
+  return read.success ? read.output : null;
+}
 
 // The server's error body, when the answer is one.
 const errorOf = (answer: Answer) => {
@@ -181,12 +178,12 @@ export class SettingsStore {
     if (answer === "gone") {
       return null;
     }
-    const read = answer?.status === 200 ? v.safeParse(Instructions, answer.body) : null;
-    if (read?.success !== true) {
+    const read = decoded(answer, Instructions);
+    if (read === null) {
       this.#update(this.#state.read === "ready" ? { refreshFailed: true } : { read: "failed" });
       return null;
     }
-    const { prompts, skills } = read.output;
+    const { prompts, skills } = read;
     const clean = (kind: PromptKind): Editor => {
       const current = this.#state.prompts[kind];
       return current.draft === current.base
@@ -221,9 +218,9 @@ export class SettingsStore {
     if (answer === "gone") {
       return;
     }
-    const saved = answer?.status === 200 ? v.safeParse(Prompt, answer.body) : null;
-    if (saved?.success === true) {
-      this.#editor(kind, { base: text, status: "saved", savedAt: saved.output.savedAt });
+    const saved = decoded(answer, Prompt);
+    if (saved !== null) {
+      this.#editor(kind, { base: text, status: "saved", savedAt: saved.savedAt });
       announce(`${PROMPT_TITLES[kind]} saved.`, "polite");
     } else {
       this.#editor(kind, { status: "failed" });
@@ -261,9 +258,9 @@ export class SettingsStore {
     if (answer === "gone" || current?.kind !== "register") {
       return;
     }
-    const preview = answer?.status === 200 ? v.safeParse(SkillPreview, answer.body) : null;
-    if (preview?.success === true) {
-      this.#update({ dialog: { kind: "register-review", preview: preview.output, busy: false, error: null } });
+    const preview = decoded(answer, SkillPreview);
+    if (preview !== null) {
+      this.#update({ dialog: { kind: "register-review", preview, busy: false, error: null } });
     } else {
       const reason = reasonOf(answer);
       this.#update({ dialog: { ...current, phase: "failed", reason } });
@@ -358,11 +355,11 @@ export class SettingsStore {
     if (answer === "gone" || current === null) {
       return;
     }
-    const preview = answer?.status === 200 ? v.safeParse(SkillUpdatePreview, answer.body) : null;
-    if (preview?.success === true) {
+    const preview = decoded(answer, SkillUpdatePreview);
+    if (preview !== null) {
       this.#update({
         refForm: { ...current, busy: false },
-        dialog: { kind: "update-review", preview: preview.output, busy: false, error: null },
+        dialog: { kind: "update-review", preview, busy: false, error: null },
       });
     } else {
       const reason = reasonOf(answer);
