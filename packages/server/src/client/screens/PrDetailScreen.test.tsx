@@ -3,14 +3,13 @@
 // model, streamed text by run, versions, the connection's states, a job's Retry and the rail.
 
 import { type HubView, PrSessionView } from "@prq/protocol";
-import { useEffect } from "react";
 import * as v from "valibot";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import { page, userEvent } from "vitest/browser";
 
-import { useAnnouncements } from "../announce.ts";
 import { RETRY_ERROR } from "../components/retry.tsx";
+import { Frame } from "../frame.tsx";
 import type { Hub } from "../hub.ts";
 import type { Layout } from "../layout.ts";
 import { FetchContext } from "../reads.ts";
@@ -967,6 +966,45 @@ describe("a job's Retry", () => {
   });
 });
 
+// The lines the app's assertive region adds from now on, as the Frame renders it.
+async function assertiveLines() {
+  await render(
+    <Frame view={null} version="test" layout="page" header={false}>
+      {null}
+    </Frame>,
+  );
+  const added: string[] = [];
+  const region = document.querySelector("[aria-live=assertive]");
+  if (region !== null) {
+    new MutationObserver((records) => {
+      for (const record of records) {
+        added.push(...[...record.addedNodes].map((node) => node.textContent ?? ""));
+      }
+    }).observe(region, { childList: true });
+  }
+  return added;
+}
+
+// j1 and j2 failed, each with its Retry pressed and its request out.
+async function twoRetries() {
+  const { fetch, sockets } = await detail();
+  await connect(sockets, 0, [
+    { id: "j1", question: "q1", state: "failed", rev: 3, failure: "step limit reached" },
+    { id: "j2", question: "q2", state: "failed", rev: 3, failure: "step limit reached" },
+  ]);
+  const history = [question("q1", "Why?"), question("q2", "How?")];
+  (await fetch.request(0)).respond(history);
+  (await fetch.request(1)).respond(history);
+  await expect.poll(() => document.querySelectorAll(".rail [data-component=JobRow] button")).toHaveLength(2);
+  const [first, second] = document.querySelectorAll<HTMLButtonElement>(".rail [data-component=JobRow] button");
+  first?.click();
+  second?.click();
+  const post = (jobId: string) =>
+    fetch.requests.find((request) => request.url.pathname === `/api/pr/shuymn/prq/42/jobs/${jobId}/retry`);
+  await expect.poll(() => post("j1") !== undefined && post("j2") !== undefined).toBe(true);
+  return post;
+}
+
 describe("a retry's outcome", () => {
   test("holds for the rev it was sent from: a newer view while it is out ends it, so its late 503 marks nothing; after a 200, Retry stays withdrawn through a socket drop until the reopen's view (M2)", async () => {
     const { fetch, sockets, socket } = await failed();
@@ -1007,35 +1045,24 @@ describe("a retry's outcome", () => {
   });
 
   test("each failed retry is announced once, in the order they fail, whichever was sent first (L2)", async () => {
-    const counts: number[] = [];
-    function Announced() {
-      const { assertive } = useAnnouncements();
-      useEffect(() => {
-        counts.push(assertive.count);
-      }, [assertive.count]);
-      return null;
-    }
-    await render(<Announced />);
-    const { fetch, sockets } = await detail();
-    await connect(sockets, 0, [
-      { id: "j1", question: "q1", state: "failed", rev: 3, failure: "step limit reached" },
-      { id: "j2", question: "q2", state: "failed", rev: 3, failure: "step limit reached" },
-    ]);
-    const history = [question("q1", "Why?"), question("q2", "How?")];
-    (await fetch.request(0)).respond(history);
-    (await fetch.request(1)).respond(history);
-    await expect.poll(() => document.querySelectorAll(".rail [data-component=JobRow] button")).toHaveLength(2);
-    const [first, second] = document.querySelectorAll<HTMLButtonElement>(".rail [data-component=JobRow] button");
-    first?.click();
-    second?.click();
-    const post = (jobId: string) =>
-      fetch.requests.find((request) => request.url.pathname === `/api/pr/shuymn/prq/42/jobs/${jobId}/retry`);
-    await expect.poll(() => post("j2")).toBeDefined();
-    const before = counts.at(-1) ?? 0;
+    const added = await assertiveLines();
+    const post = await twoRetries();
     post("j2")?.respond({ error: "unavailable" }, 503);
-    await expect.poll(() => counts.at(-1)).toBe(before + 1);
+    await expect.poll(() => added).toEqual([RETRY_ERROR]);
     post("j1")?.respond({ error: "unavailable" }, 503);
-    await expect.poll(() => counts.at(-1)).toBe(before + 2);
+    await expect.poll(() => added).toEqual([RETRY_ERROR, RETRY_ERROR]);
+    await nextTask();
+    expect(added).toEqual([RETRY_ERROR, RETRY_ERROR]);
+  });
+
+  test("two retries that fail in one task are each announced as a line of their own (L2)", async () => {
+    const added = await assertiveLines();
+    const post = await twoRetries();
+    post("j1")?.respond({ error: "unavailable" }, 503);
+    post("j2")?.respond({ error: "unavailable" }, 503);
+    await expect.poll(() => document.querySelectorAll(".retry-error")).toHaveLength(4);
+    await nextTask();
+    expect(added).toEqual([RETRY_ERROR, RETRY_ERROR]);
   });
 });
 
