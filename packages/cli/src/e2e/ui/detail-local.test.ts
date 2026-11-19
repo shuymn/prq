@@ -6,7 +6,7 @@
 
 import { writeFile } from "node:fs/promises";
 
-import { type PrRef, sessionName } from "@prq/protocol";
+import { ErrorResponse, type PrRef, sessionName } from "@prq/protocol";
 import type { Locator, Page } from "playwright";
 import * as v from "valibot";
 import { describe, expect, test, vi } from "vitest";
@@ -438,6 +438,76 @@ describe("jobs and Retry", () => {
     );
     await page.getByText("1 done").waitFor();
     expect(await page.getByRole("button", { name: "Retry" }).count()).toBe(0);
+    expect(posts).toEqual([{ expectedRev: before?.rev }, { expectedRev: moved?.rev }]);
+  }, 60_000);
+
+  test("with the page's view held at the claim's rev, a retry the Worker gets after prq resumes the claim answers 409 stale_job, one after prq submits 409 not_retryable; neither is sent again, and each time the page takes the job as it is once its view comes (P4.2)", async () => {
+    const worker = stack.worker();
+    await present();
+    await ask(worker, PR, "q1", "What changed?");
+    await claim();
+    const page = browser.page();
+    browser.expectConsoleError((message) => message.includes("409"));
+    const posts: unknown[] = [];
+    const codes: string[] = [];
+    // The page's retry, sent on to the door as it came, its answer read here and given to the page unchanged: the page
+    // reads only the status.
+    await page.route(
+      (url) => url.pathname.endsWith("/retry"),
+      async (route) => {
+        posts.push(route.request().postDataJSON());
+        const response = await route.fetch();
+        codes.push(v.parse(ErrorResponse, await response.json()).error);
+        await route.fulfill({ response });
+      },
+    );
+    await page.goto(door(DETAIL));
+    const retry = page
+      .locator('.rail [data-component="JobRow"][data-state="running"]')
+      .getByRole("button", { name: "Retry" });
+    await retry.waitFor();
+    const [before] = (await sessionView(worker, PR)).jobs;
+    const jobId = before?.jobId ?? "";
+
+    // The view is held: the session's socket is cut and its reopen gated, so the page shows the job as it was. The
+    // gates an earlier hold left unused are dropped first, or the reopen would take one already released.
+    const hold = async () => {
+      stack.access().door.clear();
+      const reopen = gate(sessionSocket);
+      expect(stack.access().door.cut(sessionSocket)).toBe(1);
+      await reopen.arrived.promise;
+      return reopen;
+    };
+    const first = await hold();
+    const resumed = await claim();
+    const [moved] = (await sessionView(worker, PR)).jobs;
+    expect(moved).toMatchObject({ state: "claimed", rev: (before?.rev ?? 0) + 1 });
+    await retry.click();
+    await vi.waitFor(() => expect(retries(jobId)).toMatchObject([{ status: 409, cancelled: false }]));
+    await vi.waitFor(() => expect(codes).toEqual(["stale_job"]));
+    first.release.open();
+    await retry.and(page.locator('[data-state="rest"]')).waitFor();
+    expect(await page.getByText("Couldn't retry. Try again.").count()).toBe(0);
+    expect((await sessionView(worker, PR)).jobs).toMatchObject([{ state: "claimed", rev: moved?.rev }]);
+
+    const second = await hold();
+    await writeFile(resumed.answer, "It renames the flag.\n");
+    await submit();
+    await retry.click();
+    await vi.waitFor(() => expect(codes).toEqual(["stale_job", "not_retryable"]));
+    second.release.open();
+    await vi.waitFor(async () =>
+      expect(await conversation(page)).toEqual([
+        { role: "question", state: "sent", text: "What changed?" },
+        { role: "answer", state: "complete", text: "It renames the flag." },
+      ]),
+    );
+    await page.getByText("1 done").waitFor();
+    expect(await page.getByRole("button", { name: "Retry" }).count()).toBe(0);
+    expect(retries(jobId)).toMatchObject([
+      { status: 409, cancelled: false },
+      { status: 409, cancelled: false },
+    ]);
     expect(posts).toEqual([{ expectedRev: before?.rev }, { expectedRev: moved?.rev }]);
   }, 60_000);
 
