@@ -289,7 +289,7 @@ describe("paths that are no page", () => {
     expect(sockets.filter((path) => !path.startsWith("/agents/hub/"))).toEqual([]);
   });
 
-  test("a reload and a fragment link are left to the browser", async () => {
+  test("a reload, a fragment link and the shell's own file are left to the browser", async () => {
     const page = browser.page();
     await page.goto(door("/"));
     await page.getByRole("heading", { level: 1, name: "Pull requests" }).waitFor();
@@ -318,5 +318,22 @@ describe("paths that are no page", () => {
     await page.getByRole("heading", { level: 1, name: "Pull requests" }).waitFor();
     expect(shells()).toBe(before + 1);
     expect(await page.evaluate(`window.prqPage ?? null`)).toBeNull();
+
+    // A link to the shell's own file, which the Worker's assets answer: a page of the UI would say there is none.
+    await page.evaluate(`(() => {
+      window.prqPage = "second";
+      const link = document.createElement("a");
+      link.href = "/index.html";
+      link.textContent = "Shell";
+      document.querySelector("main").append(link);
+    })()`);
+    await page.getByRole("link", { name: "Shell" }).click();
+    await vi.waitFor(
+      async () =>
+        expect(await page.evaluate(`[window.prqPage ?? null, document.querySelector("main h1")?.textContent]`)).toEqual(
+          [null, "Pull requests"],
+        ),
+      { timeout: 10_000 },
+    );
   });
 });

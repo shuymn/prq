@@ -1,6 +1,6 @@
 // The client's routes (plan §1.3) on the Navigation API: a same-origin navigation to a page of the UI is handled in
-// the page, without loading it again; a reload, a fragment link, a download, a form and the Worker's own routes are
-// left to the browser. The route follows the current history entry.
+// the page, without loading it again; a reload, a fragment link, a download, a form, the shell's own file
+// (/index.html) and the Worker's own routes are left to the browser. The route follows the current history entry.
 
 import { PrRef } from "@prq/protocol";
 import { useSyncExternalStore } from "react";
@@ -44,6 +44,7 @@ function intercept(event: NavigateEvent): void {
     event.formData !== null ||
     event.navigationType === "reload" ||
     destination.origin !== location.origin ||
+    destination.pathname === "/index.html" ||
     WORKER_PATHS.test(destination.pathname)
   ) {
     return;
