@@ -1,0 +1,21 @@
+@layer components {
+  /* The box is a dialog's (modal.css): the title, the field filling it with the failure under it, the actions. */
+  [data-component="SkillRegisterForm"] {
+    & > .body {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-group);
+    }
+
+    & [data-component="TextField"] {
+      inline-size: 100%;
+    }
+
+    & .progress {
+      flex: 1;
+      font: var(--text-small);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+  }
+}

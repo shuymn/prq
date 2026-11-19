@@ -1,8 +1,7 @@
 import "./RepoMenu.css";
 import type { ComponentProps, MouseEvent } from "react";
 
-import { Button } from "./Button.tsx";
-import { Notice } from "./Notice.tsx";
+import { ReadFailed } from "./Notice.tsx";
 import { RepoMenuItem } from "./RepoMenuItem.tsx";
 
 // What the menu lists: the repositories as read (each value its owner/name, each label as the list names it), while
@@ -50,11 +49,7 @@ export function RepoMenu({
       onBlur={onBlur}
     >
       {items.state === "failed" ? (
-        <Notice
-          tone="danger"
-          title="Couldn't load repositories"
-          actions={<Button variant="secondary" size="sm" label="Try again" onClick={onRetry} />}
-        />
+        <ReadFailed subject="repositories" onRetry={onRetry} />
       ) : (
         <div focusgroup="menu nomemory" aria-labelledby={labelledBy}>
           <div role="group" aria-label="Repositories">

@@ -1,9 +1,11 @@
 // The PR list in Chrome against the real Worker in wrangler's local runtime, through the Access stand-in's browser door
-// (plan P2.1–P2.4, P2.7–P2.9, P5.1, P5.2): what the list reads and when, a pass superseded while it pages, the
-// repository menu, the agent pool, the version notice under an earlier deploy's bundle, and the paths that are no page.
+// (plan P2.1–P2.4, P2.7–P2.9, P5.1, P5.2, P6.1, P6.7): what the list reads and when, a pass superseded while it pages,
+// the repository menu, the agent pool, the version notice under an earlier deploy's bundle, the paths that are no page,
+// and the settings page the header links to: a prompt saved, the page over the Hub's socket, and its chunk failing to
+// load.
 
-import { LedgerPage, MAX_TITLE_CHARS, MAX_URL_CHARS, type PrRef } from "@prq/protocol";
-import type { Page } from "playwright";
+import { Instructions, LedgerPage, MAX_TITLE_CHARS, MAX_URL_CHARS, type PrRef } from "@prq/protocol";
+import type { Page, WebSocket } from "playwright";
 import * as v from "valibot";
 import { describe, expect, test, vi } from "vitest";
 
@@ -51,6 +53,9 @@ async function freshRead(): Promise<{ rows: string[]; pages: number[] }> {
   } while (cursor !== null);
   return { rows, pages };
 }
+
+// The old bundle's settings chunk, as a path or in a console error.
+const OLD_SETTINGS = /\/assets\/old-SettingsScreen-[\w-]+\.(js|css)\b/;
 
 // Gates the Hub's upgrades, a retry's too, until released.
 const gateHub = () => gateUpgrades(stack.access().door, (path) => path.startsWith("/agents/hub/"), 5);
@@ -269,7 +274,9 @@ describe("the agent pool", () => {
 });
 
 describe("an earlier deploy's bundle", () => {
-  test("shows one version notice; its filter works; Reload loads the current shell without it", async ({ signal }) => {
+  test("shows one version notice; its filter works; its settings chunk, gone from the assets, fails without a second notice; Reload loads the current shell without it", async ({
+    signal,
+  }) => {
     const bundle = await buildOldBundle({ signal });
     try {
       await push(stack.worker(), pr("prq", 1), sha("a"));
@@ -287,14 +294,90 @@ describe("an earlier deploy's bundle", () => {
       );
       await page.locator('a.title[href="/pr/shuymn/prq/1"]').waitFor();
 
+      // The Worker's assets hold none of the old bundle's files: its settings chunk is answered as the shell is.
       stack.access().door.serve(null);
+      browser.expectConsoleError((message) => OLD_SETTINGS.test(message));
+      await page.getByRole("link", { name: "Settings" }).click();
+      await vi.waitFor(() =>
+        expect(stack.access().door.log.find((entry) => OLD_SETTINGS.test(entry.path))).toMatchObject({ status: 200 }),
+      );
+      await vi.waitFor(async () =>
+        expect(browser.recorded().consoleErrors.some((message) => OLD_SETTINGS.test(message))).toBe(true),
+      );
+      await page.getByText("A new version is available").waitFor();
+      expect(await page.locator('[data-component="Notice"]').count()).toBe(1);
+
       await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "Reload" }).click()]);
+      await page.getByRole("heading", { level: 2, name: "Prompts" }).waitFor();
       await pool(page, "Cloud only").waitFor();
       expect(await version.innerText()).toBe(SERVER_VERSION);
       expect(await page.locator('[data-component="Notice"]').count()).toBe(0);
     } finally {
       await bundle.close();
     }
+  });
+});
+
+describe("the settings page", () => {
+  test("a prompt saved there is the Worker's; it opens and closes over the Hub's one socket (P6.1, P6.7)", async () => {
+    const page = browser.page();
+    const hub: WebSocket[] = [];
+    page.on("websocket", (socket) => {
+      if (new URL(socket.url()).pathname.startsWith("/agents/hub/")) {
+        hub.push(socket);
+      }
+    });
+    await page.goto(door("/"));
+    await pool(page, "Cloud only").waitFor();
+    await page.getByRole("link", { name: "Settings" }).click();
+    await page.getByRole("textbox", { name: "Analysis prompt" }).fill("Write in Japanese.");
+    await page.getByRole("form", { name: "Analysis prompt" }).getByRole("button", { name: "Save prompt" }).click();
+    await page.getByRole("form", { name: "Analysis prompt" }).getByText("Saved at").waitFor();
+    const worker = stack.worker();
+    const read = await fetch(new URL("/api/instructions", worker.url()), {
+      headers: { "Cf-Access-Jwt-Assertion": await worker.token() },
+    });
+    expect(v.parse(Instructions, await read.json()).prompts.analysis.text).toBe("Write in Japanese.");
+
+    await page.goBack();
+    await page.getByRole("heading", { level: 1, name: "Pull requests" }).waitFor();
+    expect(hub.map((socket) => socket.isClosed())).toEqual([false]);
+  });
+
+  test("its chunk answered 404 shows the asset notice, the error allowed for that chunk alone (P6.7)", async () => {
+    const page = browser.page();
+    const chunk = /\/assets\/SettingsScreen-[\w-]+\.js\b/;
+    await page.route(chunk, (route) => route.fulfill({ status: 404 }));
+    browser.expectConsoleError((message) => chunk.test(message));
+    await page.goto(door("/"));
+    await pool(page, "Cloud only").waitFor();
+    await page.getByRole("link", { name: "Settings" }).click();
+    await page.getByText("Couldn't load part of this page.").waitFor();
+    expect(await page.locator('[data-component="Notice"]').count()).toBe(1);
+    expect(browser.recorded().consoleErrors.filter((message) => chunk.test(message)).length).toBeGreaterThan(0);
+  });
+
+  test("a save answered with a time it cannot show shows Couldn't show settings in its place; the header and the other pages keep working (LOW 2)", async () => {
+    const page = browser.page();
+    await page.route("**/api/prompts/analysis", (route) =>
+      route.fulfill({ json: { text: "Write in Japanese.", savedAt: 8_640_000_000_000_001 } }),
+    );
+    browser.expectConsoleError((message) => message.includes("RangeError"));
+    await page.goto(door("/"));
+    await pool(page, "Cloud only").waitFor();
+    await page.getByRole("link", { name: "Settings" }).click();
+    await page.getByRole("textbox", { name: "Analysis prompt" }).fill("Write in Japanese.");
+    await page.getByRole("form", { name: "Analysis prompt" }).getByRole("button", { name: "Save prompt" }).click();
+    await page.getByText("Couldn't show settings").waitFor();
+    expect(await page.getByText("Couldn't load part of this page.").count()).toBe(0);
+
+    await pool(page, "Cloud only").click();
+    await page.locator('[data-component="PoolPopover"]').waitFor();
+    await page.keyboard.press("Escape");
+    await page.goBack();
+    await page.getByRole("heading", { level: 1, name: "Pull requests" }).waitFor();
+    await page.getByRole("link", { name: "Settings" }).click();
+    await page.getByText("Couldn't show settings").waitFor();
   });
 });
 

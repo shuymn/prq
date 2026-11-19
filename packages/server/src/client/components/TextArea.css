@@ -1,0 +1,15 @@
+@layer components {
+  /* The label, hint, boundary and error are TextField's (TextField.css). The input grows with its text from room for
+     three lines (the bottom inset) to ten, then scrolls. */
+  [data-component="TextArea"] {
+    inline-size: var(--size-panel);
+
+    & .input {
+      field-sizing: content;
+      max-block-size: 10lh;
+      padding: calc(var(--inset-control-md) - var(--border-width-thin));
+      padding-block-end: calc(var(--inset-textarea) - var(--border-width-thin));
+      resize: none;
+    }
+  }
+}

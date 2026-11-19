@@ -28,5 +28,13 @@
       color: var(--color-fg-default);
       background: var(--color-bg-muted);
     }
+
+    /* The link to the page shown: a fill and an indicator below, as a selected segment. The top's padding matches the
+       thicker bottom border, so the glyph stays centred. */
+    &[aria-current="page"] {
+      padding-block-start: var(--border-width-thin);
+      border-block-end: var(--border-width-thick) solid var(--color-accent-fg);
+      background: var(--color-bg-muted);
+    }
   }
 }

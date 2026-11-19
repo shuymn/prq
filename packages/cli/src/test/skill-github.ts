@@ -152,9 +152,14 @@ export async function api(worker: Worker, method: string, path: string, body?: u
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  const text = await res.text();
-  return { status: res.status, body: text === "" ? null : (JSON.parse(text) as unknown) };
+  return answerOf(res.status, await res.text());
 }
+
+// A response's status and its body: JSON, or null when it has none.
+export const answerOf = (status: number, text: string) => ({
+  status,
+  body: text === "" ? null : (JSON.parse(text) as unknown),
+});
 
 // The link to a skill's SKILL.md at a ref (a branch, a tag or a commit).
 export function skillLink(dir: SkillDir, ref: string): string {

@@ -15581,7 +15581,7 @@
                           "fill": "$color-fg-muted",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Resolving main and fetching the skill…",
+                          "content": "Resolving the ref and fetching the skill…",
                           "lineHeight": "$text-small-line-height",
                           "fontFamily": "$text-small-font-family",
                           "fontSize": "$text-small-font-size",

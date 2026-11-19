@@ -1,5 +1,6 @@
 // The gallery against the design (plan P2.11, P2.12): one entry per inventory name and state ID, as far as the UI has
-// them; each component entry renders its name's props; each PR list state shows what tells it apart.
+// them; each component entry renders its name's props; each PR list, detail and settings state shows what tells it
+// apart.
 
 import { describe, expect, test } from "vitest";
 import { render, type RenderResult } from "vitest-browser-react";
@@ -15,18 +16,10 @@ import { REGISTRY } from "./registry.tsx";
 
 const design = designNames(componentsMd, screensMd);
 
-// What the UI has yet to build, by component and by state ID (plan §4: the settings in PR 6). A pending item must name
-// something the design has.
-const PENDING_COMPONENTS = [
-  "TextField",
-  "TextArea",
-  "PromptEditor",
-  "SkillRow",
-  "SkillRegisterForm",
-  "SkillReview",
-  "Dialog",
-];
-const PENDING_STATES = ["settings."];
+// What the UI has yet to build, by component and by state ID (plan §4): nothing now. A pending item must name something
+// the design has.
+const PENDING_COMPONENTS: string[] = [];
+const PENDING_STATES: string[] = [];
 
 // States the code has and the design draws no frame for, which the gallery shows for the owner's review beside the
 // others (design/components.md): the pool's popover while its read is under way.
@@ -469,5 +462,95 @@ describe("the PR detail's states", () => {
     const check = checks[name];
     expect(check).toBeDefined();
     await check?.(await render(entry(name)));
+  });
+});
+
+// The settings page's dialog, its editors' status, its rows and a button's state.
+const settingsDialog = () => document.querySelector<HTMLDialogElement>("dialog");
+const editorStatus = (title: string) => page.getByRole("form", { name: title }).element().getAttribute("data-status");
+const skillRows = () =>
+  [...document.querySelectorAll("[data-component=SkillRow]")].map((row) => [
+    row.querySelector(".name")?.textContent,
+    row.getAttribute("data-state"),
+  ]);
+const busy = (name: string) => page.getByRole("button", { name, exact: true }).element().getAttribute("data-state");
+
+describe("the settings page's states", () => {
+  // What tells each state apart (plan §1.17): its prompts, its skills and the dialog open over them.
+  const checks: Record<string, () => Promise<void>> = {
+    "settings.default": async () => {
+      expect([editorStatus("Analysis prompt"), editorStatus("Answer prompt")]).toEqual(["idle", "idle"]);
+      expect(skillRows()).toEqual([
+        ["review", "rest"],
+        ["yomiyasu", "rest"],
+      ]);
+      expect(settingsDialog()).toBeNull();
+      await expect.element(page.getByRole("button", { name: "Add skill" })).toBeVisible();
+    },
+    "settings.empty": async () => {
+      expect([editorStatus("Analysis prompt"), editorStatus("Answer prompt")]).toEqual(["empty", "empty"]);
+      await visible("No skills registered");
+      expect(skillRows()).toEqual([]);
+      expect(settingsDialog()).toBeNull();
+    },
+    "settings.registering": async () => {
+      expect(settingsDialog()?.open).toBe(true);
+      await visible("Resolving the ref and fetching the skill…");
+      await expect
+        .element(page.getByRole("textbox", { name: "SKILL.md URL" }))
+        .toHaveValue("https://github.com/shuymn/kopje/blob/main/skills/changelog/SKILL.md");
+      expect(busy("Review skill")).toBe("busy");
+    },
+    "settings.register-review": async () => {
+      expect(settingsDialog()?.open).toBe(true);
+      await expect.element(page.getByRole("button", { name: "Register at c3d4e5f" })).toBeVisible();
+      expect(document.querySelector("dialog [data-component=SkillReview]")?.getAttribute("data-mode")).toBe("register");
+    },
+    "settings.register-failed": async () => {
+      expect(settingsDialog()?.open).toBe(true);
+      await visible("Register failed");
+      await visible("No SKILL.md at this link. Check that it points to a SKILL.md file.");
+      expect(busy("Review skill")).toBe("rest");
+    },
+    "settings.saving": async () => {
+      expect([editorStatus("Analysis prompt"), editorStatus("Answer prompt")]).toEqual(["saving", "saved"]);
+      await visible("Saving…");
+      await visible("Saved at 10:02");
+      expect(settingsDialog()).toBeNull();
+    },
+    "settings.save-failed": async () => {
+      expect([editorStatus("Analysis prompt"), editorStatus("Answer prompt")]).toEqual(["idle", "failed"]);
+      await visible("Save failed: the server did not respond. Your text is kept; save again.");
+      expect(settingsDialog()).toBeNull();
+    },
+    "settings.update": async () => {
+      expect(settingsDialog()?.open).toBe(true);
+      await expect.element(page.getByRole("button", { name: "Apply update to e4f5a6b" })).toBeVisible();
+      expect(skillRows()).toEqual([
+        ["review", "update-review"],
+        ["yomiyasu", "rest"],
+      ]);
+      await expect.element(page.getByRole("textbox", { name: "Ref" })).toHaveValue("v2");
+    },
+    "settings.remove": async () => {
+      expect(settingsDialog()?.open).toBe(true);
+      await expect.element(page.getByRole("heading", { name: "Remove the skill review?" })).toBeVisible();
+      await expect.element(page.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    },
+  };
+
+  test("each state has a check, and only the states the registry has", () => {
+    expect(Object.keys(checks).toSorted()).toEqual(
+      REGISTRY.map((candidate) => candidate.name)
+        .filter((name) => name.startsWith("settings."))
+        .toSorted(),
+    );
+  });
+
+  test.each(Object.keys(checks))("%s shows what tells it apart", async (name) => {
+    const check = checks[name];
+    expect(check).toBeDefined();
+    await render(entry(name));
+    await check?.();
   });
 });

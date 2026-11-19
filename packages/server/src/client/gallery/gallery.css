@@ -26,4 +26,11 @@
       display: flex;
     }
   }
+
+  /* A row of a list (SkillRow) alone, in the gallery and on its own page. */
+  .specimen-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
 }

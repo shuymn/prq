@@ -71,9 +71,11 @@ export function useBrowser(): Session {
     opened.on("response", (response) => {
       recorded.responses.push({ url: response.url(), status: response.status(), headers: response.headers() });
     });
+    // Each console error with the URL it came from, which a failed load's text leaves out.
     opened.on("console", (message) => {
       if (message.type() === "error") {
-        recorded.consoleErrors.push(message.text());
+        const { url } = message.location();
+        recorded.consoleErrors.push(url === "" ? message.text() : `${message.text()} (${url})`);
       }
     });
     opened.on("pageerror", (error) => recorded.consoleErrors.push(`uncaught: ${error.message}`));

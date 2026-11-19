@@ -13,15 +13,20 @@
 // 5. G3, with a pull request argument: the scripts step with containers on and the scripted model (skill-scripts.ts),
 //    then the smoke with the model of packages/server/.dev.vars (skill-smoke.ts).
 // 6. G8, with --local and a pull request: the compiled prq as a local agent, yomiyasu registered again (skill-local.ts).
-// It prints what each step saw (never a token or the key) and passes when every step held.
+// With --browser, the settings page in the owner's Chrome (owner-browser.ts) makes G1's register and G7's updates and
+// removal, sending the requests the check otherwise sends itself, and the same assertions follow each; the page updates
+// by a ref, so the updates by link and by permalink name the link's branch and the commit. It prints what each step saw
+// (never a token or the key) and passes when every step held.
 
 import { Instructions, type PrRef, Skill, SkillPreview, SkillUpdatePreview } from "@prq/protocol";
 import * as v from "valibot";
 
+import { openOwnerBrowser, type OwnerBrowser } from "./owner-browser.ts";
 import type { GithubApp } from "./reconcile.ts";
 import { SCRIPTED_MODEL, serveScripted } from "./scripted.ts";
 import { checkAfterRemoval, checkContext, type Verdict } from "./skill-context.ts";
 import {
+  answerOf,
   api,
   appGithub,
   type Github,
@@ -61,6 +66,105 @@ const Bundle = v.object({
 
 function link(ref: string): string {
   return skillLink(YOMIYASU, ref);
+}
+
+// A route's answer, as the check reads it.
+type Answer = { status: number; body: unknown };
+
+// How the check registers, updates and removes the skill: through the API itself, or through the settings page.
+type Driver = {
+  previewRegister(url: string): Promise<Answer>;
+  confirmRegister(preview: SkillPreview): Promise<Answer>;
+  // The API previews the target; the page, which takes a ref, the ref.
+  previewUpdate(target: { url: string } | { ref: string }, ref: string): Promise<Answer>;
+  applyUpdate(preview: SkillUpdatePreview): Promise<Answer>;
+  remove(): Promise<Answer>;
+};
+
+function apiDriver(worker: Worker): Driver {
+  return {
+    previewRegister: (url) => api(worker, "POST", "/api/skills/preview", { url }),
+    confirmRegister: ({ name, source, ref, sha }) => api(worker, "POST", "/api/skills", { name, source, ref, sha }),
+    previewUpdate: (target) => api(worker, "POST", `/api/skills/${NAME}/preview`, target),
+    applyUpdate: ({ name, source, ref, sha, current }) =>
+      api(worker, "PUT", `/api/skills/${NAME}`, { name, source, ref, sha, expectedRev: current.rev }),
+    remove: () => api(worker, "DELETE", `/api/skills/${NAME}`),
+  };
+}
+
+// How long the check waits for the page's request to be answered: past the page's own bound for it (75 s for a
+// preview, 165 s for a confirm, 45 s for a removal; packages/server/src/client/settings.ts), after which the page sends
+// nothing more.
+const PAGE_PREVIEW_MS = 90_000;
+const PAGE_CONFIRM_MS = 180_000;
+const PAGE_REMOVE_MS = 60_000;
+
+// The settings page in the owner's Chrome: each step clicks what a host would, and gives the answer the page got to
+// the request it sent.
+async function pageDriver(shown: OwnerBrowser): Promise<Driver> {
+  const { page } = shown;
+  await page.goto(shown.url("/settings"));
+  await page.getByRole("heading", { level: 2, name: "Prompts" }).waitFor();
+  const row = page.locator('[data-component="SkillRow"]', {
+    has: page.getByRole("heading", { level: 3, name: NAME, exact: true }),
+  });
+  const answered = async (method: string, path: string, ms: number, act: () => Promise<void>): Promise<Answer> => {
+    const response = page.waitForResponse(
+      (candidate) => candidate.request().method() === method && new URL(candidate.url()).pathname === path,
+      { timeout: ms },
+    );
+    try {
+      await act();
+    } catch (error) {
+      response.catch(() => undefined);
+      throw error;
+    }
+    const answer = await response;
+    return answerOf(answer.status(), await answer.text());
+  };
+  // A review the check moved past is closed first, as Escape closes it.
+  const closeDialog = async () => {
+    if ((await page.locator("dialog[open]").count()) > 0) {
+      await page.keyboard.press("Escape");
+      await page.locator("dialog").waitFor({ state: "detached" });
+    }
+  };
+  return {
+    async previewRegister(url) {
+      await closeDialog();
+      await page.getByRole("button", { name: "Add skill" }).click();
+      await page.getByRole("textbox", { name: "SKILL.md URL" }).fill(url);
+      return answered("POST", "/api/skills/preview", PAGE_PREVIEW_MS, () =>
+        page.getByRole("button", { name: "Review skill" }).click(),
+      );
+    },
+    confirmRegister: (preview) =>
+      answered("POST", "/api/skills", PAGE_CONFIRM_MS, () =>
+        page.getByRole("button", { name: `Register at ${preview.sha.slice(0, 7)}` }).click(),
+      ),
+    async previewUpdate(_target, ref) {
+      await closeDialog();
+      const field = row.getByRole("textbox", { name: "Ref" });
+      if (!(await field.isVisible())) {
+        await row.getByRole("button", { name: "Update", exact: true }).click();
+      }
+      await field.fill(ref);
+      return answered("POST", `/api/skills/${NAME}/preview`, PAGE_PREVIEW_MS, () =>
+        row.getByRole("button", { name: "Review update" }).click(),
+      );
+    },
+    applyUpdate: (preview) =>
+      answered("PUT", `/api/skills/${NAME}`, PAGE_CONFIRM_MS, () =>
+        page.getByRole("button", { name: `Apply update to ${preview.sha.slice(0, 7)}` }).click(),
+      ),
+    async remove() {
+      await closeDialog();
+      await row.getByRole("button", { name: "Remove", exact: true }).click();
+      return answered("DELETE", `/api/skills/${NAME}`, PAGE_REMOVE_MS, () =>
+        page.getByRole("button", { name: "Remove skill" }).click(),
+      );
+    },
+  };
 }
 
 // The Worker's requests to GitHub's API, counted where the harness hands them to this process's fetch.
@@ -114,11 +218,11 @@ async function previewSlashedBranch(worker: Worker, github: Github, verdict: Ver
 }
 
 // G1: register main's skill and compare it with GitHub's tuple and tree.
-async function register(worker: Worker, github: Github, verdict: Verdict): Promise<Skill | null> {
+async function register(worker: Worker, driver: Driver, github: Github, verdict: Verdict): Promise<Skill | null> {
   let preview: SkillPreview | null = null;
   for (let attempt = 1; attempt <= 3 && preview === null; attempt += 1) {
     const before = await github.commitOf(YOMIYASU, "heads/main");
-    const res = await api(worker, "POST", "/api/skills/preview", { url: link("main") });
+    const res = await driver.previewRegister(link("main"));
     const after = await github.commitOf(YOMIYASU, "heads/main");
     if (res.status !== 200) {
       verdict(false, `G1: the preview answered ${res.status} ${JSON.stringify(res.body)}`);
@@ -150,12 +254,7 @@ async function register(worker: Worker, github: Github, verdict: Verdict): Promi
       `${preview.allowedTools?.length ?? 0} allowed-tools entries; GitHub's tuple ${tuple(preview) === tuple(expected) ? "equal" : "differs"}`,
   );
   const from = worker.logs().length;
-  const res = await api(worker, "POST", "/api/skills", {
-    name: preview.name,
-    source: preview.source,
-    ref: preview.ref,
-    sha: preview.sha,
-  });
+  const res = await driver.confirmRegister(preview);
   if (res.status !== 201) {
     verdict(false, `G1: the confirm answered ${res.status} ${JSON.stringify(res.body)}`);
     return null;
@@ -187,13 +286,14 @@ async function register(worker: Worker, github: Github, verdict: Verdict): Promi
 // G7: one update by its preview's target, applied with the previewed revision.
 async function update(
   worker: Worker,
+  driver: Driver,
   github: Github,
   verdict: Verdict,
   label: string,
   target: { url: string } | { ref: string },
   expected: { ref: { name: string; kind: string }; sha: string },
 ): Promise<Skill | null> {
-  const res = await api(worker, "POST", `/api/skills/${NAME}/preview`, target);
+  const res = await driver.previewUpdate(target, expected.ref.name);
   if (res.status !== 200) {
     verdict(false, `G7 ${label}: the preview answered ${res.status} ${JSON.stringify(res.body)}`);
     return null;
@@ -206,13 +306,7 @@ async function update(
     `G7 ${label} preview: current ${JSON.stringify(preview.current.ref)} ${preview.current.sha.slice(0, 7)} rev ${preview.current.rev} → ` +
       `new ${JSON.stringify(preview.ref)} ${preview.sha.slice(0, 7)} (GitHub's: ${expected.sha.slice(0, 7)})`,
   );
-  const applied = await api(worker, "PUT", `/api/skills/${NAME}`, {
-    name: preview.name,
-    source: preview.source,
-    ref: preview.ref,
-    sha: preview.sha,
-    expectedRev: preview.current.rev,
-  });
+  const applied = await driver.applyUpdate(preview);
   if (applied.status !== 200) {
     verdict(false, `G7 ${label}: the apply answered ${applied.status} ${JSON.stringify(applied.body)}`);
     return null;
@@ -232,7 +326,7 @@ export type SmokeSettings = { app: GithubApp; model: ModelSettings; pr: PrRef };
 export async function checkSkills(
   app: GithubAppSettings,
   print: (line: string) => void,
-  { smoke, local }: { smoke: SmokeSettings | null; local: PrRef | null },
+  { smoke, local, browser }: { smoke: SmokeSettings | null; local: PrRef | null; browser: boolean },
 ): Promise<boolean> {
   let ok = true;
   const verdict: Verdict = (held, line) => {
@@ -250,10 +344,16 @@ export async function checkSkills(
     scripted.stop();
     throw error;
   }
+  let shown: OwnerBrowser | null = null;
   const requests = countGithub();
   try {
+    if (browser) {
+      shown = await openOwnerBrowser(worker);
+      print("the settings page in Chrome registers, updates and removes the skill");
+    }
+    const driver = shown === null ? apiDriver(worker) : await pageDriver(shown);
     await previewSlashedBranch(worker, github, verdict);
-    const registered = await register(worker, github, verdict);
+    const registered = await register(worker, driver, github, verdict);
     if (registered === null) {
       return false;
     }
@@ -263,6 +363,7 @@ export async function checkSkills(
     }
     const byLink = await update(
       worker,
+      driver,
       github,
       verdict,
       "by link",
@@ -285,6 +386,7 @@ export async function checkSkills(
     );
     const byRef = await update(
       worker,
+      driver,
       github,
       verdict,
       "by ref",
@@ -297,6 +399,7 @@ export async function checkSkills(
     const pinned = await github.commitOf(YOMIYASU, `tags/${PERMALINK_TAG}`);
     const byPermalink = await update(
       worker,
+      driver,
       github,
       verdict,
       "by permalink",
@@ -309,7 +412,7 @@ export async function checkSkills(
     if (byLink === null || byRef === null || byPermalink === null) {
       return false;
     }
-    const removed = await api(worker, "DELETE", `/api/skills/${NAME}`);
+    const removed = await driver.remove();
     const listed = v.parse(Instructions, (await api(worker, "GET", "/api/instructions")).body).skills;
     const hub = await worker.durableObject("Hub", "hub");
     const bundle = await hub["skillBundle"]?.(NAME);
@@ -325,6 +428,7 @@ export async function checkSkills(
     print(`the Worker made ${requests.count()} requests to GitHub's API`);
   } finally {
     requests.stop();
+    await shown?.close();
     await worker.close();
     scripted.stop();
   }

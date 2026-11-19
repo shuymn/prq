@@ -23,6 +23,13 @@ agent.
    and `PATH` starts with this checkout's `packages/cli/dist`. Then run `prq reconcile` with it: exit 0 and
    `"next":"wait"` means the stack answers as the Worker does.
 
+## Watch it in the web UI
+
+The stack also prints `The web UI, through the stand-in's browser door: <url>`. The door forwards a browser's requests
+and WebSockets to the Worker with the application's token, as Access passes a signed-in browser's on, so Chrome at that
+URL shows the pull request list, `acme/widgets#7`'s detail and the settings page as the session's jobs move, with no
+sign-in. Its requests are the browser's, not an agent's: the log below leaves them out.
+
 ## Run a session
 
 The session runs in a directory of its own with the environment exported (`set -a; source <dir>/session.env; set +a`)

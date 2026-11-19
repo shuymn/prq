@@ -1,0 +1,82 @@
+@layer components {
+  /* The native dialog draws nothing of its own: the box inside it does. It fades in and out of the top layer
+     (animate-to-from-top-layer); a fade is all it does, so reduced motion needs nothing else. Scrolling over it or its
+     backdrop never reaches the page below (prevent-page-scroll-under-modal-dialog). */
+  dialog.modal {
+    padding: 0;
+    border: 0;
+    color: var(--color-fg-default);
+    background: transparent;
+    overscroll-behavior: contain;
+    opacity: 0;
+    transition-property: opacity, display, overlay;
+    transition-duration: var(--duration-close);
+    transition-timing-function: var(--easing-exit);
+    transition-behavior: allow-discrete;
+
+    &[open] {
+      opacity: 1;
+      transition-duration: var(--duration-open);
+      transition-timing-function: var(--easing-enter);
+
+      @starting-style {
+        opacity: 0;
+      }
+    }
+
+    &::backdrop {
+      overflow: hidden;
+      overscroll-behavior: contain;
+      background: transparent;
+      transition-property: background-color, display, overlay;
+      transition-duration: var(--duration-close);
+      transition-timing-function: var(--easing-exit);
+      transition-behavior: allow-discrete;
+    }
+
+    &[open]::backdrop {
+      background: var(--color-bg-backdrop);
+      transition-duration: var(--duration-open);
+      transition-timing-function: var(--easing-enter);
+
+      @starting-style {
+        background: transparent;
+      }
+    }
+  }
+
+  /* A dialog's box (SkillRegisterForm, SkillReview, Dialog): its title, its content and its actions a section apart. */
+  .dialog-box {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-section);
+    box-sizing: border-box;
+    inline-size: var(--size-dialog);
+    padding: var(--inset-dialog);
+    border: var(--border-width-thin) solid var(--color-border-default);
+    border-radius: var(--radius-lg);
+    color: var(--color-fg-default);
+    background: var(--color-bg-overlay);
+    box-shadow: var(--shadow-overlay);
+
+    & h2,
+    & p {
+      margin: 0;
+    }
+
+    /* The box's own title and actions, not those of a Notice inside it. */
+    & > .title,
+    & > .head > .title {
+      font: var(--text-heading);
+      font-size-adjust: from-font;
+    }
+
+    /* The actions at the end, Cancel first. */
+    & > .actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--gap-related);
+    }
+  }
+}

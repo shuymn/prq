@@ -7,7 +7,7 @@
 import "./PrDetail.css";
 import type { ReactNode, Ref } from "react";
 
-import { Button, ButtonLink } from "../components/Button.tsx";
+import { ButtonLink } from "../components/Button.tsx";
 import { Composer } from "../components/Composer.tsx";
 import { ConnectionBanner } from "../components/ConnectionBanner.tsx";
 import { Disclosure } from "../components/Disclosure.tsx";
@@ -17,7 +17,7 @@ import { IconButton } from "../components/IconButton.tsx";
 import { JobRow } from "../components/JobRow.tsx";
 import { Markdown } from "../components/Markdown.tsx";
 import { Message } from "../components/Message.tsx";
-import { Notice } from "../components/Notice.tsx";
+import { Notice, ReadFailed } from "../components/Notice.tsx";
 import { PoolStatus, type PoolSummary } from "../components/PoolStatus.tsx";
 import { PrHeader } from "../components/PrHeader.tsx";
 import { useElapsed } from "../components/RelativeTime.tsx";
@@ -410,7 +410,6 @@ export function PrDetail({
     );
   }
   const ready = body.kind === "ready" ? body : null;
-  const tryAgain = <Button variant="secondary" size="sm" label="Try again" onClick={actions.onReadAgain} />;
   return (
     <div className="pr-detail" data-layout={layout} data-rail={railCollapsed ? "collapsed" : "expanded"}>
       <div className="main">
@@ -429,16 +428,11 @@ export function PrDetail({
         )}
         {poolLine}
         {body.kind === "load-failed" ? (
-          <Notice tone="danger" title="Couldn't load the summary and conversation" actions={tryAgain} />
+          <ReadFailed subject="the summary and conversation" onRetry={actions.onReadAgain} />
         ) : (
           <>
             {ready?.refreshFailed === true && (
-              <Notice
-                tone="danger"
-                title="Couldn't refresh the summary and conversation"
-                text="Showing what was loaded before."
-                actions={tryAgain}
-              />
+              <ReadFailed subject="the summary and conversation" refresh onRetry={actions.onReadAgain} />
             )}
             <SummarySection body={ready} layout={layout} menuOpen={menuOpen} actions={actions} />
             <Conversation body={ready} layout={layout} actions={actions} />

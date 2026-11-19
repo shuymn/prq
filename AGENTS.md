@@ -46,10 +46,12 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`; host
 - Tests run the Worker without Docker (`dev.enable_containers: false` in `packages/server/wrangler.jsonc`), so the
   Workspace's container is a fake there. The real container is the owner's check: with Docker running and
   `packages/server/.dev.vars` holding the model, the GitHub App and `GITHUB_INSTALLATION_ID` (see
-  `packages/cli/src/test/workspace-check.ts`), `pnpm run check:workspace <owner>/<repo>#<number>` in `packages/cli`
-  runs the Worker in wrangler's local runtime with containers on, against a pull request of a public repository the
-  App is installed on, and removes the containers it started. `pnpm run check:compaction [--japanese]
-  [--analysis-prompt <text>] [--answer-prompt <text>] <owner>/<repo>#<number>` runs the same way with a small
+  `packages/cli/src/test/workspace-check.ts`), `pnpm run check:workspace [--browser] <owner>/<repo>#<number>` in
+  `packages/cli` runs the Worker in wrangler's local runtime with containers on, against a pull request of a public
+  repository the App is installed on, and removes the containers it started. With `--browser` it then opens headed
+  Chrome on the pull request through the stand-in's browser door and pushes the pull request's base as its next head:
+  the completed summary stays shown with "Summarizing" and that SHA while the new analysis streams. `pnpm run
+  check:compaction [--japanese] [--analysis-prompt <text>] [--answer-prompt <text>] <owner>/<repo>#<number>` runs the same way with a small
   `MODEL_CONTEXT_TOKENS` (such as 20000) and checks compaction. The prompt options save the host's prompts before the
   analysis (give two different texts) and check that every model request holds only its own kind's prompt; with an
   answer prompt it also reports the language of an answer to a question in each language, apart from its verdict.
@@ -61,9 +63,10 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`; host
   (`--window` sets `MODEL_CONTEXT_TOKENS`), and deleted only by `pnpm run dev-vars remove`; `pnpm run dev-vars status`
   names the variables it sets. No command prints a value but the window `write` reports
   (`packages/cli/src/test/dev-vars.ts`).
-- `pnpm run check:skills [--local <owner>/<repo>#<number> | <owner>/<repo>#<number>]` in `packages/cli` previews,
-  registers, updates and removes the public skill `skills/yomiyasu` of `nanaism/yomiyasu` through the Worker against
-  real GitHub, compares the stored copy, as the Hub holds it and as `/cli/skill` serves it, with what it reads from
+- `pnpm run check:skills [--browser] [--local <owner>/<repo>#<number> | <owner>/<repo>#<number>]` in `packages/cli`
+  previews, registers, updates and removes the public skill `skills/yomiyasu` of `nanaism/yomiyasu` through the Worker
+  against real GitHub (with `--browser`, through the settings page in headed Chrome at the stand-in's browser door,
+  updating by ref), compares the stored copy, as the Hub holds it and as `/cli/skill` serves it, with what it reads from
   GitHub itself, and runs cloud turns with it and a second skill under a scripted model, checking what their requests
   hold. With `--local` and a public pull request it then runs the compiled `prq` as a local agent on that pull request
   (claim, context, a refreshed context, checkout from a clone it makes in the OS temp directory, which fetches the

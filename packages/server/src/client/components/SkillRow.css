@@ -1,0 +1,96 @@
+@layer components {
+  /* A row of the skills list: what the skill is and Update and Remove at its end, then the ref form Update opens.
+     Rows are separated by a rule. */
+  [data-component="SkillRow"] {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-group);
+    box-sizing: border-box;
+    inline-size: var(--size-content);
+    max-inline-size: 100%;
+    padding: var(--inset-control-md);
+    border-block-end: var(--border-width-thin) solid var(--color-border-muted);
+
+    & h3,
+    & p {
+      margin: 0;
+    }
+
+    & .main {
+      display: flex;
+      gap: var(--gap-group);
+    }
+
+    & .info {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      gap: var(--gap-related);
+      min-inline-size: 0;
+    }
+
+    & .name {
+      font: var(--text-body-strong);
+      font-size-adjust: from-font;
+      color: var(--color-fg-default);
+    }
+
+    & .description {
+      font: var(--text-body);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+
+    & .source {
+      display: flex;
+      align-items: center;
+      gap: var(--gap-tight);
+      font: var(--text-small);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+
+    & .tools {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--gap-related);
+    }
+
+    & .actions {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--gap-related);
+    }
+
+    /* The field's label, hint and reason stack in the first column; the buttons sit on the input's line. */
+    & .ref-form {
+      display: grid;
+      grid-template-columns: var(--size-panel) auto auto;
+      justify-content: start;
+      column-gap: var(--gap-related);
+      row-gap: var(--gap-tight);
+
+      & [data-component="TextField"] {
+        display: contents;
+
+        & > * {
+          grid-column: 1;
+        }
+      }
+
+      & [data-component="Button"]:nth-of-type(1) {
+        grid-area: 3 / 2;
+      }
+
+      & [data-component="Button"]:nth-of-type(2) {
+        grid-area: 3 / 3;
+      }
+    }
+
+    /* Under the update's review (the page inert), unseen but still the control focus returns to. */
+    &[data-state="update-review"] .ref-form [data-component="Button"] {
+      opacity: 0;
+    }
+  }
+}
