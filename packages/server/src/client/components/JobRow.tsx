@@ -59,9 +59,9 @@ export function JobRow({
             )}
           </span>
         </div>
-        {retry !== undefined && retry !== null && <RetryButton state={retry} onRetry={onRetry} />}
+        <RetryButton state={retry} onRetry={onRetry} />
       </div>
-      {retry === "failed" && <RetryError />}
+      <RetryError state={retry} />
     </div>
   );
 }

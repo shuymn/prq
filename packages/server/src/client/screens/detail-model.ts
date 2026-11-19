@@ -43,7 +43,7 @@ export type QuestionItem = {
   failure?: "not-sent" | "unconfirmed";
 };
 
-// `run`: the job run it is the text of, when known.
+// `run`: the job run it is the text of, when known. `stalled`: a claim past the stall mark, its agent and its start.
 export type AnswerItem = {
   kind: "answer";
   id: string;
@@ -51,6 +51,7 @@ export type AnswerItem = {
   state: AnswerState;
   text: string;
   running: string | null;
+  stalled: { agent: string; since: number } | null;
   reason?: string;
   retry: RetryControl | null;
   sha: string | null;
@@ -74,9 +75,12 @@ export type DetailContent = {
   shown: Version | null;
   // A newer head being analyzed while another version is shown.
   summarizing: string | null;
-  // The newest analysis, possibly stalled: its head, its agent and the claim's start.
-  stalled: { sha: string; agent: string; since: number; retry: RetryControl | null } | null;
-  // The newest analysis, failed: its head, why, and the head of the summary shown instead of it.
+  // The current head's analysis, possibly stalled: its head, its agent and the claim's start.
+  stalled: { sha: string; agent: string; since: number } | null;
+  // The Retry of the claimed analysis the summary's line is about: the stalled one, the newer one summarized, or the
+  // shown one being written.
+  claimRetry: RetryControl | null;
+  // The current head's analysis, failed: its head, why, and the head of the summary shown instead of it.
   failed: { sha: string; reason: string; shown: string | null; retry: RetryControl | null } | null;
   summary: SummaryModel;
   conversation: (QuestionItem | AnswerItem)[];
@@ -240,6 +244,7 @@ function streamedAnswer(run: RunText, job: JobView | undefined, owner: Owner | n
     state: live ? "streaming" : "complete",
     text: run.text,
     running: live ? runningLine(job, owner) : null,
+    stalled: null,
     retry: null,
     sha: null,
     model: null,
@@ -256,6 +261,7 @@ function storedAnswer(message: StoredMessage): AnswerItem {
     state: reason === undefined ? "complete" : "incomplete",
     text: message.text,
     running: null,
+    stalled: null,
     ...(reason === undefined ? {} : { reason }),
     retry: null,
     sha: message.metadata?.kind === "answer" ? message.metadata.sha : null,
@@ -265,11 +271,12 @@ function storedAnswer(message: StoredMessage): AnswerItem {
 }
 
 // What a question's job adds to its answers, by the job's current run. While it runs and that run has neither streamed
-// nor left a stored row (a turn before its first text, or a local claim, which streams nothing), the answering row;
-// an earlier run's text does not end it, and the view may still say running once the run's row is stored. Once it
-// failed, its reason and Retry on that run's text, or where the answer would be when the run left none.
-function jobAnswer(job: JobView, shown: AnswerItem[], session: Session, owner: Owner | null): AnswerItem[] {
-  const current = shown.findLast((answer) => answer.run === job.run);
+// nor left a stored row (a turn before its first text, or a local claim, which streams nothing), the answering row, a
+// claim's with its Retry and, past the stall mark, its agent; an earlier run's text does not end it, and the view may
+// still say running once the run's row is stored. Once it failed, its reason and Retry on that run's text, or where the
+// answer would be when the run left none.
+function addJobAnswer(job: JobView, answers: AnswerItem[], session: Session, owner: Owner | null): void {
+  const current = answers.findLast((answer) => answer.run === job.run);
   const row = (change: Partial<AnswerItem>): AnswerItem => ({
     kind: "answer",
     id: job.jobId,
@@ -277,6 +284,7 @@ function jobAnswer(job: JobView, shown: AnswerItem[], session: Session, owner: O
     state: "streaming",
     text: "",
     running: null,
+    stalled: null,
     retry: null,
     sha: null,
     model: null,
@@ -284,17 +292,22 @@ function jobAnswer(job: JobView, shown: AnswerItem[], session: Session, owner: O
     ...change,
   });
   if (RUNNING.has(job.state)) {
-    return current === undefined ? [row({ running: runningLine(job, owner) })] : [];
+    if (current === undefined) {
+      const stalled =
+        job.state === "claimed" && job.stalled ? { agent: job.agentId ?? "cloud", since: startOf(job, owner) } : null;
+      answers.push(row({ running: runningLine(job, owner), stalled, retry: retryOf(job, session) }));
+    }
+    return;
   }
   if (job.state !== "failed") {
-    return [];
+    return;
   }
   const failure = { state: "incomplete", reason: job.failure ?? "failed", retry: retryOf(job, session) } as const;
   if (current === undefined) {
-    return [row(failure)];
+    answers.push(row(failure));
+  } else {
+    Object.assign(current, { ...failure, reason: current.reason ?? failure.reason, running: null });
   }
-  Object.assign(current, { ...failure, reason: current.reason ?? failure.reason, running: null });
-  return [];
 }
 
 const answerJob = (view: PrSessionView, questionId: string) =>
@@ -343,7 +356,7 @@ function conversationOf(session: Session, view: PrSessionView, slot: Slot | null
     );
     const shown = [...stored.map(storedAnswer), ...runs.map((run) => streamedAnswer(run, job, view.owner))];
     if (job !== undefined) {
-      shown.push(...jobAnswer(job, shown, session, view.owner));
+      addJobAnswer(job, shown, session, view.owner);
     }
     items.push(...shown);
   }
@@ -465,28 +478,27 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
     return { ...base, body: { kind: "unknown" } };
   }
   const { newest, completed, shown } = versionsOf(view, picked);
-  const latest = newest[0];
+  // The current head's analysis, which a push back to an earlier head finds among older jobs.
+  const head = view.details?.headSha;
+  const current = head === undefined ? newest[0] : newest.find(({ sha }) => sha === head);
   const stalled =
-    latest?.job.state === "claimed" && latest.job.stalled
-      ? {
-          sha: latest.sha,
-          agent: latest.job.agentId ?? "cloud",
-          since: startOf(latest.job, view.owner),
-          retry: retryOf(latest.job, session),
-        }
+    current?.job.state === "claimed" && current.job.stalled
+      ? { sha: current.sha, agent: current.job.agentId ?? "cloud", since: startOf(current.job, view.owner) }
       : null;
   const failed =
-    latest?.job.state === "failed"
+    current?.job.state === "failed"
       ? {
-          sha: latest.sha,
-          reason: latest.job.failure ?? "failed",
-          shown: shown === undefined || shown === latest ? null : shown.sha,
-          retry: retryOf(latest.job, session),
+          sha: current.sha,
+          reason: current.job.failure ?? "failed",
+          shown: shown === undefined || shown === current ? null : shown.sha,
+          retry: retryOf(current.job, session),
         }
       : null;
   const newer = newest.find(
     ({ job }) => RUNNING.has(job.state) && shown !== undefined && job.createdAt > shown.job.createdAt,
   );
+  const claimed =
+    stalled === null ? (newer ?? (shown !== undefined && RUNNING.has(shown.job.state) ? shown : undefined)) : current;
   return {
     ...base,
     composer: {
@@ -505,6 +517,7 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
       // The line says a newer head is analyzed, or that the newest analysis is possibly stalled.
       summarizing: stalled === null ? (newer?.sha ?? null) : null,
       stalled,
+      claimRetry: claimed === undefined ? null : retryOf(claimed.job, session),
       failed,
       summary: summaryOf(shown, session, view, hub),
       conversation: conversationOf(session, view, slot, hub),

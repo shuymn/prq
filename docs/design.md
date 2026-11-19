@@ -180,10 +180,10 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
   the two applies is decided in the retry's statement, against the head at that moment.
 - A failed job is kept as `failed` with its reason and can be retried from the UI. The UI retries a job through
   `POST /api/pr/:owner/:repo/:number/jobs/:jobId/retry`; owner and repository are accepted in any case and address the
-  one session of the pull request. The UI offers Retry on a claimed job, before and after the stall mark, and on a
-  failed one, and on no other. A press sends one request, the button busy until its answer, and nothing is sent again
-  by itself: a 404, a 503, a network failure or no answer within 45 s (past the route's own 30 s bound) shows "Couldn't
-  retry. Try again." at that Retry.
+  one session of the pull request. A press sends one request, the button busy until its answer, and nothing is sent
+  again by itself: a 404, a 503, a network failure or no answer within 45 s (past the route's own 30 s bound) shows
+  "Couldn't retry. Try again." at that Retry. The panel, which has no rail, offers a claimed job's Retry on its running
+  or stalled line in the conversation or the summary.
 - A retry carries the job's `rev` from the view the UI shows (`expectedRev`). The session applies it only while the job
   is still at that revision, checked in the statement that changes it, and otherwise answers 409 `stale_job` (or
   `not_retryable` once the job is no longer claimed or failed). What comes of a retry holds only for the `rev` it was

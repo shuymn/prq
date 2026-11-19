@@ -12,6 +12,7 @@ import { page, userEvent } from "vitest/browser";
 import { useAnnouncements } from "../announce.ts";
 import { RETRY_ERROR } from "../components/retry.tsx";
 import type { Hub } from "../hub.ts";
+import type { Layout } from "../layout.ts";
 import { FetchContext } from "../reads.ts";
 import { RECONNECT_FAILED_MS, RETRY_ANSWER_MS, RETRY_STALE_MS, SocketContext } from "../session.ts";
 import { SEND_SETTLE_MS, SendSlots, SlotsContext } from "../slots.ts";
@@ -101,14 +102,21 @@ const analysis = (jobId: string, headSha: string, text: string, extra: object = 
   metadata: { kind: "analysis", jobId, headSha, run: 1, by: BY, ...extra },
 });
 
-async function detail({ slots = new SendSlots() }: { slots?: SendSlots } = {}) {
+async function detail({ slots = new SendSlots(), layout = "page" }: { slots?: SendSlots; layout?: Layout } = {}) {
   const fetch = controlledFetch();
   const sockets = controlledSockets();
   const tree = (shown: boolean) => (
     <FetchContext value={fetch.fetch}>
       <SlotsContext value={slots}>
         <SocketContext value={{ WebSocket: sockets.WebSocket }}>
-          {shown ? <PrDetailScreen prRef={REF} hub={HUB} layout="page" notice={() => null} /> : <p>Elsewhere</p>}
+          {shown ? (
+            // The app's frame carries the layout the screen's styles follow.
+            <div data-layout={layout}>
+              <PrDetailScreen prRef={REF} hub={HUB} layout={layout} notice={() => null} />
+            </div>
+          ) : (
+            <p>Elsewhere</p>
+          )}
         </SocketContext>
       </SlotsContext>
     </FetchContext>
@@ -1060,6 +1068,36 @@ describe("the summary and the rail", () => {
       .toEqual(["/api/pr/shuymn/prq/42/jobs/a2/retry"]);
   });
 
+  test("its stalled line and failed notice follow the current head's analysis after a push back to it, past a later superseded one; the completed summary stays shown (M4)", async () => {
+    const { fetch, sockets } = await detail();
+    const later = "c0d1e2f3a4b5c6d7e8f90a1b2c3d4e5f6a7b8c9d";
+    const jobs = (head: JobSpec): JobSpec[] => [
+      { id: "a1", analysis: OLDER },
+      head,
+      { id: "a3", analysis: later, state: "superseded" },
+    ];
+    const socket = await connect(
+      sockets,
+      0,
+      jobs({ id: "a2", analysis: HEAD, state: "claimed", agentId: "laptop", stalled: true }),
+    );
+    const history = [analysis("a1", OLDER, "The completed summary.")];
+    (await fetch.request(0)).respond(history);
+    (await fetch.request(1)).respond(history);
+    await expect.element(page.getByText("The completed summary.")).toBeVisible();
+    expect(textOf("[data-component=Summary] .progress")).toMatch(
+      /^Summary of e4f5a6b possibly stalled: no result from laptop after .+Retry$/,
+    );
+    socket.receive({
+      type: "cf_agent_state",
+      state: sessionView(jobs({ id: "a2", analysis: HEAD, state: "failed", rev: 2, failure: "step limit reached" })),
+    });
+    await expect
+      .poll(() => textOf("[data-component=Summary] [data-component=Notice]"))
+      .toBe("Summary of e4f5a6b failedStep limit reached. The summary below is for a1b2c3d.Retry");
+    await expect.element(page.getByText("The completed summary.")).toBeVisible();
+  });
+
   test("done jobs collapse into N done, closed at first; the toggle hides the rail's versions and jobs, its name kept and aria-expanded false (P4.8)", async () => {
     const { fetch, sockets } = await detail();
     const jobs: JobSpec[] = [
@@ -1086,5 +1124,39 @@ describe("the summary and the rail", () => {
     await expect.element(toggle).toHaveAttribute("aria-expanded", "false");
     expect(page.getByRole("heading", { name: "Versions" }).elements()).toEqual([]);
     expect(page.getByText("3 done").elements()).toEqual([]);
+  });
+});
+
+describe("a claim in the panel", () => {
+  afterEach(async () => {
+    await page.viewport(1280, 800);
+  });
+
+  test("offers Retry on a claimed answer's running line and a claimed analysis's summary line, and past the stall mark their stalled lines, at 360 px (M1)", async () => {
+    await page.viewport(360, 800);
+    const { fetch, sockets } = await detail({ layout: "panel" });
+    const jobs = (stalled: boolean): JobSpec[] => [
+      { id: "a1", analysis: OLDER },
+      { id: "a2", analysis: HEAD, state: "claimed", agentId: "laptop", stalled },
+      { id: "j1", question: "q1", state: "claimed", agentId: "laptop", stalled },
+    ];
+    const socket = await sockets.socket(0);
+    socket.open();
+    socket.receive({ type: "cf_agent_state", state: sessionView(jobs(false), "local") });
+    const history = [analysis("a1", OLDER, "The completed summary."), question("q1", "Why?")];
+    (await fetch.request(0)).respond(history);
+    (await fetch.request(1)).respond(history);
+    await expect.element(page.getByText("The completed summary.")).toBeVisible();
+    const running = () => textOf(".conversation [data-component=Message] .running");
+    expect(textOf("[data-component=Summary] .progress")).toBe("Summarizing e4f5a6bRetry");
+    expect(running()).toMatch(/^Answeringlaptop · running since \d\d:\d\dRetry$/);
+    expect(retryButtons()).toHaveLength(2);
+
+    socket.receive({ type: "cf_agent_state", state: sessionView(jobs(true), "local") });
+    await expect
+      .poll(() => textOf("[data-component=Summary] .progress"))
+      .toMatch(/^Summary of e4f5a6b possibly stalled: no result from laptop after .+Retry$/);
+    expect(running()).toMatch(/^Possibly stalledlaptop · no result after .+Retry$/);
+    expect(retryButtons()).toHaveLength(2);
   });
 });

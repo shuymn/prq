@@ -82,7 +82,7 @@ Every dialog sits on a backdrop that covers its frame.
 
 The PR detail at 360px: compact header, which starts with the back control to the PR list (no AppHeader is drawn), the summary in a disclosure whose heading is the version menu (SHA and time
 once), the conversation and the composer. The pool status line and job lines appear only where they explain content
-that is blocked; a failure shows inline with Retry. The panel frames also check that long titles, metadata and code
+that is blocked; a failure shows inline with Retry, and so does a local claim, on its running or stalled line. The panel frames also check that long titles, metadata and code
 blocks fit.
 
 | State ID                  | Frame                             | Must show                                                                                                                                                                                                                                                                       |

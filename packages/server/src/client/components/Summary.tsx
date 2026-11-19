@@ -11,11 +11,12 @@ type SummaryState = "ready" | "loading" | "streaming" | "empty";
 
 // The pull request's summary (design/components.md, PR detail), pinned above the conversation: its heading with the
 // version menu, then the shown version's text and the model and tokens muted at its end. While a newer head is
-// analyzed, a line under the heading says so, or, once that analysis is possibly stalled, says that in attention with
-// its Retry (and the retry error after it); a notice above the body says the newest analysis failed; a streaming
-// version shows its text so far with the caret and its running line; an empty one says why no analysis has started.
-// In the panel's Disclosure the heading is off (the Disclosure's row has the label and the menu), a streaming version
-// keeping its running line.
+// analyzed, a line under the heading says so, or, once that analysis is possibly stalled, says that in attention; a
+// notice above the body says the newest analysis failed; a streaming version shows its text so far with the caret and
+// its running line; an empty one says why no analysis has started. A claimed analysis's Retry (and the retry error
+// after it) ends the line about it: the progress line when there is one, else the running line. In the panel's
+// Disclosure the heading is off (the Disclosure's row has the label and the menu), a streaming version keeping its
+// running line.
 export function Summary({
   state,
   version,
@@ -35,7 +36,7 @@ export function Summary({
   heading?: boolean | undefined;
   // A newer head being analyzed.
   summarizing?: string | null | undefined;
-  // An analysis possibly stalled: its head, why ("possibly stalled: no result from laptop after 64 min"), and its Retry.
+  // An analysis possibly stalled: its head and why ("possibly stalled: no result from laptop after 64 min").
   stalled?: { sha: string; detail: string } | null | undefined;
   retry?: RetryState | null | undefined;
   onRetry?: (() => void) | undefined;
@@ -48,11 +49,12 @@ export function Summary({
   // Why no analysis has started (empty).
   waiting?: string | undefined;
 }) {
-  const runningLine = state === "streaming" && running !== undefined && (
-    <span className="running">
-      <Status state="running" label="Writing" />
-      <span>{running}</span>
-    </span>
+  // Retry goes on the progress line when there is one, else on the running line.
+  const retryParts = (
+    <>
+      <RetryButton state={retry} onRetry={onRetry} />
+      <RetryError state={retry} />
+    </>
   );
   const progress =
     stalled !== undefined && stalled !== null ? (
@@ -61,20 +63,27 @@ export function Summary({
           <Icon name="alert" />
           Summary of <Sha sha={stalled.sha} /> {stalled.detail}
         </span>
-        {retry !== undefined && retry !== null && <RetryButton state={retry} onRetry={onRetry} />}
-        {retry === "failed" && <RetryError />}
+        {retryParts}
       </div>
     ) : (
       summarizing !== undefined &&
       summarizing !== null && (
-        <p className="progress">
+        <div className="progress">
           <span className="info">
             <Icon name="sync" />
             Summarizing <Sha sha={summarizing} />
           </span>
-        </p>
+          {retryParts}
+        </div>
       )
     );
+  const runningLine = state === "streaming" && running !== undefined && (
+    <span className="running">
+      <Status state="running" label="Writing" />
+      <span>{running}</span>
+      {progress === false && retryParts}
+    </span>
+  );
   return (
     <section data-component="Summary" data-state={state} aria-busy={state === "loading" || undefined}>
       {(heading || runningLine !== false || progress !== false) && (

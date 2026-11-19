@@ -233,7 +233,7 @@ function detailEntries(): Entry[] {
               actions={
                 <>
                   <RetryButton state="ready" />
-                  <RetryError />
+                  <RetryError state="failed" />
                 </>
               }
             />

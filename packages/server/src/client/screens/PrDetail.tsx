@@ -52,30 +52,50 @@ const sentence = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(
 const retryAction = (retry: RetryControl | null, actions: DetailActions) =>
   retry === null ? undefined : () => actions.onRetryJob?.(retry.jobId, retry.rev);
 
-function ConversationItem({ item, actions }: { item: QuestionItem | AnswerItem; actions: DetailActions }) {
-  if (item.kind === "question") {
-    return (
-      <Message
-        role="question"
-        state={item.state}
-        text={item.text}
-        at={item.at}
-        waiting={item.waiting}
-        failure={item.failure}
-        onRetry={actions.onRetrySend}
-        onDiscard={actions.onDiscard}
-      />
-    );
-  }
+function ConversationItem({
+  item,
+  layout,
+  actions,
+}: {
+  item: QuestionItem | AnswerItem;
+  layout: Layout;
+  actions: DetailActions;
+}) {
+  return item.kind === "question" ? (
+    <Message
+      role="question"
+      state={item.state}
+      text={item.text}
+      at={item.at}
+      waiting={item.waiting}
+      failure={item.failure}
+      onRetry={actions.onRetrySend}
+      onDiscard={actions.onDiscard}
+    />
+  ) : (
+    <Answer item={item} layout={layout} actions={actions} />
+  );
+}
+
+// An answer. Past the stall mark its running line says who has had no result for how long; a claim's Retry follows
+// that line in the panel only, where no rail offers it.
+function Answer({ item, layout, actions }: { item: AnswerItem; layout: Layout; actions: DetailActions }) {
+  const elapsed = useElapsed(item.stalled?.since ?? null);
+  const running =
+    item.stalled === null
+      ? item.running
+      : `${item.stalled.agent} · no result${elapsed === null ? "" : ` after ${elapsed}`}`;
+  const retry = item.running !== null && layout === "page" ? null : item.retry;
   return (
     <Message
       role="answer"
       state={item.state}
       content={content(item.text)}
-      running={item.running ?? undefined}
+      running={running ?? undefined}
+      stalled={item.stalled !== null}
       reason={item.reason}
-      retry={item.retry?.state}
-      onRetry={retryAction(item.retry, actions)}
+      retry={retry?.state}
+      onRetry={retryAction(retry, actions)}
       sha={item.sha}
       model={item.model}
       tokens={item.tokens}
@@ -238,7 +258,7 @@ function FailedAnalysis({ failed, actions }: { failed: NonNullable<DetailContent
         failed.retry === null ? undefined : (
           <>
             <RetryButton state={failed.retry.state} onRetry={retryAction(failed.retry, actions)} />
-            {failed.retry.state === "failed" && <RetryError />}
+            <RetryError state={failed.retry.state} />
           </>
         )
       }
@@ -264,6 +284,9 @@ function SummarySection({
   const summary = body?.summary;
   const stalled = body?.stalled ?? null;
   const elapsed = useElapsed(stalled?.since ?? null);
+  // The stalled line offers Retry on the page too; a claimed analysis's other lines only in the panel, which has no
+  // rail.
+  const claim = stalled !== null || layout === "panel" ? (body?.claimRetry ?? null) : null;
   const shown =
     summary === undefined ? (
       <Summary state="loading" heading={layout === "page"} />
@@ -281,8 +304,8 @@ function SummarySection({
                 detail: `possibly stalled: no result from ${stalled.agent}${elapsed === null ? "" : ` after ${elapsed}`}`,
               }
         }
-        retry={stalled?.retry?.state}
-        onRetry={retryAction(stalled?.retry ?? null, actions)}
+        retry={claim?.state}
+        onRetry={retryAction(claim, actions)}
         notice={
           body?.failed === null || body?.failed === undefined ? undefined : (
             <FailedAnalysis failed={body.failed} actions={actions} />
@@ -325,7 +348,7 @@ function Conversation({
       )}
       {body?.conversation.length === 0 && <p className="none">No questions yet. Ask about this pull request below.</p>}
       {body?.conversation.map((item) => (
-        <ConversationItem key={item.id} item={item} actions={actions} />
+        <ConversationItem key={item.id} item={item} layout={layout} actions={actions} />
       ))}
     </section>
   );
