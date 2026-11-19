@@ -645,6 +645,31 @@ describe("streamed text", () => {
 
 const contextLine = () => document.querySelector("[data-component=Composer] .context")?.textContent ?? null;
 
+describe("a run whose end the page missed", () => {
+  test("keeps its text without a running line once the job runs a newer run: one answering row, the new run's (M3)", async () => {
+    const { fetch, sockets } = await detail();
+    const socket = await connect(sockets, 0, [{ id: "j1", question: "q1", state: "running" }]);
+    (await fetch.request(0)).respond([question("q1", "Why?")]);
+    (await fetch.request(1)).respond([question("q1", "Why?")]);
+    receiveAll(socket, [...startOf("w1", "answer-j1", answerRun(1)), delta("w1", "Run one")]);
+    await expect.element(page.getByText("Run one")).toBeVisible();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // Run 1's end, its stored row and a retry from elsewhere all pass while the socket is down.
+    socket.drop();
+    const reopened = await reconnect(sockets, 1);
+    reopened.open();
+    reopened.receive({
+      type: "cf_agent_state",
+      state: sessionView([{ id: "j1", question: "q1", state: "running", rev: 6, run: 2, at: T0 + 5 * 60_000 }]),
+    });
+    await fetch.request(2);
+    await until(() => textOf(".conversation").includes("Answering"));
+    expect(shown()).toEqual(["Why?", "Run one", ""]);
+    expect(document.querySelectorAll(".conversation [data-component=Message] .running")).toHaveLength(1);
+    expect(textOf(".conversation [data-component=Message] .running")).toBe("Answeringcloud · started 10:19");
+  });
+});
+
 describe("versions", () => {
   test("the default is the latest completed by completion; a pick stays through view updates; the running version picked shows its text until its row, after its done view too; the composer names the latest analyzed head (P3.10)", async () => {
     const { fetch, sockets } = await detail();

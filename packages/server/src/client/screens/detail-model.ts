@@ -230,8 +230,9 @@ function summaryOf(
   return { state: "empty", waiting: job.state === "pending" ? "Waiting to start" : "No summary yet" };
 }
 
+// A streamed run is live while its job runs that run: an earlier run's text, whose end the page missed, is not.
 function streamedAnswer(run: RunText, job: JobView | undefined, owner: Owner | null): AnswerItem {
-  const live = !run.done && job !== undefined && RUNNING.has(job.state);
+  const live = !run.done && job !== undefined && RUNNING.has(job.state) && job.run === run.run;
   return {
     kind: "answer",
     id: `${run.jobId}:${run.run}`,
