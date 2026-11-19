@@ -1,9 +1,17 @@
 // What runs in Node, with Node's types, outside the Worker's runtime types: the Node test project's tests
-// (vitest.config.ts), the web UI's build (vite.config.ts, build/), and the secrets command (scripts/secrets.ts).
+// (vitest.config.ts), the web UI's build (vite.config.ts, build/), and the host's operations commands (the scripts
+// listed below).
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["src/**/*.node.test.ts", "vite.config.ts", "build", "scripts/secrets.ts", "scripts/**/*.node.test.ts"]
+  "include": [
+    "src/**/*.node.test.ts",
+    "vite.config.ts",
+    "build",
+    "scripts/secrets.ts",
+    "scripts/operations.ts",
+    "scripts/**/*.node.test.ts"
+  ]
 }
