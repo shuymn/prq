@@ -88,6 +88,24 @@ const CI_VARIABLES = [
   "CONTINUOUS_INTEGRATION",
   "RUN_ID",
 ];
+// A CI service's variables in vendors.json: a name, a list of them, { env: name, includes }, { any: [names] }, or
+// { name: value }.
+const VendorEnv = v.union([v.string(), v.record(v.string(), v.unknown())]);
+const Vendors = v.array(v.object({ name: v.string(), env: v.union([VendorEnv, v.array(VendorEnv)]) }));
+
+function vendorVariables(env: v.InferOutput<typeof VendorEnv>): string[] {
+  if (typeof env === "string") {
+    return [env];
+  }
+  if (typeof env["env"] === "string") {
+    return [env["env"]];
+  }
+  return v.is(v.array(v.string()), env["any"]) ? env["any"] : Object.keys(env);
+}
+
+function isSet(name: string): boolean {
+  return (process.env[name] ?? "") !== "";
+}
 
 function setting(name: string, fallback: number): number {
   const text = process.env[name] ?? "";
@@ -1346,12 +1364,16 @@ function notInCi(): void {
   if (!isCI) {
     return;
   }
-  const marks = [
-    ...CI_VARIABLES.filter((name) => (process.env[name] ?? "") !== ""),
-    ...(ciName === null ? [] : [`the variables of ${ciName}`]),
-  ];
+  const vendor =
+    ciName === null
+      ? undefined
+      : v.parse(Vendors, createRequire(import.meta.url)("ci-info/vendors.json")).find((each) => each.name === ciName);
+  const marks = new Set([
+    ...CI_VARIABLES.filter(isSet),
+    ...(vendor === undefined ? [] : [vendor.env].flat().flatMap(vendorVariables).filter(isSet)),
+  ]);
   throw new Refusal(
-    `the environment marks this run as CI (${marks.join(", ")}), where wrangler answers its own questions: deploy from a terminal of your own`,
+    `the environment marks this run as CI (${marks.size > 0 ? [...marks].join(", ") : `the variables of ${ciName ?? "a CI service"}`}), where wrangler answers its own questions: deploy from a terminal of your own`,
   );
 }
 

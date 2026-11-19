@@ -737,7 +737,7 @@ describe("an environment marked as CI", () => {
   it.each([
     ["the bootstrap", ["--bootstrap"], { CI: "true" }, "CI"],
     ["its resume", ["--bootstrap", "--resume"], { BUILD_NUMBER: "17" }, "BUILD_NUMBER"],
-    ["a release", [TAG], { GITHUB_ACTIONS: "true" }, "the variables of GitHub Actions"],
+    ["a release", [TAG], { GITHUB_ACTIONS: "true" }, "GITHUB_ACTIONS"],
   ])("refuses %s before any call", async (_what, args, marks, named) => {
     await bootstrapped();
     Object.assign(env, marks);

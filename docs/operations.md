@@ -270,7 +270,8 @@ Every deploy is a release, `vX.Y.Z`; what a release is and what the release chec
 checkout it runs in. Run it from a terminal of your own: the bootstrap and a release refuse, before any call, where the
 environment marks the run as CI by a variable wrangler reads as such (`CI` unless it is `false`, `BUILD_ID`,
 `BUILD_NUMBER`, `CI_APP_ID`, `CI_BUILD_ID`, `CI_BUILD_NUMBER`, `CI_NAME`, `CONTINUOUS_INTEGRATION`, `RUN_ID`, or a CI
-service's own, such as `GITHUB_ACTIONS`), since wrangler then answers its own questions with their defaults.
+service's own, such as `GITHUB_ACTIONS`), and names the variables it found, since wrangler then answers its own
+questions with their defaults.
 
 - `--bootstrap`: once, before prq's first upload. It deploys an inert Worker named `prq` (every request answers 404
   with an `x-prq-bootstrap` header; no assets, Durable Objects or container) with workers.dev and preview URLs off and
