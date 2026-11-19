@@ -22,7 +22,8 @@ deployed or released yet.
 
 A local agent is an AI session on your machine that answers prq's jobs through the `prq` CLI.
 
-1. Build `prq`: `pnpm run build` in `packages/cli` writes the single binary `packages/cli/dist/prq` (with Bun, pinned in
+1. Install `prq` from a release, verifying it first ([docs/operations.md](docs/operations.md#installing-prq)), or build
+   it: `pnpm run build` in `packages/cli` writes the single binary `packages/cli/dist/prq` (with Bun, pinned in
    `mise.toml`). Put it on the `PATH` of the session's shell.
 2. Give that shell the environment: `PRQ_URL` (the Worker's origin), `PRQ_ACCESS_CLIENT_ID` and
    `PRQ_ACCESS_CLIENT_SECRET` (an Access service token), `PRQ_AGENT_ID` (one per session) and `PRQ_CLONE_ROOTS` (the

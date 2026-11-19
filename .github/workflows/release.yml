@@ -1,0 +1,375 @@
+name: Release
+
+# Publishes prq for each platform from a release tag; run by hand on main, it is a rehearsal that publishes nothing
+# (docs/design.md, Local CLI; docs/operations.md, Releases). Every job after Verify addresses the draft release by the
+# ID Verify created, never by its tag.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# bash with pipefail, so a failed command in a pipeline fails its step.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    name: Verify
+    if: ${{ github.event_name == 'push' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      # The draft release.
+      contents: write
+      # The release check reads the commit's Check run.
+      checks: read
+    outputs:
+      tag: ${{ steps.name.outputs.tag }}
+      version: ${{ steps.name.outputs.version }}
+      sha: ${{ steps.name.outputs.sha }}
+      targets: ${{ steps.name.outputs.targets }}
+      release-id: ${{ steps.draft.outputs.id }}
+    steps:
+      # The whole history and the tags as tag objects: the release check reads the annotated tag and origin's main.
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Node alone: the release check uses only its built-ins, git and gh, so it runs before any install.
+      - name: Set up mise
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          install_args: node
+          cache: false
+
+      - name: Run the release check
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: node packages/server/scripts/release-check.ts "$TAG"
+
+      # A rehearsal builds and smoke-tests the same three targets as a release, so a platform's failure shows before a
+      # tag, which never moves, is pushed.
+      - name: Name the release
+        id: name
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+          TARGETS: >-
+            [{"target": "darwin-arm64", "runner": "macos-15"},
+            {"target": "linux-x64", "runner": "ubuntu-24.04"},
+            {"target": "linux-arm64", "runner": "ubuntu-24.04-arm"}]
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            tag=$REF_NAME
+            version=$tag
+          else
+            tag=rehearsal-$RUN_ID
+            version=v$(jq -r .version packages/cli/package.json)
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "sha=$(git rev-parse HEAD)"
+            echo "targets=$TARGETS"
+          } >>"$GITHUB_OUTPUT"
+
+      # A SemVer pre-release (v0.2.0-rc.1) is published as a pre-release; a rehearsal's draft is marked one too, so it
+      # could never become the latest release.
+      - name: Create the draft release
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.name.outputs.tag }}
+          SHA: ${{ steps.name.outputs.sha }}
+        run: |
+          existing=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == env.TAG) | "\(.id) (draft: \(.draft))"')
+          if [[ -n "$existing" ]]; then
+            echo "::error::$TAG already has a release: $existing. Delete a stale draft by its ID before starting over."
+            exit 1
+          fi
+          prerelease=false
+          if [[ "$GITHUB_EVENT_NAME" != push || "$TAG" == *-* ]]; then
+            prerelease=true
+          fi
+          args=(-f "tag_name=$TAG" -f "name=$TAG" -f "target_commitish=$SHA" -F draft=true -F "prerelease=$prerelease")
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            args+=(-F generate_release_notes=true)
+          else
+            args+=(-f "body=A rehearsal of the release workflow, deleted when its run ends.")
+          fi
+          id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" "${args[@]}" --jq .id)
+          echo "Created the draft release $id for $TAG"
+          echo "id=$id" >>"$GITHUB_OUTPUT"
+
+  # The job holds the attestation's OIDC request credential, so it never runs the binary it builds: Smoke does, on a
+  # runner without it.
+  build:
+    name: Build (${{ matrix.target }})
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    # Installing the dependencies takes about 90s on Linux and the build seconds: room for a runner several times slower.
+    timeout-minutes: 20
+    permissions:
+      # The upload to the draft.
+      contents: write
+      # The attestation's signing certificate and its storage.
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.verify.outputs.targets) }}
+    env:
+      ARCHIVE: prq-${{ needs.verify.outputs.tag }}-${{ matrix.target }}.tar.gz
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+          persist-credentials: false
+
+      - name: Require the verified commit
+        env:
+          SHA: ${{ needs.verify.outputs.sha }}
+        run: |
+          head=$(git rev-parse HEAD)
+          if [[ "$head" != "$SHA" ]]; then
+            echo "::error::HEAD is $head, not the verified $SHA"
+            exit 1
+          fi
+
+      # The tools mise.lock pins, by their checksums; no cache, so nothing restored from another run takes their place.
+      - name: Set up mise
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          install_args: node pnpm bun
+          cache: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Print tool versions
+        run: |
+          node --version
+          pnpm --version
+          bun --version
+          gh --version
+
+      - name: Build prq
+        run: pnpm --dir packages/cli run build
+
+      # One file, prq, in a plain ustar archive: on macOS, COPYFILE_DISABLE and the ustar format keep the file's
+      # extended attributes out of it (an AppleDouble ._prq entry, or a pax header).
+      - name: Pack the archive
+        run: |
+          COPYFILE_DISABLE=1 tar --format=ustar -czf "$ARCHIVE" -C packages/cli/dist prq
+          listing=$(tar -tzf "$ARCHIVE")
+          if [[ "$listing" != prq ]]; then
+            echo "::error::$ARCHIVE holds [${listing//$'\n'/ }], not prq alone"
+            exit 1
+          fi
+
+      - name: Attest the archive's provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+
+      # A rerun replaces what an earlier attempt of this job uploaded, so the draft holds the archive just attested.
+      - name: Upload it to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.verify.outputs.release-id }}
+        run: |
+          release=repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID
+          upload=$(gh api "$release" \
+            --jq 'if .draft then .upload_url | sub("\\{.*$"; "") else error("release \(.id) is not a draft") end')
+          earlier=$(gh api "$release" --jq '.assets[] | select(.name == env.ARCHIVE) | .id')
+          for asset in $earlier; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset"
+          done
+          gh api --method POST -H "Content-Type: application/gzip" "$upload?name=$ARCHIVE" --input "$ARCHIVE" \
+            --jq 'if .state == "uploaded" then "Uploaded \(.name) as asset \(.id)" else error("\(.name) is \(.state)") end'
+
+  smoke:
+    name: Smoke (${{ matrix.target }})
+    needs:
+      - verify
+      - build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    permissions:
+      # Reading a draft release: GitHub shows drafts only to those who can push. The rehearsal's read probe tells
+      # whether contents: read is enough.
+      contents: write
+      attestations: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.verify.outputs.targets) }}
+    env:
+      ARCHIVE: prq-${{ needs.verify.outputs.tag }}-${{ matrix.target }}.tar.gz
+    steps:
+      - name: Download the archive from the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.verify.outputs.release-id }}
+        run: |
+          gh --version
+          dir=$(mktemp -d "$RUNNER_TEMP/prq-smoke.XXXXXX")
+          asset=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            --jq '[.assets[] | select(.name == env.ARCHIVE) | .id] |
+              if length == 1 then .[0] else error("the draft has \(length) assets named \(env.ARCHIVE)") end')
+          gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$asset" \
+            >"$dir/$ARCHIVE"
+          echo "SMOKE_DIR=$dir" >>"$GITHUB_ENV"
+
+      # The install's provenance check (docs/operations.md, Installing prq), before anything is extracted or run.
+      - name: Verify its provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify "$SMOKE_DIR/$ARCHIVE" -R "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" --source-ref "$GITHUB_REF"
+
+      - name: Extract it
+        run: |
+          mkdir "$SMOKE_DIR/bin"
+          tar -xzf "$SMOKE_DIR/$ARCHIVE" -C "$SMOKE_DIR/bin"
+          listing=$(ls -A "$SMOKE_DIR/bin")
+          if [[ "$listing" != prq ]]; then
+            echo "::error::$ARCHIVE extracted [${listing//$'\n'/ }], not prq alone"
+            exit 1
+          fi
+
+      # No token in this step: the binary runs with nothing it could use.
+      - name: Run prq
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          printed=$("$SMOKE_DIR/bin/prq" --version)
+          if [[ "$printed" != "$VERSION" ]]; then
+            echo "::error::prq --version printed $printed, not $VERSION"
+            exit 1
+          fi
+          echo "prq --version printed $printed"
+
+  # A rerun after an attempt that published the release but failed afterwards finds it published: it checks the same
+  # assets again and does not publish twice.
+  publish:
+    name: Publish
+    needs:
+      - verify
+      - smoke
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      attestations: read
+    env:
+      RELEASE_ID: ${{ needs.verify.outputs.release-id }}
+      TAG: ${{ needs.verify.outputs.tag }}
+    steps:
+      - name: Check the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGETS: ${{ needs.verify.outputs.targets }}
+        run: |
+          release=repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID
+          gh api "$release" --jq '
+            if .tag_name != env.TAG then error("release \(.id) is \(.tag_name), not \(env.TAG)")
+            elif .draft or .immutable then empty
+            else error("release \(.id) is published but not immutable: turn on release immutability (docs/operations.md)")
+            end'
+          expected=$(jq -r '.[] | "prq-\(env.TAG)-\(.target).tar.gz"' <<<"$TARGETS" | sort)
+          actual=$(gh api "$release" --jq '.assets[].name' | sort)
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::the draft holds [${actual//$'\n'/ }], not exactly [${expected//$'\n'/ }]"
+            exit 1
+          fi
+          gh api "$release" \
+            --jq '.assets[] | select(.state != "uploaded") | error("\(.name) is \(.state), not uploaded")'
+          dir=$(mktemp -d "$RUNNER_TEMP/prq-publish.XXXXXX")
+          for name in $expected; do
+            asset=$(NAME=$name gh api "$release" --jq '.assets[] | select(.name == env.NAME) | .id')
+            gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$asset" \
+              >"$dir/$name"
+            gh attestation verify "$dir/$name" -R "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" --source-ref "$GITHUB_REF"
+          done
+
+      # Published by its ID; then GitHub must report it immutable (the repository's release immutability,
+      # .github/infra.yaml), its assets and tag fixed for good.
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release=repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID
+          draft=$(gh api "$release" --jq .draft)
+          if [[ $draft == true ]]; then
+            gh api --method PATCH "$release" -F draft=false --jq '"Published \(.tag_name) at \(.html_url)"'
+          else
+            echo "Release $RELEASE_ID was published by an earlier attempt"
+          fi
+          gh api "$release" --jq 'if .immutable then "The release is immutable" else
+            error("the release is published but not immutable: turn on release immutability (docs/operations.md)") end'
+
+  # A rehearsal only: whether a token with contents: read alone reads the draft and its archive by ID. Smoke keeps
+  # contents: write until a rehearsal shows it does.
+  read-probe:
+    name: Read probe
+    needs:
+      - verify
+      - build
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Read the draft with contents read
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.verify.outputs.release-id }}
+        run: |
+          if asset=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq '.assets[0].id') &&
+            gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$asset" >/dev/null; then
+            echo "::notice::contents: read reads the draft and its archive by ID: smoke can drop to it"
+          else
+            echo "::notice::contents: read does not read the draft by ID: smoke keeps contents: write"
+          fi
+
+  # A rehearsal only: its draft is deleted by ID however the run went.
+  discard:
+    name: Discard the rehearsal
+    needs:
+      - verify
+      - smoke
+      - read-probe
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.verify.outputs.release-id != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Delete the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.verify.outputs.release-id }}
+        run: |
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
+          echo "Deleted the draft release $RELEASE_ID"

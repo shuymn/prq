@@ -407,12 +407,20 @@ UI, webhook and CLI input all enter through PrSession.
 ### Local CLI (`prq`)
 
 - **Install.** `prq` is one file: `bun build --compile` makes it from `packages/cli/src/main.ts` (`pnpm run build` in
-  `packages/cli` writes `packages/cli/dist/prq`; Bun's `--target` builds for another platform), and the host puts it on
-  its `PATH`. The host's machine then needs neither this repository nor Node or pnpm. A release workflow that builds the
-  binaries for each platform and attaches them to a release, with build provenance attestations, comes with release
-  versioning (#8); until then the host builds its own. The source uses no Bun-only API, so Node 24 runs it as well
-  (`node packages/cli/src/main.ts`); the unit tests run its modules there, and the end-to-end tests run the compiled
-  binary. `prq --version` prints `v` + `packages/cli/package.json` `version`, and `prq --help` the usage.
+  `packages/cli` writes `packages/cli/dist/prq`), and the host puts it on its `PATH`. The host's machine then needs
+  neither this repository nor Node or pnpm. Each release publishes it for darwin-arm64, linux-x64 and linux-arm64
+  (`.github/workflows/release.yml`): a pushed tag that passes the release check (see [Versions](#versions)) gets a draft
+  release; a runner of each platform builds the checked commit with the tools `mise.lock` pins and uploads
+  `prq-vX.Y.Z-<target>.tar.gz`, which holds the one file `prq`, with a build provenance attestation (`actions/attest`),
+  never running the binary in that job, which holds the attestation's OIDC request credential; a fresh runner of each
+  platform then installs its archive from the draft as the host does and requires `prq --version` to print the tag;
+  and the draft is published, addressed throughout by the ID it was created with, only when it holds exactly the three
+  archives and each verifies. The repository's releases are immutable, so a published archive never changes. Run by
+  hand on `main`, the workflow rehearses all of this but the publication. The host installs one only after
+  `gh attestation verify` has checked it against this repository, the release workflow and the tag
+  ([operations.md](operations.md#installing-prq)), or builds its own. The source uses no Bun-only API, so Node 24 runs
+  it as well (`node packages/cli/src/main.ts`); the unit tests run its modules there, and the end-to-end tests run the
+  compiled binary. `prq --version` prints `v` + `packages/cli/package.json` `version`, and `prq --help` the usage.
 - **Configuration**, only from the flags and the environment the AI session runs the commands in. No file in the
   working directory is read: the build turns off the `.env` and `bunfig.toml` a Bun-compiled binary otherwise loads
   from there, which would set variables or run code depending on where `prq` runs. Environment variables rather than a
@@ -602,8 +610,9 @@ UI, webhook and CLI input all enter through PrSession.
   both versions equal the tag's; the tag is annotated, `origin` has the same tag object (`git ls-remote` of the tag and
   its peeled `^{}`), and it peels to the commit being built; that commit is on `origin`'s `main`; and GitHub reports a
   completed, successful `Check` run of GitHub Actions for that exact SHA. With `--pre-tag <sha>`, before the tag is
-  pushed, it checks the commit alone. It uses Node's built-ins, git and `gh` only, so it runs before any install. The
-  deploy builds and uploads only a clean clone of such a tag, with the tag's pinned tools and frozen lockfile, no git
+  pushed, it checks the commit alone. It uses Node's built-ins, git and `gh` only, so it runs before any install: the
+  release workflow runs it on the pushed tag before it builds `prq` ([Local CLI](#local-cli-prq)), and the deploy
+  builds and uploads only a clean clone of such a tag, with the tag's pinned tools and frozen lockfile, no git
   hook run in it, and its tracked files checked against the commit before the build and before the upload
   ([operations.md](operations.md#the-deploy-command)).
 - Every `/cli/*` response, including errors and `wait` timeouts, carries the server's version in a `Prq-Version`
