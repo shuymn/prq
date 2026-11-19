@@ -1,10 +1,11 @@
 import "./PrHeader.css";
 import { ButtonLink } from "./Button.tsx";
-import { IconButtonLink } from "./IconButton.tsx";
+import { IconButton, IconButtonLink } from "./IconButton.tsx";
 import { type PrState, PrStateLabel } from "./PrStateLabel.tsx";
 
 // The pull request a detail page is about (design/components.md, PR detail): its state, repository and number, its
-// title as the page's heading, and a link to it on GitHub. Compact is the panel's: a smaller title and an icon link.
+// title as the page's heading, and a link to it on GitHub. Compact is the panel's, which has no AppHeader: it starts
+// with the back control to the PR list, and has a smaller title and an icon link.
 export function PrHeader({
   density,
   state,
@@ -12,6 +13,7 @@ export function PrHeader({
   number,
   title,
   url,
+  onBack,
 }: {
   density: "full" | "compact";
   // Null until the pull request's first webhook.
@@ -20,9 +22,13 @@ export function PrHeader({
   number: number;
   title: string;
   url: string;
+  onBack?: (() => void) | undefined;
 }) {
   return (
     <header data-component="PrHeader" data-density={density}>
+      {density === "compact" && (
+        <IconButton variant="invisible" size="md" icon="chevron-left" label="Back to pull requests" onClick={onBack} />
+      )}
       <div className="heading">
         <p className="meta">
           {state !== null && <PrStateLabel state={state} />}

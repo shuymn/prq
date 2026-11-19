@@ -9,6 +9,7 @@ import { DOWN_REASONS } from "../components/Composer.tsx";
 import { FAILURES } from "../components/Message.tsx";
 import type { Hub } from "../hub.ts";
 import type { Layout } from "../layout.ts";
+import { backToList } from "../routes.ts";
 import { useSession } from "../session.ts";
 import { failureOf, useUnsent } from "../slots.ts";
 import { detailModel } from "./detail-model.ts";
@@ -91,6 +92,7 @@ export function PrDetailScreen({
         },
         onReadAgain: read,
         onReload: reload,
+        onBack: backToList,
       }}
     />
   );

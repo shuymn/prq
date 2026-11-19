@@ -1,7 +1,7 @@
 // The PR detail in Chrome for a local session, against the real Worker in wrangler's local runtime through the Access
 // stand-in's browser door, its jobs done by the compiled prq (plan P3.2, P3.5, P3.8–P3.10, P3.12, P3.14, P3.16): what
 // the page reads and when, a question from the composer, a cut connection, the waiting line, versions, the panel
-// layout, the version notice under an earlier deploy's bundle, and history navigation.
+// layout, the version notice under an earlier deploy's bundle, history navigation and the panel's back control.
 
 import { writeFile } from "node:fs/promises";
 
@@ -335,7 +335,7 @@ ${"const value = compute(".repeat(12)}
 });
 
 describe("history navigation", () => {
-  test("Back and Forward restore the list and the detail with their headings focused; a mixed-case URL opens the canonical session (P3.16)", async () => {
+  test("Back and Forward restore the list and the detail with their headings focused; a mixed-case URL opens the canonical session; the panel's back control goes back to the list before it, else to the list (P3.16)", async () => {
     await push(stack.worker(), PR, sha("h1"), sha("base"), { title: "Rename the flag" });
     const page = browser.page();
     const focusedText = async () =>
@@ -359,5 +359,21 @@ describe("history navigation", () => {
     expect(sockets.filter((path) => path.startsWith("/agents/pr-session/"))).toEqual([
       `/agents/pr-session/${sessionName(PR)}`,
     ]);
+
+    // The panel's back control: after a detail, the list as a new entry; after the list, back to that entry.
+    await page.setViewportSize({ width: 360, height: 800 });
+    const index = async () => v.parse(v.number(), await page.evaluate(`navigation.currentEntry.index`));
+    const back = page.getByRole("button", { name: "Back to pull requests" });
+    const row = page.locator(`a.title[href="${DETAIL}"]`);
+    const list = (await index()) + 1;
+    await back.click();
+    await row.waitFor();
+    expect(await index()).toBe(list);
+    await row.click();
+    await back.click();
+    await row.waitFor();
+    expect(await index()).toBe(list);
+    await page.goForward();
+    await page.getByRole("heading", { level: 1, name: "Rename the flag" }).waitFor();
   });
 });

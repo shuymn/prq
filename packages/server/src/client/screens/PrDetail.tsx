@@ -32,6 +32,8 @@ type DetailActions = {
   // Try again after a failed history read.
   onReadAgain?: (() => void) | undefined;
   onReload?: (() => void) | undefined;
+  // The panel's back control.
+  onBack?: (() => void) | undefined;
 };
 
 const content = (text: string) => (text === "" ? undefined : <Markdown text={text} />);
@@ -258,6 +260,7 @@ export function PrDetail({
             number={header.number}
             title={header.title}
             url={header.url}
+            onBack={actions.onBack}
           />
         )}
         {body.kind === "load-failed" ? (
