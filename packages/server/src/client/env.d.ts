@@ -8,8 +8,8 @@ declare const __PRQ_VERSION__: string;
 declare namespace React {
   interface ButtonHTMLAttributes<T> {
     // Invoker commands: the button acts on the element of that ID (a popover it toggles).
-    commandfor?: string;
-    command?: "toggle-popover" | "show-popover" | "hide-popover" | `--${string}`;
+    commandfor?: string | undefined;
+    command?: "toggle-popover" | "show-popover" | "hide-popover" | `--${string}` | undefined;
   }
   interface HTMLAttributes<T> {
     // Arrow-key focus navigation among the element's items (`menu nomemory` for a menu).

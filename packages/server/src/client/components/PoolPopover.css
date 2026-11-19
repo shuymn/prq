@@ -1,0 +1,144 @@
+@layer components {
+  [data-component="PoolPopover"] {
+    box-sizing: border-box;
+    inline-size: var(--size-popover);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    margin: 0;
+    /* The border falls inside the inset, as the design's inside stroke does. */
+    padding: calc(var(--inset-card) - var(--border-width-thin));
+    border: var(--border-width-thin) solid var(--color-border-default);
+    border-radius: var(--radius-lg);
+    color: var(--color-fg-default);
+    background: var(--color-bg-overlay);
+    box-shadow: var(--shadow-overlay);
+
+    /* As the header's popover it hangs below PoolStatus, aligned to its end, and flips where it would not fit. Where no
+       side holds all of it, it hangs below as high as the room there, and scrolls. */
+    &[popover] {
+      position-area: block-end span-inline-start;
+      position-try-fallbacks:
+        flip-block,
+        flip-inline,
+        flip-block flip-inline,
+        --pool-scrolls,
+        --pool-scrolls flip-inline;
+      inset: auto;
+      margin-block: var(--gap-tight);
+    }
+
+    /* An open popover, and the gallery's specimen, lay out their sections; a closed one the browser hides. */
+    &:not([popover]),
+    &:popover-open {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-group);
+    }
+
+    & section {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-related);
+    }
+
+    & h2 {
+      margin: 0;
+      font: var(--text-small-strong);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+
+    & p,
+    & ul {
+      margin: 0;
+      padding: 0;
+    }
+
+    & ul {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-related);
+      list-style: none;
+    }
+
+    /* An agent's icon centres on the first line of its ID, which can wrap. */
+    & .agent {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--gap-tight);
+      color: var(--color-fg-muted);
+
+      & .lead {
+        display: flex;
+        align-items: center;
+        block-size: 1lh;
+        font: var(--text-body-strong);
+        font-size-adjust: from-font;
+      }
+    }
+
+    & .agent-text {
+      display: flex;
+      flex-direction: column;
+      min-inline-size: 0;
+    }
+
+    & .agent-id {
+      font: var(--text-body-strong);
+      font-size-adjust: from-font;
+      overflow-wrap: anywhere;
+      color: var(--color-fg-default);
+    }
+
+    & .agent-detail,
+    & .none-jobs {
+      font: var(--text-small);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+
+    & .none {
+      font: var(--text-body);
+      font-size-adjust: from-font;
+    }
+
+    & .skeleton {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-related);
+
+      & [data-component="Skeleton"] {
+        inline-size: auto;
+      }
+    }
+
+    & .cloud-row {
+      display: flex;
+      align-items: center;
+      gap: var(--gap-tight);
+      color: var(--color-fg-muted);
+    }
+
+    & .cloud-label {
+      font: var(--text-body-strong);
+      font-size-adjust: from-font;
+      color: var(--color-fg-default);
+    }
+
+    & .cloud-status {
+      font: var(--text-small);
+      font-size-adjust: from-font;
+    }
+
+    & .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--gap-related);
+    }
+  }
+
+  @position-try --pool-scrolls {
+    position-area: block-end span-inline-start;
+    max-block-size: stretch;
+  }
+}

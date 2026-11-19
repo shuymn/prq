@@ -1,7 +1,7 @@
 // The gallery's data (plan §1.17), checked against the protocol's schemas: the Hub's views and the ledger's rows of the
 // PR list frames in design/prq.pen. Times are relative to when the gallery renders.
 
-import { HubView, LedgerRow, type Problem } from "@prq/protocol";
+import { AgentRow, HubView, LedgerRow, type Problem } from "@prq/protocol";
 import * as v from "valibot";
 
 import type { PrState } from "../components/PrStateLabel.tsx";
@@ -18,7 +18,7 @@ type Spec = {
   state?: PrState;
   kind: "push" | "question" | "summary" | "answer";
   ago: number;
-  problem?: Problem;
+  problem?: Problem | undefined;
 };
 
 function row(spec: Spec, now: number): LedgerRow {
@@ -152,6 +152,16 @@ export const menuRepos = (names: readonly string[] = MENU_REPOS) =>
 export const defaultRows = (now: number) => DEFAULT_ROWS.map((spec) => row(spec, now));
 export const allRows = (now: number) => ALL_ROWS.map((spec) => row(spec, now));
 
+// The Agent pool frames' list: the default rows, but with a local agent present the row that waits for one has its push
+// summarized instead.
+export const poolRows = (now: number, local: boolean) =>
+  DEFAULT_ROWS.map((spec) =>
+    row(
+      local && spec.problem === "waiting_for_local_agent" ? { ...spec, kind: "summary", problem: undefined } : spec,
+      now,
+    ),
+  );
+
 // The Hub's view: no local agent, two jobs running and three waiting, three rows needing attention, one owner.
 export const CLOUD_ONLY = v.parse(HubView, {
   localAgentPresent: false,
@@ -161,6 +171,27 @@ export const CLOUD_ONLY = v.parse(HubView, {
   owners: 1,
   ledgerVersion: 12,
 });
+
+// Agent pool / Local agent present: two agents, one running job and two waiting, one failed, two rows needing attention.
+export const POOL_LOCAL = v.parse(HubView, {
+  localAgentPresent: true,
+  presentAgents: 2,
+  jobs: { waiting: 2, running: 1, failed: 1 },
+  needsAttention: 2,
+  owners: 1,
+  ledgerVersion: 12,
+});
+
+// Agent pool / No local agent: the cloud-only view with two failed jobs.
+export const POOL_CLOUD_ONLY = v.parse(HubView, { ...CLOUD_ONLY, jobs: { waiting: 3, running: 2, failed: 2 } });
+
+// The present agents GET /api/agents gives for Agent pool / Local agent present, by agent ID: one holding a claim, seen
+// seconds ago, and one in a wait, seen a minute ago.
+export const poolAgents = (now: number, names: readonly [string, string] = ["mbp-office", "mini-home"]) =>
+  v.parse(v.array(AgentRow), [
+    { agentId: names[0], lastSeenAt: now - 10_000, waiting: false, holdsJob: true },
+    { agentId: names[1], lastSeenAt: now - MINUTE, waiting: true, holdsJob: false },
+  ]);
 
 // An empty ledger with one local agent present.
 export const EMPTY_LOCAL = v.parse(HubView, {

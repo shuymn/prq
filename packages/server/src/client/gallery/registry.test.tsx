@@ -15,11 +15,9 @@ import { REGISTRY } from "./registry.tsx";
 
 const design = designNames(componentsMd, screensMd);
 
-// What the UI has yet to build, by component and by state ID (plan §4: the pool's button, popover and line in PR 5, the
-// settings in PR 6). A pending item must name something the design has.
+// What the UI has yet to build, by component and by state ID (plan §4: the settings in PR 6). A pending item must name
+// something the design has.
 const PENDING_COMPONENTS = [
-  "PoolStatus",
-  "PoolPopover",
   "TextField",
   "TextArea",
   "PromptEditor",
@@ -28,7 +26,11 @@ const PENDING_COMPONENTS = [
   "SkillReview",
   "Dialog",
 ];
-const PENDING_STATES = ["panel.waiting-agent", "panel.unavailable", "pool.", "settings."];
+const PENDING_STATES = ["settings."];
+
+// States the code has and the design draws no frame for, which the gallery shows for the owner's review beside the
+// others (design/components.md): the pool's popover while its read is under way.
+const CODE_ONLY_STATES = ["pool.local-reading"];
 
 // Components the design keeps for its own frames, "design-only, not in code" (design/components.md).
 const DESIGN_ONLY = ["Note"];
@@ -42,11 +44,13 @@ describe("the gallery's registry", () => {
     const expected = [
       ...design.inventory.filter((name) => ![...PENDING_COMPONENTS, ...DESIGN_ONLY].includes(componentOf(name))),
       ...design.stateIds.filter((id) => !PENDING_STATES.some((prefix) => id.startsWith(prefix))),
+      ...CODE_ONLY_STATES,
     ];
     expect(names.toSorted()).toEqual(expected.toSorted());
     const components = new Set(design.inventory.map(componentOf));
     expect([...PENDING_COMPONENTS, ...DESIGN_ONLY].filter((component) => !components.has(component))).toEqual([]);
     expect(PENDING_STATES.filter((prefix) => !design.stateIds.some((id) => id.startsWith(prefix)))).toEqual([]);
+    expect(CODE_ONLY_STATES.filter((id) => design.stateIds.includes(id))).toEqual([]);
   });
 
   test("renders each component with its name's props", async () => {
@@ -193,6 +197,45 @@ describe("the PR list's states", () => {
     await expect.element(page.getByText("A new version is available")).toBeVisible();
     await expect.element(page.getByRole("button", { name: "Reload" })).toBeVisible();
     expect(rows().elements()).toHaveLength(11);
+  });
+});
+
+const poolLabel = () => page.getByRole("button", { name: /local agent|Cloud only|Pool unavailable|Loading pool/ });
+const popover = () => document.querySelector<HTMLElement>("[data-component=PoolPopover]");
+
+describe("the agent pool's states", () => {
+  test("pool.local: the header's status and its open popover with each agent, the cloud and the jobs in flight", async () => {
+    await render(entry("pool.local"));
+    await expect.element(poolLabel()).toHaveAttribute("aria-expanded", "true");
+    expect(poolLabel().element().textContent).toBe("2 local agents1 running · 2 waiting");
+    expect([...(popover()?.querySelectorAll(".agent-id") ?? [])].map((agent) => agent.textContent)).toEqual([
+      "mbp-office",
+      "mini-home",
+    ]);
+    expect(textOf("[data-component=PoolPopover] .cloud-row")).toBe("CloudAvailable");
+    expect(
+      [...document.querySelectorAll("[data-component=PoolPopover] [data-component=Badge]")].map(
+        (badge) => badge.textContent,
+      ),
+    ).toEqual(["2 waiting", "1 running", "1 failed"]);
+  });
+
+  test("pool.cloud-only, pool.unavailable, pool.loading and the read under way", async () => {
+    const screen = await render(entry("pool.cloud-only"));
+    await expect.element(poolLabel()).toHaveAttribute("aria-expanded", "true");
+    expect(popover()?.querySelector(".none")?.checkVisibility()).toBe(true);
+    await screen.unmount();
+    const unavailable = await render(entry("pool.unavailable"));
+    await expect.element(poolLabel()).toHaveAttribute("aria-expanded", "true");
+    expect(textOf("[data-component=PoolStatus]")).toBe("Pool unavailable");
+    expect(popover()?.querySelector("[data-component=Notice]")?.checkVisibility()).toBe(true);
+    await unavailable.unmount();
+    await render(entry("pool.loading"));
+    expect(textOf("[data-component=PoolStatus]")).toBe("Loading pool");
+    expect(popover()?.matches(":popover-open")).toBe(false);
+    await render(entry("pool.local-reading"));
+    await expect.element(page.getByRole("heading", { name: "Local agents" })).toBeVisible();
+    expect(popover()?.querySelector(".skeleton")?.getAttribute("aria-busy")).toBe("true");
   });
 });
 
@@ -352,6 +395,7 @@ describe("the PR detail's states", () => {
     },
     "panel.default": async (screen) => {
       expect(document.querySelector("[data-component=AppHeader]")).toBeNull();
+      expect(document.querySelector("[data-component=PoolStatus]")).toBeNull();
       expect(document.querySelector("[data-component=PrHeader]")?.getAttribute("data-density")).toBe("compact");
       expect(textOf("[data-component=Message] .answered-at")).toBe("Answered at e4f5a6b");
       // The summary starts open; closed, it stays closed when the page renders again.
@@ -397,6 +441,13 @@ describe("the PR detail's states", () => {
       expect(
         notice !== null && header !== null && notice.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
+    },
+    "panel.waiting-agent": async () => {
+      expect(textOf("[data-component=PoolStatus][data-form=line]")).toBe("Cloud only· 1 waiting");
+      expect(document.querySelector("[data-component=Message][data-state=waiting-agent]")).not.toBeNull();
+    },
+    "panel.unavailable": async () => {
+      expect(textOf("[data-component=PoolStatus][data-form=line]")).toBe("Pool unavailable");
     },
     "panel.send-failed": async () => {
       await visible("Couldn't confirm it was sent");

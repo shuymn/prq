@@ -35,6 +35,24 @@ import { type SendSlots, type Slot, startRead, useSlot, useSlots } from "./slots
 // Reload. PartySocket keeps trying meanwhile.
 export const RECONNECT_FAILED_MS = 15_000;
 
+// A connection's bound on going without an open: arm() starts it unless it runs, and at its end `expire` runs;
+// cancel() stops it. Its owner arms it after a close or at the first connect, and cancels it at an open or on leaving.
+export function reconnectBound(expire: () => void): { arm(): void; cancel(): void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return {
+    arm() {
+      timer ??= setTimeout(() => {
+        timer = undefined;
+        expire();
+      }, RECONNECT_FAILED_MS);
+    },
+    cancel() {
+      clearTimeout(timer);
+      timer = undefined;
+    },
+  };
+}
+
 // After a retry's 409, how long the page waits for a view with the job's newer revision before it reconnects, whose
 // Agent state brings the job as it is.
 export const RETRY_STALE_MS = 3_000;
@@ -161,7 +179,7 @@ class SessionStore {
   readonly #runs = new Map<string, Run>();
   // The number of the latest read whose outcome decides the failure shown.
   #outcome = 0;
-  #reconnect: ReturnType<typeof setTimeout> | undefined;
+  readonly #reconnect = reconnectBound(() => this.#update({ connection: "failed" }));
   #detach: (() => void) | undefined;
   #active = false;
 
@@ -210,8 +228,7 @@ class SessionStore {
   stop(): void {
     this.#active = false;
     this.#detach?.();
-    clearTimeout(this.#reconnect);
-    this.#reconnect = undefined;
+    this.#reconnect.cancel();
     for (const read of this.#reads) {
       read.abort();
     }
@@ -229,8 +246,7 @@ class SessionStore {
   }
 
   opened(): void {
-    clearTimeout(this.#reconnect);
-    this.#reconnect = undefined;
+    this.#reconnect.cancel();
     this.#update({ connection: "open" });
     this.read();
   }
@@ -461,11 +477,8 @@ class SessionStore {
   }
 
   #arm(): void {
-    if (this.#reconnect === undefined && this.#active) {
-      this.#reconnect = setTimeout(() => {
-        this.#reconnect = undefined;
-        this.#update({ connection: "failed" });
-      }, RECONNECT_FAILED_MS);
+    if (this.#active) {
+      this.#reconnect.arm();
     }
   }
 

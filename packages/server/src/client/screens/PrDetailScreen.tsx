@@ -11,6 +11,7 @@ import { FAILURES } from "../components/Message.tsx";
 import { RETRY_ERROR } from "../components/retry.tsx";
 import type { Hub } from "../hub.ts";
 import type { Layout } from "../layout.ts";
+import { poolStatus } from "../pool.tsx";
 import { backToList } from "../routes.ts";
 import { useSession } from "../session.ts";
 import { failureOf, useUnsent } from "../slots.ts";
@@ -110,6 +111,7 @@ export function PrDetailScreen({
     <PrDetail
       layout={layout}
       model={model}
+      pool={poolStatus(hub.view, hub.unavailable)}
       notice={notice(session.serverVersion)}
       unsent={unsent}
       draft={draft}

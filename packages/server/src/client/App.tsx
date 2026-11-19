@@ -58,6 +58,8 @@ export function App() {
   return (
     <Frame
       view={hub.view}
+      unavailable={hub.unavailable}
+      route={key}
       version={__PRQ_VERSION__}
       layout={layout}
       header={!(layout === "panel" && route.name === "detail")}

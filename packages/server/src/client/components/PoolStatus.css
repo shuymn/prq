@@ -17,22 +17,38 @@
       color: var(--color-fg-muted);
     }
 
-    &[data-state="local"] [data-component="Icon"] {
+    &[data-state="local"] > [data-component="Icon"] {
       color: var(--color-success-fg);
     }
 
-    /* The header's form has a medium control's frame. */
+    /* The header's form is the pool popover's button, with a medium control's frame on the header's fill. */
     &[data-form="button"] {
       box-sizing: border-box;
       block-size: var(--size-control-md);
+      padding-block: 0;
       padding-inline: calc(var(--inset-control-md) - var(--border-width-thin));
       border: var(--border-width-thin) solid var(--color-border-default);
       border-radius: var(--radius-md);
+      background: transparent;
+      cursor: pointer;
 
       & .label {
         font: var(--text-body-strong);
         font-size-adjust: from-font;
         color: var(--color-fg-default);
+      }
+
+      & .chevron {
+        display: flex;
+      }
+
+      &:hover {
+        background: var(--color-bg-muted);
+      }
+
+      &:focus-visible {
+        outline: var(--border-width-thick) solid var(--color-border-focus);
+        outline-offset: var(--focus-offset);
       }
     }
   }

@@ -6391,7 +6391,7 @@
                                   "fill": "$color-fg-muted",
                                   "textGrowth": "fixed-width",
                                   "width": "fill_container",
-                                  "content": "Running a1b2c3d · seen 10 s ago",
+                                  "content": "Holding a job · seen now",
                                   "lineHeight": "$text-small-line-height",
                                   "fontFamily": "$text-small-font-family",
                                   "fontSize": "$text-small-font-size",
@@ -22899,7 +22899,7 @@
               "content": "mbp-office"
             },
             "E72gDX": {
-              "content": "Holding shuymn/prq #42 · seen 10 s ago"
+              "content": "Holding a job · seen now"
             },
             "ygOwu": {
               "content": "mini-home"

@@ -85,6 +85,9 @@ export type DetailContent = {
   summary: SummaryModel;
   conversation: (QuestionItem | AnswerItem)[];
   jobs: { active: JobItem[]; done: JobItem[] };
+  // An analysis (the current head's, though another version is shown, or the one shown) or a question waits for a local
+  // agent, which the panel's pool line explains.
+  waitsForAgent: boolean;
 };
 
 type DetailBody =
@@ -502,6 +505,7 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
       : newest.find(({ job }) => RUNNING.has(job.state) && shown !== undefined && job.createdAt > shown.job.createdAt);
   const claimed =
     stalled === null ? (newer ?? (shown !== undefined && RUNNING.has(shown.job.state) ? shown : undefined)) : current;
+  const conversation = conversationOf(session, view, slot, hub);
   return {
     ...base,
     composer: {
@@ -523,8 +527,11 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
       claimRetry: claimed === undefined ? null : retryOf(claimed.job, session),
       failed,
       summary: summaryOf(shown, session, view, hub),
-      conversation: conversationOf(session, view, slot, hub),
+      conversation,
       jobs: jobsOf(session, view, hub),
+      waitsForAgent:
+        ([current, shown].some((analysis) => analysis?.job.state === "pending") && agentAbsent(view, hub)) ||
+        conversation.some((item) => item.kind === "question" && item.state === "waiting-agent"),
     },
   };
 }

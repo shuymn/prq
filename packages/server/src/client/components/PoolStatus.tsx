@@ -1,24 +1,32 @@
 import "./PoolStatus.css";
 import type { JobCounts } from "@prq/protocol";
+import type { ComponentProps } from "react";
 
 import { Icon } from "./Icon.tsx";
 import { Spinner } from "./Spinner.tsx";
 
 export type PoolState = "local" | "cloud-only" | "unavailable" | "loading";
 
+// The pool as the Hub's view gives it: its state, with the count of local agents and the jobs in flight.
+export type PoolSummary = { state: PoolState; agents?: number | undefined; jobs?: JobCounts | undefined };
+
 // Who can take work now, from the Hub's view (design/components.md, Layout and navigation): the local agents present,
-// or the cloud alone, with the jobs in flight. `button` is the header's form, `line` the panel's.
+// or the cloud alone, with the jobs in flight. `button` is the header's form, the button of the agent pool's popover,
+// which toggles the popover `commandfor` names; `line` is the panel's.
 export function PoolStatus({
   form,
   state,
   agents = 0,
   jobs,
+  ref,
+  commandfor,
+  expanded,
 }: {
   form: "button" | "line";
-  state: PoolState;
-  agents?: number | undefined;
-  jobs?: JobCounts | undefined;
-}) {
+  // The popover's state, which the button reports.
+  expanded?: boolean | undefined;
+} & PoolSummary &
+  Pick<ComponentProps<"button">, "ref" | "commandfor">) {
   const label = {
     local: `${agents} local ${agents === 1 ? "agent" : "agents"}`,
     "cloud-only": "Cloud only",
@@ -26,12 +34,33 @@ export function PoolStatus({
     loading: "Loading pool",
   }[state];
   const counts = jobs === undefined || state === "unavailable" || state === "loading" ? null : jobsText(jobs);
-  return (
-    <div data-component="PoolStatus" data-form={form} data-state={state}>
+  const content = (
+    <>
       {state === "loading" ? <Spinner /> : <Icon name="dot-fill" />}
       <span className="label">{label}</span>
       {counts !== null && <span className="jobs">{form === "line" ? `· ${counts}` : counts}</span>}
+    </>
+  );
+  return form === "line" ? (
+    <div data-component="PoolStatus" data-form={form} data-state={state}>
+      {content}
     </div>
+  ) : (
+    <button
+      ref={ref}
+      type="button"
+      data-component="PoolStatus"
+      data-form={form}
+      data-state={state}
+      aria-expanded={expanded}
+      commandfor={commandfor}
+      command={commandfor === undefined ? undefined : "toggle-popover"}
+    >
+      {content}
+      <span className="chevron">
+        <Icon name="chevron-down" />
+      </span>
+    </button>
   );
 }
 
