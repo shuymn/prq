@@ -396,6 +396,27 @@ describe("a held answer", () => {
     await expect.poll(() => worker.connections.every((connection) => connection.closed)).toBe(true);
   });
 
+  test("whose answer breaks off while held, gets 502 then, and the hold ends", async () => {
+    let answering: ServerResponse | undefined;
+    const worker = await upstream((_req, res) => {
+      res.writeHead(200, { "Content-Length": "10" });
+      res.write("x");
+      answering = res;
+    });
+    const front = await door(worker.url);
+    const hold = { kind: "hold", answered: latch(), release: latch() } as const;
+    front.plan(anyPath, hold);
+    const from = performance.now();
+    const sent = send(`${front.url}/x`);
+    await hold.answered.promise;
+    answering?.destroy();
+    expect((await sent).status).toBe(502);
+    expect(performance.now() - from).toBeLessThan(ANSWER_MS);
+    hold.release.open();
+    expect(front.log).toMatchObject([{ path: "/x", status: null, cancelled: false }]);
+    await expect.poll(() => worker.connections.every((connection) => connection.closed)).toBe(true);
+  });
+
   test("is dropped when the browser went away", async () => {
     const worker = await echoPaths();
     const front = await door(worker.url);

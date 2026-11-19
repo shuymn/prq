@@ -10,8 +10,9 @@
 //
 // Each forward is bounded: from its arrival, the browser has its answer's headers or switched protocols within
 // DOOR_ANSWER_MS, a gate's or a hold's wait included, else it gets 504 and the upstream request is dropped. A Worker that
-// cannot be reached gets the browser 502. A browser that goes away drops its upstream request or socket, also while
-// gated or held, and close() ends every connection the door holds.
+// cannot be reached, or whose answer breaks off (also while held), gets the browser 502, or its connection cut once the
+// answer's headers were passed on. A browser that goes away drops its upstream request or socket, also while gated or
+// held, and close() ends every connection the door holds.
 
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -184,14 +185,20 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
     // The browser goes away: whatever the forward is waiting on ends.
     const gone = new AbortController();
     let upstream: ReturnType<typeof request> | undefined;
+    // The forward's first failure ends it; a later one (the answer's own end, say) changes nothing.
+    let failed = false;
     const fail = (status: 502 | 504) => {
+      if (failed) {
+        return;
+      }
+      failed = true;
       clearTimeout(timer);
       gone.abort();
       upstream?.destroy();
-      if (!res.headersSent) {
-        res.writeHead(status, { "Content-Type": "text/plain", Connection: "close" }).end(`door: ${status}\n`);
-      } else {
+      if (res.headersSent || res.destroyed) {
         res.destroy();
+      } else {
+        res.writeHead(status, { "Content-Type": "text/plain", Connection: "close" }).end(`door: ${status}\n`);
       }
     };
     const timer = setTimeout(() => fail(504), answerMs);
@@ -215,6 +222,13 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
       return;
     }
     upstream = request(options, (answer) => {
+      // The answer breaking off fails the forward from the start, so that a hold's wait ends with it.
+      answer.once("error", () => fail(502));
+      answer.once("close", () => {
+        if (!answer.complete) {
+          fail(502);
+        }
+      });
       void (async () => {
         if (plan?.kind === "hold") {
           plan.answered.open();
@@ -231,8 +245,6 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
         entry.status = answer.statusCode ?? null;
         res.writeHead(answer.statusCode ?? 502, answer.statusMessage, forwardable(answer.rawHeaders, false).flat());
         answer.pipe(res);
-        answer.once("error", () => res.destroy());
-        answer.once("aborted", () => res.destroy());
       })();
     });
     upstream.once("error", () => fail(502));
