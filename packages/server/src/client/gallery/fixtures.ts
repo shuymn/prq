@@ -18,7 +18,7 @@ type Spec = {
   state?: PrState;
   kind: "push" | "question" | "summary" | "answer";
   ago: number;
-  problem?: Problem;
+  problem?: Problem | undefined;
 };
 
 function row(spec: Spec, now: number): LedgerRow {
@@ -155,11 +155,12 @@ export const allRows = (now: number) => ALL_ROWS.map((spec) => row(spec, now));
 // The Agent pool frames' list: the default rows, but with a local agent present the row that waits for one has its push
 // summarized instead.
 export const poolRows = (now: number, local: boolean) =>
-  DEFAULT_ROWS.map(({ problem, ...spec }): Spec =>
-    local && problem === "waiting_for_local_agent"
-      ? { ...spec, kind: "summary" }
-      : { ...spec, ...(problem === undefined ? {} : { problem }) },
-  ).map((spec) => row(spec, now));
+  DEFAULT_ROWS.map((spec) =>
+    row(
+      local && spec.problem === "waiting_for_local_agent" ? { ...spec, kind: "summary", problem: undefined } : spec,
+      now,
+    ),
+  );
 
 // The Hub's view: no local agent, two jobs running and three waiting, three rows needing attention, one owner.
 export const CLOUD_ONLY = v.parse(HubView, {

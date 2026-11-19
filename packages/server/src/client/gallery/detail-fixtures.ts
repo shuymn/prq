@@ -257,16 +257,7 @@ function fixture(
   messages: StoredMessage[],
   change: Partial<Session> & Partial<Omit<DetailFixture, "session">> = {},
 ): DetailFixture {
-  const {
-    slot = null,
-    hub: hubView = hub(true),
-    picked = null,
-    draft,
-    newVersion,
-    railCollapsed,
-    unavailable,
-    ...session
-  } = change;
+  const { slot = null, hub: hubView = hub(true), picked = null, draft, newVersion, railCollapsed, ...session } = change;
   return {
     session: {
       view: v.parse(PrSessionView, { ...(view.pr ?? PR), owner: view.owner, jobs: view.jobs }),
@@ -285,7 +276,6 @@ function fixture(
     ...(draft === undefined ? {} : { draft }),
     ...(newVersion === undefined ? {} : { newVersion }),
     ...(railCollapsed === undefined ? {} : { railCollapsed }),
-    ...(unavailable === undefined ? {} : { unavailable }),
   };
 }
 
@@ -343,12 +333,11 @@ const sendFailed = (now: number, phase: "not-sent" | "unconfirmed") =>
   });
 
 // The panel's default frame: a long title, an answer with a code block and its metadata.
-const panelDefault = (now: number, change: Parameters<typeof fixture>[2] = {}) =>
-  fixture(
-    { pr: LONG_PR, owner: "cloud", jobs: [...versions(now), ...answered(now)] },
-    [...SUMMARIES, ...CONVERSATION.slice(0, 2)],
-    change,
-  );
+const panelDefault = (now: number) =>
+  fixture({ pr: LONG_PR, owner: "cloud", jobs: [...versions(now), ...answered(now)] }, [
+    ...SUMMARIES,
+    ...CONVERSATION.slice(0, 2),
+  ]);
 
 // Panel / Waiting for a local agent: the second question's job waits in a local session with no agent present.
 const panelWaiting = (now: number) =>
@@ -530,6 +519,6 @@ export const DETAIL_FIXTURES: Record<string, (now: number) => DetailFixture> = {
   "panel-default": (now) => panelDefault(now),
   "panel-new-version": (now) => ({ ...panelDefault(now), newVersion: true }),
   "panel-waiting-agent": panelWaiting,
-  "panel-unavailable": (now) => panelDefault(now, { unavailable: true }),
+  "panel-unavailable": (now) => ({ ...panelDefault(now), unavailable: true }),
   "panel-summary-streaming": (now) => summaryStreaming(now, { picked: "a-newer" }),
 };
