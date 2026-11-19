@@ -12,8 +12,8 @@
     }
 
     /* The comment icon one line of the header high; an answer's lead is as wide, so its text lines up with the
-       question's. */
-    & .lead {
+       question's. Its own lead only: a Status inside keeps its color. */
+    & > .lead {
       display: flex;
       flex: none;
       align-items: center;
