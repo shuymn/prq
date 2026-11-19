@@ -929,10 +929,20 @@ function followed(data: DeployRecord, app: Application): Rollout | null {
   return found === undefined || found === null ? null : { id: found.id, image: found.image, version: found.version };
 }
 
+// The rollout a read of the application found, kept in the record as soon as it is found, before any verdict (one on a
+// read that missed something else included): once found, it stays the one every later read-back follows.
+function observe(record: Saved, app: Application | null): void {
+  const { application } = record.data;
+  if (app !== null && (application === "changed" || application === "unchanged" || application === "kept")) {
+    record.data.rollout ??= followed(record.data, app);
+  }
+}
+
 // The read-back after a successful upload: the deployed version live alone, then the application as it was left.
 async function readBack(record: Saved): Promise<number> {
   const { after, upload, application } = record.data;
   const state = record.data.reread ?? after;
+  observe(record, state?.application ?? null);
   const versionId = upload?.versionId ?? null;
   const live = state?.deployment?.versions ?? [];
   if (state !== null && state.unread.length > 0) {
@@ -962,8 +972,6 @@ async function readBack(record: Saved): Promise<number> {
       if (app === null) {
         return settle(record, "incomplete", "the application could not be read");
       }
-      // Once found, the rollout stays the one every later read-back follows, saved before its instances are read.
-      record.data.rollout ??= followed(record.data, app);
       if (record.data.rollout === null) {
         return settle(record, "complete", `version ${versionId} is live, and the application's image is unchanged`);
       }
@@ -1253,6 +1261,7 @@ async function readBackAgain(path: string): Promise<number> {
   }
   const state = await readState(accountId, record.data.after?.application?.id ?? before.application?.id ?? null);
   record.data.reread = state;
+  observe(record, state.application);
   print(`account: ${accountId}; live: ${versionsLine(state.deployment?.versions)}`);
   print(`container application ${APPLICATION}: ${applicationLine(state.application)}`);
   if (upload.exit !== 0) {

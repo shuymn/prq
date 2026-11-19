@@ -1643,6 +1643,41 @@ describe("deploy <tag>", () => {
     });
   });
 
+  it("keeps the rollout a --read-back found while it could not read the Worker's settings, for the next one", async () => {
+    // The deploy ends while it reads what is live after the upload, with no rollout under way yet.
+    await released({ afterDeploy: { "deployments status": "hang" } });
+    const { result } = start([TAG], { answers: ["y"] });
+    await hangingPids();
+    const read = (await wranglerCalls()).findLast((call) => call.call === "deployments status");
+    process.kill(read?.ppid ?? 0, "SIGTERM");
+    await result;
+    const { dir } = await onlyRecord();
+
+    // The first --read-back cannot read the Worker's settings, and finds a rollout under way.
+    await changeState({ behavior: { "api workers": "fail" }, rolloutReads: 1 });
+    const first = await deploy(["--read-back", dir], { terminal: false });
+    expect(first.code).toBe(2);
+    expect(await record(dir)).toMatchObject({
+      application: "unchanged",
+      rollout: { id: APP.id, image: APP.image, version: APP.version },
+      readBack: {
+        state: "incomplete",
+        reason:
+          "what is live could not be read: the Worker's workers.dev and preview URLs: Cloudflare's API answered HTTP 500 for the Worker's settings",
+      },
+    });
+
+    // The second reads them, and finds the rollout cleared with an active instance still at the earlier version.
+    await changeState({ behavior: {}, instancePages: [[{ state: "running", version: APP.version - 1 }]] });
+    settings.rolloutMs = 3000;
+    const second = await deploy(["--read-back", dir], { terminal: false });
+    expect(second.code).toBe(2);
+    expect((await record(dir)).readBack).toMatchObject({
+      state: "incomplete",
+      reason: "the rollout was not complete within 3 s",
+    });
+  });
+
   it("stops the upload with all it started at the end of its bound, and records it", async () => {
     await released({ behavior: { deploy: "hang" } });
     settings.stepMs = 8000;
