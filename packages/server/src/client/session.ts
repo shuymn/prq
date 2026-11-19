@@ -7,6 +7,11 @@
 // prq:history-changed. A list, read or sent, replaces the shown one only when it holds every message shown (R3), so a
 // late, stale or failed read changes nothing shown; reads never cancel each other. A run's streamed text, by
 // (jobId, run) from its stream's start, gives way only to a stored row of that run.
+//
+// A job's Retry (plan §1.9) is one POST from the revision the page shows, never sent again, and what comes of it holds
+// only for that revision: a view with another revision of the job ends it, whether its request is out (busy) or
+// answered. Once the server took or refused it (2xx or 409), Retry is withdrawn until that view, and a reconnect after
+// RETRY_STALE_MS brings the job's current state when none came; any other failure marks the job with the retry error.
 
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import {
@@ -14,6 +19,7 @@ import {
   MessageMetadata,
   type PrRef,
   PrSessionView,
+  type RetryRequest,
   ServerVersionMessage,
   sessionName,
 } from "@prq/protocol";
@@ -29,7 +35,19 @@ import { type SendSlots, type Slot, startRead, useSlot, useSlots } from "./slots
 // Reload. PartySocket keeps trying meanwhile.
 export const RECONNECT_FAILED_MS = 15_000;
 
+// After a retry's 409, how long the page waits for a view with the job's newer revision before it reconnects, whose
+// Agent state brings the job as it is.
+export const RETRY_STALE_MS = 3_000;
+
+// How long a retry may go unanswered before it counts as failed: longer than the route's own bound (ROUTE_CALL_MS), so
+// the route's 503 comes first.
+export const RETRY_ANSWER_MS = 45_000;
+
 export type Connection = "connecting" | "open" | "reconnecting" | "failed";
+
+// A job's retry from the revision `rev`: its request out (busy), answered by the server (withdrawn) or failed
+// otherwise. `failure` numbers the page's failed retries in the order they failed (0 for the others).
+type RetryMark = { rev: number; phase: "busy" | "withdrawn" | "failed"; failure: number };
 
 // A stored message as the page shows it: its text parts joined, and its metadata as the protocol reads it.
 export type StoredMessage = {
@@ -52,6 +70,8 @@ export type Session = {
   runs: readonly RunText[];
   connection: Connection;
   serverVersion: string | null;
+  // The jobs' retries, by job.
+  retries: Readonly<Record<string, RetryMark>>;
 };
 
 const ChatMessage = v.looseObject({
@@ -124,9 +144,17 @@ class SessionStore {
     runs: [],
     connection: "connecting",
     serverVersion: null,
+    retries: {},
   };
   readonly #listeners = new Set<() => void>();
   readonly #reads = new Set<AbortController>();
+  // Each job's retry: its mark, the request while it is out, and its timer (the answer's bound while busy, the wait
+  // for a newer view once withdrawn).
+  readonly #retries = new Map<
+    string,
+    { mark: RetryMark; request: AbortController | null; timer: ReturnType<typeof setTimeout> | undefined }
+  >();
+  #failures = 0;
   // Each streamed message's current request and run, and each request's run.
   readonly #streams = new Map<string, { wire: string; key: string }>();
   readonly #wires = new Map<string, string>();
@@ -137,20 +165,28 @@ class SessionStore {
   #detach: (() => void) | undefined;
   #active = false;
 
+  readonly ref: PrRef;
   readonly name: string;
   readonly fetcher: Fetch;
   readonly slots: SendSlots;
   // Removes the SDK's copy of a message whose stream restarted; the hook gives it once the SDK's list exists.
   #drop: (messageId: string) => void = () => undefined;
+  // Closes the socket and connects again; the hook gives it once the socket exists.
+  #reopen: () => void = () => undefined;
 
-  constructor(name: string, fetcher: Fetch, slots: SendSlots) {
-    this.name = name;
+  constructor(ref: PrRef, fetcher: Fetch, slots: SendSlots) {
+    this.ref = ref;
+    this.name = sessionName(ref);
     this.fetcher = fetcher;
     this.slots = slots;
   }
 
   dropWith(drop: (messageId: string) => void): void {
     this.#drop = drop;
+  }
+
+  reopenWith(reopen: () => void): void {
+    this.#reopen = reopen;
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -170,7 +206,7 @@ class SessionStore {
     this.read();
   }
 
-  // The page left the session: no read in flight is applied, no timer runs.
+  // The page left the session: no read or retry in flight is applied, no timer runs, no job is marked.
   stop(): void {
     this.#active = false;
     this.#detach?.();
@@ -180,6 +216,10 @@ class SessionStore {
       read.abort();
     }
     this.#reads.clear();
+    for (const jobId of this.#retries.keys()) {
+      this.#forget(jobId);
+    }
+    this.#update({ retries: {} });
   }
 
   read(): void {
@@ -202,11 +242,33 @@ class SessionStore {
     this.#arm();
   }
 
+  // A view: a job shown at another revision than a mark's (or no longer shown) ends that mark, busy or answered.
   viewed(state: unknown): void {
     const view = v.safeParse(PrSessionView, state);
-    if (view.success) {
-      this.#update({ view: view.output });
+    if (!view.success) {
+      return;
     }
+    for (const [jobId, { mark }] of this.#retries) {
+      const job = view.output.jobs.find((candidate) => candidate.jobId === jobId);
+      if (job?.rev !== mark.rev) {
+        this.#forget(jobId);
+      }
+    }
+    this.#update({ view: view.output, retries: this.#retryMarks() });
+  }
+
+  // Retry of a job from the revision the page shows: one request, which nothing sends again. A busy job takes none.
+  retry(jobId: string, rev: number): void {
+    if (!this.#active || this.#retries.get(jobId)?.mark.phase === "busy") {
+      return;
+    }
+    this.#forget(jobId);
+    const mark: RetryMark = { rev, phase: "busy", failure: 0 };
+    const request = new AbortController();
+    const timer = setTimeout(() => this.#answered(jobId, mark, null), RETRY_ANSWER_MS);
+    this.#retries.set(jobId, { mark, request, timer });
+    this.#update({ retries: this.#retryMarks() });
+    void this.#post(jobId, mark, request.signal);
   }
 
   message(event: MessageEvent): void {
@@ -331,6 +393,73 @@ class SessionStore {
     this.#update({ runs: this.#runList() });
   }
 
+  async #post(jobId: string, mark: RetryMark, signal: AbortSignal): Promise<void> {
+    const { owner, repo, number } = this.ref;
+    const path = [owner, repo, String(number), "jobs", jobId].map(encodeURIComponent).join("/");
+    const body: RetryRequest = { expectedRev: mark.rev };
+    let response: Response | null = null;
+    try {
+      response = await this.fetcher(`/api/pr/${path}/retry`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch {
+      // The request failed.
+    }
+    this.#answered(jobId, mark, response);
+  }
+
+  // A retry's answer (null when the request failed or RETRY_ANSWER_MS passed first), taken only while it is still the
+  // job's mark, so the view still shows the revision it was sent from: the server took it (2xx) or refused it (409),
+  // and Retry is withdrawn until the view shows the job's newer revision; anything else shows the retry error.
+  #answered(jobId: string, mark: RetryMark, response: Response | null): void {
+    if (this.#retries.get(jobId)?.mark !== mark) {
+      return;
+    }
+    this.#forget(jobId);
+    if (response !== null && (response.ok || response.status === 409)) {
+      const withdrawn: RetryMark = { ...mark, phase: "withdrawn" };
+      const timer = setTimeout(() => this.#stale(jobId, withdrawn), RETRY_STALE_MS);
+      this.#retries.set(jobId, { mark: withdrawn, request: null, timer });
+    } else {
+      this.#failures += 1;
+      this.#retries.set(jobId, {
+        mark: { ...mark, phase: "failed", failure: this.#failures },
+        request: null,
+        timer: undefined,
+      });
+    }
+    this.#update({ retries: this.#retryMarks() });
+  }
+
+  // No newer view came since the server answered: the socket connects again, whose Agent state brings the job as it
+  // is. A socket that is down brings it when it opens.
+  #stale(jobId: string, mark: RetryMark): void {
+    const entry = this.#retries.get(jobId);
+    if (entry?.mark !== mark) {
+      return;
+    }
+    entry.timer = undefined;
+    if (this.#session.connection === "open") {
+      this.#reopen();
+    }
+  }
+
+  // Ends a job's retry: its request, if out, is no longer awaited, and its timer stops.
+  #forget(jobId: string): void {
+    const entry = this.#retries.get(jobId);
+    entry?.request?.abort();
+    clearTimeout(entry?.timer);
+    this.#retries.delete(jobId);
+  }
+
+  #retryMarks(): Record<string, RetryMark> {
+    return Object.fromEntries([...this.#retries].map(([jobId, { mark }]) => [jobId, mark]));
+  }
+
   #arm(): void {
     if (this.#reconnect === undefined && this.#active) {
       this.#reconnect = setTimeout(() => {
@@ -372,6 +501,8 @@ type SessionHandle = {
   discard: () => void;
   // Try again after a failed read.
   read: () => void;
+  // A job's Retry, from the revision shown.
+  retryJob: (jobId: string, rev: number) => void;
 };
 
 // Takes the question's request out of what the socket holds for its next open, so a discarded question never reaches
@@ -390,7 +521,7 @@ export function useSession(ref: PrRef): SessionHandle {
   const fetcher = useFetch();
   const slots = useSlots();
   const socket = useContext(SocketContext);
-  const [store] = useState(() => new SessionStore(name, fetcher, slots));
+  const [store] = useState(() => new SessionStore(ref, fetcher, slots));
 
   const agent = useAgent({
     agent: "pr-session",
@@ -407,6 +538,7 @@ export function useSession(ref: PrRef): SessionHandle {
   useEffect(() => {
     store.dropWith((messageId) => setMessages((current) => current.filter((message) => message.id !== messageId)));
   }, [store, setMessages]);
+  useEffect(() => store.reopenWith(() => agent.reconnect()), [store, agent]);
   useEffect(() => store.observe(messages), [store, messages]);
   useEffect(() => {
     store.start();
@@ -443,5 +575,6 @@ export function useSession(ref: PrRef): SessionHandle {
       slots.discard(name);
     },
     read: () => store.read(),
+    retryJob: (jobId, rev) => store.retry(jobId, rev),
   };
 }

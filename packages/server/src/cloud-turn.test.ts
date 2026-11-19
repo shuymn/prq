@@ -249,7 +249,7 @@ describe("binding", () => {
 });
 
 describe("failure", () => {
-  it("keeps the text of a turn that errored as incomplete, fails the job, and a retry stores the result", async () => {
+  it("keeps the text of a turn that errored as incomplete, fails the job, and a retry stores the result, each run named in its stream start, its rows and the view", async () => {
     const logs = captureLogs();
     const session = await cloudSession("turn", sockets);
     const { stub, client } = session;
@@ -265,46 +265,30 @@ describe("failure", () => {
 
     const job = await jobOf(stub, "q1");
     expect(job).toMatchObject({ failure: "lost", unresolved_failure: 1, turn_id: null });
-    expect((await stub.view()).jobs).toMatchObject([{ state: "failed", failure: "lost" }]);
+    expect((await stub.view()).jobs).toMatchObject([{ state: "failed", failure: "lost", run: 1 }]);
     const incomplete = await stored(session, `answer-${job.job_id}-r1-incomplete`);
     expect(textOf(incomplete)).toBe("partial");
     expect(v.parse(MessageMetadata, incomplete?.metadata)).toMatchObject({
       kind: "answer",
+      jobId: job.job_id,
       questionId: "q1",
+      run: 1,
       incomplete: { reason: "lost" },
     });
     expect(await stored(session, `answer-${job.job_id}`)).toBeUndefined();
 
     expect(await retryIn(stub, job.job_id)).toEqual({ status: "retried" });
     await untilState(stub, "q1", "done");
-    expect(textOf(await stored(session, `answer-${job.job_id}`))).toBe("answer one");
+    expect((await stub.view()).jobs).toMatchObject([{ state: "done", run: 2 }]);
+    const result = await stored(session, `answer-${job.job_id}`);
+    expect(textOf(result)).toBe("answer one");
+    expect(v.parse(MessageMetadata, result?.metadata)).toMatchObject({ jobId: job.job_id, run: 2 });
     expectAppended(before, await messageRows(session), [
       "q1",
       `answer-${job.job_id}-r1-incomplete`,
       `answer-${job.job_id}`,
     ]);
     expect(events(logs, "prq.job.failed")).toMatchObject([{ from: "running", to: "failed", reason: "lost" }]);
-  });
-
-  it("names the run in each run's stream start, in its incomplete text and in the retried run's result", async () => {
-    captureLogs();
-    const session = await cloudSession("turn", sockets);
-    const { stub, client } = session;
-    const model = new ScriptedModel().add(
-      [{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "partial" }, { fail: new Error("lost") }],
-      answerScript("answer one"),
-    );
-    useCloudModel(model);
-
-    await client.chat([Q1]);
-    await untilState(stub, "q1", "failed");
-    const job = await jobOf(stub, "q1");
-    expect(await retryIn(stub, job.job_id)).toEqual({ status: "retried" });
-    await untilState(stub, "q1", "done");
-
-    const metadataOf = async (id: string) => v.parse(MessageMetadata, (await stored(session, id))?.metadata);
-    expect(await metadataOf(`answer-${job.job_id}-r1-incomplete`)).toMatchObject({ jobId: job.job_id, run: 1 });
-    expect(await metadataOf(`answer-${job.job_id}`)).toMatchObject({ jobId: job.job_id, run: 2 });
     // Each run's stream starts with the same message ID, its start metadata naming the run.
     const starts = client.frames.flatMap((frame) => {
       const body = frame["type"] === "cf_agent_use_chat_response" ? frame["body"] : undefined;

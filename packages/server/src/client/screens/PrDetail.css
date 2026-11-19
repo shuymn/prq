@@ -11,6 +11,10 @@
     margin-inline: auto;
     padding-block: var(--inset-page);
 
+    &[data-rail="collapsed"] {
+      grid-template-columns: minmax(0, 1fr) var(--size-control-md);
+    }
+
     & h2 {
       margin: 0;
       font: var(--text-heading);
@@ -46,11 +50,32 @@
       }
     }
 
-    /* The rail: the versions, then the jobs, each under its heading. */
+    /* The rail: its head with the toggle at its end, the versions, then the jobs, each under its heading. Collapsed, the
+       head alone, as wide as the toggle. */
     & .rail {
       display: flex;
       flex-direction: column;
       gap: var(--gap-section);
+
+      & .rail-head {
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      /* The danger dot at the toggle's top-right corner, which takes no pointer. */
+      & .rail-toggle {
+        position: relative;
+        display: flex;
+
+        & .alert {
+          position: absolute;
+          inset-block-start: 0;
+          inset-inline-end: 0;
+          display: flex;
+          color: var(--color-danger-fg);
+          pointer-events: none;
+        }
+      }
 
       & section {
         display: flex;

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Button } from "./Button.tsx";
 import { Icon } from "./Icon.tsx";
 import { RelativeTime } from "./RelativeTime.tsx";
+import { RetryButton, RetryError, type RetryState } from "./retry.tsx";
 import { Sha } from "./Sha.tsx";
 import { Status } from "./Status.tsx";
 
@@ -29,10 +30,14 @@ type AnswerProps = {
   state: AnswerState;
   // The answer's text, rendered (Markdown); none while a turn has yet to write.
   content?: ReactNode | undefined;
-  // A turn under way: who runs it and since when ("cloud · started 10:14").
+  // A turn under way: who runs it and since when ("cloud · started 10:14"), or, for a claim past the stall mark
+  // (`stalled`), who has had no result for how long.
   running?: ReactNode | undefined;
-  // Why an incomplete answer stopped.
+  stalled?: boolean | undefined;
+  // Why an incomplete answer stopped. The job's Retry follows the running line or the reason.
   reason?: string | undefined;
+  retry?: RetryState | null | undefined;
+  onRetry?: (() => void) | undefined;
   // The workspace SHA it was answered at, the model and the tokens a cloud result used.
   sha?: string | null | undefined;
   model?: string | null | undefined;
@@ -44,8 +49,9 @@ export const FAILURES = { "not-sent": "Not sent", unconfirmed: "Couldn't confirm
 const count = new Intl.NumberFormat("en");
 
 // A message of the conversation (design/components.md, PR detail): a question with how its send went and why it
-// waits, or an answer under its question, streaming with its running line, complete, or incomplete with the reason,
-// and what it was answered at.
+// waits, or an answer under its question, streaming with its running line, complete, or incomplete with the reason, and
+// what it was answered at. A claimed job's Retry follows its running line, a failed one's the reason, the retry error on
+// the next line.
 export function Message(props: QuestionProps | AnswerProps) {
   if (props.role === "question") {
     const { state, text, at, waiting, failure, onRetry, onDiscard } = props;
@@ -76,7 +82,7 @@ export function Message(props: QuestionProps | AnswerProps) {
       </article>
     );
   }
-  const { state, content, running, reason, sha, model, tokens } = props;
+  const { state, content, running, stalled, reason, retry, onRetry, sha, model, tokens } = props;
   const usage = [model, tokens === undefined || tokens === null ? null : `${count.format(tokens)} tokens`].filter(
     (part) => part !== undefined && part !== null,
   );
@@ -90,11 +96,18 @@ export function Message(props: QuestionProps | AnswerProps) {
         </div>
         {running !== undefined && (
           <p className="running">
-            <Status state="running" label="Answering" />
+            {stalled === true ? <Status state="stalled" /> : <Status state="running" label="Answering" />}
             <span>{running}</span>
+            <RetryButton state={retry} onRetry={onRetry} />
           </p>
         )}
-        {state === "incomplete" && reason !== undefined && <Status state="failed" label={`Incomplete — ${reason}`} />}
+        {state === "incomplete" && reason !== undefined && (
+          <div className="failure">
+            <Status state="failed" label={`Incomplete — ${reason}`} />
+            <RetryButton state={retry} onRetry={onRetry} />
+          </div>
+        )}
+        <RetryError state={retry} />
         {((sha !== undefined && sha !== null) || usage.length > 0) && (
           <p className="meta">
             {sha !== undefined && sha !== null && (

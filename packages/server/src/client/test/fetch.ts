@@ -6,6 +6,9 @@ import type { Fetch } from "../reads.ts";
 
 export type Pending = {
   url: URL;
+  method: string;
+  // The request's body, when it has a text one.
+  body: string | null;
   signal: AbortSignal;
   respond(body: unknown, status?: number): void;
   fail(): void;
@@ -34,6 +37,8 @@ export function controlledFetch() {
     new Promise<Response>((resolve, reject) => {
       requests.push({
         url: new URL(input, location.origin),
+        method: init.method ?? "GET",
+        body: typeof init.body === "string" ? init.body : null,
         signal: init.signal ?? new AbortController().signal,
         respond: (body, status = 200) => resolve(new Answer(body, status)),
         fail: () => reject(new TypeError("Failed to fetch")),

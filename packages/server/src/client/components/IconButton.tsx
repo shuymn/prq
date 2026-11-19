@@ -9,6 +9,8 @@ export function IconButton({
   size,
   icon,
   label,
+  expanded,
+  description,
   onClick,
   preview,
 }: {
@@ -16,6 +18,10 @@ export function IconButton({
   size: ControlSize;
   icon: IconName;
   label: string;
+  // A toggle's state, for a button that shows and hides content.
+  expanded?: boolean | undefined;
+  // What the button's look adds to its name, for assistive technology (a mark on the icon).
+  description?: string | undefined;
   onClick?: (() => void) | undefined;
   preview?: PreviewState | undefined;
 }) {
@@ -27,6 +33,8 @@ export function IconButton({
       data-size={size}
       data-state={preview ?? "rest"}
       aria-label={label}
+      aria-expanded={expanded}
+      aria-description={description}
       onClick={onClick}
     >
       <Icon name={icon} />

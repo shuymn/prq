@@ -50,6 +50,22 @@
       gap: var(--gap-related);
     }
 
+    /* The progress line: what it says, then Retry and the retry error a related gap apart. */
+    & .progress {
+      gap: var(--gap-related);
+
+      & .info {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--gap-tight);
+      }
+
+      &[data-tone="attention"] .info {
+        color: var(--color-attention-fg);
+      }
+    }
+
     & .skeleton {
       display: flex;
       flex-direction: column;

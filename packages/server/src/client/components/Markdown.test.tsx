@@ -1,6 +1,7 @@
 // An agent's Markdown (plan P3.11): raw HTML, images and links other than absolute http(s) URLs render no element of
-// their own and no unsafe or relative link; a valid https link is followed in a new tab, a linked image is one link;
-// inline code stays inline and a fenced block is its source and language.
+// their own and no unsafe or relative link; a valid https link is followed in a new tab, a linked image is one link
+// named by its alt text (or its address), the inline nodes around it kept; inline code stays inline and a fenced block
+// is its source and language.
 
 import { expect, test } from "vitest";
 import { render } from "vitest-browser-react";
@@ -15,6 +16,8 @@ const TEXT = `<b>bold</b> <img src="https://example.com/x.png" onerror="alert(1)
 [run](javascript:alert(1)) [relative](/pr/shuymn/prq/1) [mail](mailto:host@example.com) [docs](https://example.com/docs)
 
 [![Architecture](https://example.com/architecture.png)](https://example.com/architecture)
+
+[**![Diagram](https://example.com/image.png)**](https://example.com/doc) [![Logo](https://example.com/logo.png) \`v2\`](https://example.com/v2) [![](https://example.com/blank.png)](https://example.com/blank)
 
 Call \`retry()\` first.
 
@@ -40,7 +43,12 @@ test("renders an agent's Markdown with no element or link of its own making (P3.
     { text: "a diagram", href: "https://example.com/diagram.png", target: "_blank", rel: "noreferrer" },
     { text: "docs", href: "https://example.com/docs", target: "_blank", rel: "noreferrer" },
     { text: "Architecture", href: "https://example.com/architecture", target: "_blank", rel: "noreferrer" },
+    { text: "Diagram", href: "https://example.com/doc", target: "_blank", rel: "noreferrer" },
+    { text: "Logo v2", href: "https://example.com/v2", target: "_blank", rel: "noreferrer" },
+    { text: "https://example.com/blank.png", href: "https://example.com/blank", target: "_blank", rel: "noreferrer" },
   ]);
+  expect(root?.querySelector('a[href="https://example.com/doc"] > strong')?.textContent).toBe("Diagram");
+  expect(root?.querySelector('a[href="https://example.com/v2"] > code')?.textContent).toBe("v2");
   for (const text of ["a local one", "a plain one", "run", "relative", "mail"]) {
     await expect.element(page.getByText(text, { exact: true })).toBeVisible();
   }

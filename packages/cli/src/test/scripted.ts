@@ -48,8 +48,11 @@ export function chatRequest(body: string): ChatRequest {
 // A stream that stops after its first `after` text chunks, opening reached, until release opens or the Worker cancels it.
 export type Hold = { after: number; reached: Latch; release: Latch };
 
-// What the script answers a request with: one tool call, or a final text, streamed as one chunk or as the chunks given.
-export type Scripted = { tool: string; input: Record<string, unknown> } | { text: string | string[]; hold?: Hold };
+// What the script answers a request with: one tool call, or a final text, streamed as one chunk or as the chunks given;
+// with `error`, the provider's error after the chunks (none for an error before any text) in place of the finish.
+export type Scripted =
+  | { tool: string; input: Record<string, unknown> }
+  | { text: string | string[]; hold?: Hold; error?: string };
 
 function stream(chunks: unknown[], hold?: Hold): Response {
   const events = [...chunks.map((entry) => `data: ${JSON.stringify(entry)}\n\n`), "data: [DONE]\n\n"];
@@ -122,13 +125,16 @@ export function serveScripted(): { play: (script: Script) => void; stop: () => v
       ]);
     }
     const texts = typeof reply.text === "string" ? [reply.text] : reply.text;
+    const end =
+      reply.error === undefined
+        ? [chunk({ delta: {}, finish_reason: "stop" }), usage]
+        : [{ error: { message: reply.error, type: "server_error", code: null } }];
     return stream(
       [
         ...texts.map((text, index) =>
           chunk({ delta: index === 0 ? { role: "assistant", content: text } : { content: text } }),
         ),
-        chunk({ delta: {}, finish_reason: "stop" }),
-        usage,
+        ...end,
       ],
       reply.hold,
     );

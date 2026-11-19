@@ -15,8 +15,8 @@ import { REGISTRY } from "./registry.tsx";
 
 const design = designNames(componentsMd, screensMd);
 
-// What the UI has yet to build, by component and by state ID (plan §4: Retry and the states that show it in PR 4, the
-// pool's button, popover and line in PR 5, the settings in PR 6). A pending item must name something the design has.
+// What the UI has yet to build, by component and by state ID (plan §4: the pool's button, popover and line in PR 5, the
+// settings in PR 6). A pending item must name something the design has.
 const PENDING_COMPONENTS = [
   "PoolStatus",
   "PoolPopover",
@@ -28,15 +28,7 @@ const PENDING_COMPONENTS = [
   "SkillReview",
   "Dialog",
 ];
-const PENDING_STATES = [
-  "detail.stalled",
-  "detail.failed",
-  "panel.failed",
-  "panel.waiting-agent",
-  "panel.unavailable",
-  "pool.",
-  "settings.",
-];
+const PENDING_STATES = ["panel.waiting-agent", "panel.unavailable", "pool.", "settings."];
 
 // Components the design keeps for its own frames, "design-only, not in code" (design/components.md).
 const DESIGN_ONLY = ["Note"];
@@ -247,8 +239,10 @@ const visible = async (text: string) => {
 const details = () => document.querySelector<HTMLDetailsElement>("[data-component=Disclosure] > details");
 const none = (name: string) => expect(page.getByRole("button", { name }).elements()).toEqual([]);
 
+const retries = () => page.getByRole("button", { name: "Retry" }).elements();
+
 describe("the PR detail's states", () => {
-  // What tells each state apart, without Retry (plan P3.15).
+  // What tells each state apart (plan P3.15, P4.4, P4.6, P4.7).
   const checks: Record<string, (screen: RenderResult) => Promise<void>> = {
     "detail.default": async () => {
       expect(
@@ -258,7 +252,11 @@ describe("the PR detail's states", () => {
         "Can I retry before the 60-minute stalled mark?",
       ]);
       expect(textOf("[data-component=Summary] .meta")).toBe("deepseek-chat · 12,480 tokens");
-      expect(page.getByRole("complementary").getByRole("button").elements()).toHaveLength(3);
+      // The rail collapsed to its toggle, no job needing attention.
+      const toggle = page.getByRole("button", { name: "Jobs and versions" });
+      expect(page.getByRole("complementary").getByRole("button").elements()).toEqual([toggle.element()]);
+      await expect.element(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(toggle.element().getAttribute("aria-description")).toBeNull();
     },
     "detail.empty": async () => {
       expect(textOf("[data-component=Summary] > [data-component=Status]")).toMatch(
@@ -293,11 +291,44 @@ describe("the PR detail's states", () => {
       expect(textOf("[data-component=JobRow][data-state=running] .meta")).toMatch(
         /^agent-7f3a · running since \d\d:\d\d \(10 min\)$/,
       );
-      none("Retry");
+      // A local claim's Retry, in its rail row only.
+      expect(retries()).toEqual([document.querySelector("[data-component=JobRow][data-state=running] button")]);
     },
     "detail.queued": async () => {
       await visible("Queued behind the running answer");
       await visible("Answering");
+    },
+    "detail.stalled": async () => {
+      expect(textOf("[data-component=Summary] .progress")).toBe(
+        "Summary of e4f5a6b possibly stalled: no result from mbp-office after 1 hrRetry",
+      );
+      expect(retries()).toHaveLength(1);
+      const toggle = page.getByRole("button", { name: "Jobs and versions" });
+      await expect.element(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect.element(toggle).toHaveAccessibleDescription("A job needs attention");
+      expect(document.querySelector(".rail-toggle .alert")).not.toBeNull();
+    },
+    "detail.failed": async () => {
+      expect(textOf("[data-component=Summary] [data-component=Notice]")).toBe(
+        "Summary of d4e5f6a failedThe provider refused the call: spend limit reached. The summary below is for 7a8b9c0.Retry",
+      );
+      expect(textOf("[data-component=Summary] > .body")).toMatch(/^What changed/);
+      await visible("Incomplete — the provider refused the call: spend limit reached");
+      expect(
+        [...document.querySelectorAll(".rail [data-component=JobRow]")].map((row) => [
+          row.getAttribute("data-state"),
+          row.querySelector("button")?.textContent ?? null,
+        ]),
+      ).toEqual([
+        ["failed", "Retry"],
+        ["failed", "Retry"],
+        ["done", null],
+        ["done", null],
+        ["done", null],
+      ]);
+      // The notice's, the answer's and the two failed jobs'.
+      expect(retries()).toHaveLength(4);
+      await visible("3 done");
     },
     "detail.disconnected": async () => {
       await visible("Reconnecting… Showing the last known content.");
@@ -344,6 +375,12 @@ describe("the PR detail's states", () => {
       await visible("Writing");
       expect(textOf("[data-component=Summary] .meta")).toBe("deepseek-chat");
       expect(textOf("[data-component=Composer] .context")).toBe("Questions are answered at e4f5a6b (latest)");
+    },
+    "panel.failed": async () => {
+      await visible("Incomplete — step limit reached");
+      expect(retries()).toHaveLength(1);
+      expect(textOf("[data-component=Message][data-state=incomplete] .answered-at")).toBe("Answered at 7a8b9c0");
+      expect(document.querySelector("[data-component=Notice]")).toBeNull();
     },
     "panel.disconnected": async () => {
       await visible("Reconnecting… Showing the last known content.");

@@ -672,6 +672,7 @@ export function jobView(row: JobRow, now: number): JobView {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     rev: row.rev,
+    run: row.run,
   };
 }
 
