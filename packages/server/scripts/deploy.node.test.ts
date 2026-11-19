@@ -32,8 +32,9 @@ const WORKER_CONFIG = '{ "name": "prq", "workers_dev": false, "preview_urls": fa
 
 // The stand-in for wrangler. Its state (FAKE_WRANGLER_STATE): the live versions, each version's tag, the container
 // applications, how many reads of a changed application still find its rollout active, whether a deploy changes the
-// image, a behavior per call ("fail", "hang", or for deploy "fail-after-upload" and "hang-after-upload"), and the
-// behaviors a deploy sets once it has uploaded (afterDeploy). Each call appends its arguments,
+// image, the pages of instances it lists (by default an instance at the application's version once its rollout is
+// done, then an inactive Durable Object), a behavior per call ("fail", "hang", or for deploy "fail-after-upload" and
+// "hang-after-upload"), and the behaviors a deploy sets once it has uploaded (afterDeploy). Each call appends its arguments,
 // working directory, parent and environment (and a deploy its config file) to FAKE_WRANGLER_LOG; a hanging call writes
 // its pid and its child's to FAKE_WRANGLER_PIDS.
 const FAKE_WRANGLER = `#!${process.execPath}
@@ -91,7 +92,18 @@ if (behavior === "hang") {
   json({ id: app.id, name: app.name, version: app.version, configuration: { image: app.image }, active_rollout_id: rolling ? "rollout-" + app.version : undefined });
 } else if (call === "containers instances") {
   const app = state.applications.find((each) => each.id === args[2]);
-  json([{ id: "instance-1", name: null, state: "running", version: state.rolloutReads > 0 ? app.version - 1 : app.version }]);
+  const pages = state.instancePages ?? [
+    [{ id: "instance-1", name: "pr-1", state: "running", version: state.rolloutReads > 0 ? app.version - 1 : app.version }],
+    [{ id: "durable-object-2", name: "pr-2", state: "inactive", version: null }],
+  ];
+  const option = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
+  const page = Number(option("--page-token") ?? 0);
+  if (option("--per-page") === undefined && option("--page-token") === undefined) {
+    // wrangler's form without paging: the first page alone.
+    json(pages[0]);
+  } else {
+    json({ instances: pages[page], result_info: { per_page: Number(option("--per-page")), page_token: option("--page-token") ?? null, next_page_token: page + 1 < pages.length ? String(page + 1) : null } });
+  }
 } else if (call === "deploy") {
   state.uploads += 1;
   const id = String(state.uploads).padStart(8, "0") + "-0000-4000-8000-000000000000";
@@ -185,6 +197,7 @@ type State = {
   rolloutAfterDeploy: number;
   behavior: Record<string, string>;
   afterDeploy: Record<string, string>;
+  instancePages: { state: string; version: number | null }[][] | null;
 };
 type Result = { code: number | null; signal: NodeJS.Signals | null; output: string };
 
@@ -300,6 +313,7 @@ beforeEach(async () => {
     PRQ_DEPLOY_WRANGLER: join(bin, "wrangler"),
     PRQ_DEPLOY_WAIT_MS: "15000",
     PRQ_DEPLOY_POLL_MS: "50",
+    PRQ_DEPLOY_ROLLOUT_MS: "20000",
     PRQ_DEPLOY_ORIGIN: `http://127.0.0.1:${port}`,
     PRQ_ACCESS_CLIENT_ID: TOKEN.id,
     PRQ_ACCESS_CLIENT_SECRET: TOKEN.secret,
@@ -341,6 +355,7 @@ async function saveState(state: Partial<State>): Promise<void> {
     rolloutAfterDeploy: 2,
     behavior: {},
     afterDeploy: {},
+    instancePages: null,
     ...state,
   };
   await writeFile(join(root, "wrangler-state.json"), JSON.stringify(full));
@@ -946,6 +961,54 @@ describe("deploy <tag>", () => {
     expect(data).toMatchObject({ application: "changed", readBack: { state: "complete" } });
     expect(data.readBack?.rounds).toHaveLength(2);
     expect(result.output).toContain("read-back complete: the application's rollout of version 4 is complete");
+    // Every page of the instances, the inactive Durable Object apart.
+    expect(result.output).toContain("instances: 1 active (0 at another version or none, 0 not settled), 1 inactive");
+  });
+
+  it("follows a rollout still under way when the application is unchanged, until it is complete", async () => {
+    await released({ rolloutReads: 10, imageChanges: false });
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(0);
+    const { data } = await onlyRecord();
+    expect(data).toMatchObject({
+      application: "unchanged",
+      readBack: { state: "complete", reason: "the application's rollout of version 3 is complete" },
+    });
+    // The reads before and after the upload found it active, and so did each round's but the last.
+    expect(data.readBack?.rounds).toHaveLength(9);
+  });
+
+  it.each([
+    [
+      "an instance at an older version on a later page",
+      [
+        [
+          { state: "running", version: 4 },
+          { state: "inactive", version: null },
+        ],
+        [{ state: "running", version: 3 }],
+      ],
+      "2 active (1 at another version or none, 0 not settled), 1 inactive",
+    ],
+    [
+      "a running instance with no version",
+      [[{ state: "running", version: null }]],
+      "1 active (1 at another version or none, 0 not settled), 0 inactive",
+    ],
+  ])("leaves a rollout incomplete at the end of its time with %s", async (_what, instancePages, line) => {
+    await released({ imageChanges: true, rolloutAfterDeploy: 0, instancePages });
+    env["PRQ_DEPLOY_ROLLOUT_MS"] = "5000";
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(2);
+    expect(result.output).toContain(`instances: ${line}`);
+    expect((await onlyRecord()).data.readBack).toMatchObject({
+      state: "incomplete",
+      reason: "the rollout was not complete within 5 s",
+    });
   });
 
   it("leaves the read-back incomplete while the deployed version is not live alone", async () => {

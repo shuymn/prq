@@ -82,8 +82,9 @@ const SUBDOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const COMPATIBILITY_DATE = "2026-11-10";
 const DASHBOARD = "Workers & Pages → prq → Settings → Domains & Routes";
 const RESUME = "pnpm --dir packages/server run deploy -- --read-back";
-// The rollout is read every poll interval, at most this many times (30 minutes at 10 s).
-const POLL_ROUNDS = 180;
+// A changed application's instances, read a page at a time (wrangler's own page size) up to this many pages.
+const INSTANCES_PER_PAGE = "25";
+const INSTANCE_PAGES = 200;
 // How long the owner has to look at a new container application in the dashboard.
 const PROVISIONING_MS = 30 * 60_000;
 // The web UI build's inputs for the browser check alone (vite.config.ts), which a release's build never takes.
@@ -116,10 +117,13 @@ function setting(name: string, fallback: number): number {
 const stepMs = setting("PRQ_DEPLOY_STEP_MS", 60 * 60_000);
 const uploadMs = setting("PRQ_DEPLOY_STEP_MS", 2 * 60 * 60_000);
 const pollMs = setting("PRQ_DEPLOY_POLL_MS", 10_000);
+// The rollout is read every poll interval until it is complete or this long has passed since the poll began.
+const rolloutMs = setting("PRQ_DEPLOY_ROLLOUT_MS", 30 * 60_000);
 const originOverride = process.env["PRQ_DEPLOY_ORIGIN"];
 
 // What wrangler answers: `deployments status --json`, `versions view --json`, `containers list --json`,
-// `containers info --json` and `containers instances --json`.
+// `containers info --json` and a page of `containers instances --json --per-page` (a Durable Object with no instance
+// is a row of its own, its state "inactive").
 const DeploymentAnswer = v.object({
   id: v.nullish(v.string()),
   versions: v.array(v.object({ version_id: v.string(), percentage: v.number() })),
@@ -135,7 +139,12 @@ const ApplicationAnswer = v.object({
   configuration: v.nullish(v.object({ image: v.nullish(v.string()) })),
   active_rollout_id: v.nullish(v.string()),
 });
-const InstancesAnswer = v.array(v.object({ state: v.string(), version: v.nullish(v.number()) }));
+const Instance = v.object({ state: v.string(), version: v.nullish(v.number()) });
+type Instance = v.InferOutput<typeof Instance>;
+const InstancesPage = v.object({
+  instances: v.array(Instance),
+  result_info: v.object({ next_page_token: v.nullish(v.string()) }),
+});
 // An entry of wrangler's output file (WRANGLER_OUTPUT_FILE_PATH): the deploy's, with the version it created.
 const DeployEntry = v.object({ type: v.literal("deploy"), version_id: v.string() });
 
@@ -351,13 +360,37 @@ async function applicationInfo(accountId: string, id: string): Promise<Applicati
   };
 }
 
-function instances(accountId: string, id: string): Promise<v.InferOutput<typeof InstancesAnswer>> {
-  return wranglerJson(
-    "containers instances",
-    ["containers", "instances", id, "--json", ...TOP_LEVEL],
-    accountId,
-    InstancesAnswer,
-  );
+// Every page of the application's instances, each read only while late() is false. (Without --per-page, wrangler
+// prints the first page alone.)
+async function instances(accountId: string, id: string, late: () => boolean): Promise<Instance[]> {
+  const rows: Instance[] = [];
+  let token: string | null = null;
+  for (let page = 0; page < INSTANCE_PAGES; page++) {
+    if (late()) {
+      throw new Refusal("its time passed while the instances were read");
+    }
+    const answered: v.InferOutput<typeof InstancesPage> = await wranglerJson(
+      "containers instances",
+      [
+        "containers",
+        "instances",
+        id,
+        "--json",
+        "--per-page",
+        INSTANCES_PER_PAGE,
+        ...(token === null ? [] : ["--page-token", token]),
+        ...TOP_LEVEL,
+      ],
+      accountId,
+      InstancesPage,
+    );
+    rows.push(...answered.instances);
+    token = answered.result_info.next_page_token ?? null;
+    if (token === null || token === "") {
+      return rows;
+    }
+  }
+  throw new Refusal(`wrangler containers instances listed more than ${INSTANCE_PAGES} pages`);
 }
 
 // The live versions and the container application (the one known by its ID, else by its name), each null when there
@@ -625,37 +658,48 @@ async function settle(
   return 2;
 }
 
-// Polls a changed application until its rollout is complete: the image this deploy set, no active rollout, and every
+// The instances as the read-back counts them: those of a Durable Object with no instance (inactive) apart, and of the
+// rest, those at another version than the application's (an unknown version is not the application's) and those not
+// settled.
+function instanceCounts(rows: readonly Instance[], appVersion: number | null) {
+  const active = rows.filter((each) => each.state !== "inactive");
+  return {
+    active: active.length,
+    behind: active.filter((each) => appVersion === null || each.version !== appVersion).length,
+    unsettled: active.filter((each) => ["provisioning", "failed", "unhealthy", "unknown"].includes(each.state)).length,
+    inactive: rows.length - active.length,
+  };
+}
+
+// Polls an application until its rollout is complete, for at most the rollout's time (a read under way then finishes
+// first, within wrangler's wait): the image this deploy set (when it set one), no active rollout, and every active
 // instance at the application's version, none starting or failed.
 async function pollRollout(record: Saved, expectedImage: string | null, id: string): Promise<number> {
   const { accountId } = record.data;
   const rounds = record.data.readBack?.rounds ?? [];
+  const deadline = Date.now() + rolloutMs;
+  const late = () => Date.now() >= deadline;
+  const notComplete = `the rollout was not complete within ${Math.round(rolloutMs / 1000)} s`;
   onInterrupt(async () => {
     process.exitCode = await settle(record, "incomplete", "the owner stopped the rollout's read-back", { rounds });
     process.exit();
   });
   try {
-    for (let round = 0; round < POLL_ROUNDS; round++) {
+    for (;;) {
       let app: Application;
-      let listed: v.InferOutput<typeof InstancesAnswer>;
+      let listed: Instance[];
       try {
         app = await applicationInfo(accountId, id);
-        listed = await instances(accountId, id);
+        listed = await instances(accountId, id, late);
       } catch (error) {
         if (!(error instanceof Refusal)) {
           throw error;
         }
-        return await settle(record, "incomplete", `the rollout could not be read: ${error.lines.join("; ")}`, {
-          rounds,
-        });
+        const reason = late() ? notComplete : `the rollout could not be read: ${error.lines.join("; ")}`;
+        return await settle(record, "incomplete", reason, { rounds });
       }
-      const behind = listed.filter(
-        (each) => each.version !== null && each.version !== undefined && each.version !== app.version,
-      );
-      const unsettled = listed.filter((each) =>
-        ["provisioning", "failed", "unhealthy", "unknown"].includes(each.state),
-      );
-      const instancesLine = `${listed.length} listed, ${behind.length} at another version, ${unsettled.length} not settled`;
+      const counts = instanceCounts(listed, app.version);
+      const instancesLine = `${counts.active} active (${counts.behind} at another version or none, ${counts.unsettled} not settled), ${counts.inactive} inactive`;
       rounds.push({ at: now(), application: app, instances: instancesLine });
       print(`rollout: ${applicationLine(app)}; instances: ${instancesLine}`);
       if (expectedImage !== null && app.image !== expectedImage) {
@@ -666,7 +710,7 @@ async function pollRollout(record: Saved, expectedImage: string | null, id: stri
           { rounds },
         );
       }
-      if (app.activeRollout === null && behind.length === 0 && unsettled.length === 0) {
+      if (app.activeRollout === null && counts.behind === 0 && counts.unsettled === 0) {
         return await settle(
           record,
           "complete",
@@ -674,10 +718,12 @@ async function pollRollout(record: Saved, expectedImage: string | null, id: stri
           { rounds },
         );
       }
+      if (Date.now() + pollMs >= deadline) {
+        return await settle(record, "incomplete", notComplete, { rounds });
+      }
       await record.save();
       await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
-    return await settle(record, "incomplete", `the rollout was not complete after ${POLL_ROUNDS} reads`, { rounds });
   } finally {
     onInterrupt(null);
   }
@@ -741,7 +787,13 @@ async function readBack(record: Saved): Promise<number> {
         : pollRollout(record, after?.application?.image ?? app.image, app.id);
     case "unchanged":
     case "kept":
-      return settle(record, "complete", `version ${versionId} is live, and the application's image is unchanged`);
+      // A rollout still under way (as after a retry whose image was the same) is followed as a changed one is.
+      if (app === null) {
+        return settle(record, "incomplete", "the application could not be read");
+      }
+      return app.activeRollout === null
+        ? settle(record, "complete", `version ${versionId} is live, and the application's image is unchanged`)
+        : pollRollout(record, app.image, app.id);
     default:
       return settle(record, "incomplete", `the container application ${APPLICATION} was not found after the upload`);
   }
