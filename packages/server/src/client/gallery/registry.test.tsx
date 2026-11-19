@@ -119,8 +119,28 @@ describe("the PR list's states", () => {
       "prq",
       "Add retry to stalled jobs#42",
       "",
-      "Answer3 min. ago",
+      "Answer3 min ago",
     ]);
+    // Each row's latest event and how long ago it was, as the frame writes it.
+    await expect
+      .poll(() =>
+        rows()
+          .elements()
+          .slice(1)
+          .map((row) => row.lastElementChild?.textContent),
+      )
+      .toEqual([
+        "Push received2 min ago",
+        "Answer3 min ago",
+        "Question sent8 min ago",
+        "Summary12 min ago",
+        "Question sent1 hr ago",
+        "Push received2 hr ago",
+        "Summary3 hr ago",
+        "Answeryesterday",
+        "Summary2 days ago",
+        "Answer3 days ago",
+      ]);
   });
 
   test("list.waiting-agent: the waiting row as a wait, not a fault", async () => {

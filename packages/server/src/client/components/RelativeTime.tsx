@@ -27,25 +27,29 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-const FORMAT = new Intl.RelativeTimeFormat("en", { numeric: "auto", style: "short" });
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 
-const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
-  ["year", 365 * 24 * 60 * 60_000],
-  ["month", 30 * 24 * 60 * 60_000],
-  ["day", 24 * 60 * 60_000],
-  ["hour", 60 * 60_000],
-  ["minute", 60_000],
+// Each unit from the largest, and how a whole number of it ago reads: minutes and hours abbreviated as the design
+// writes them, without a period ("2 min ago", "1 hr ago"), and one day, month or year ago in words.
+const UNITS: [number, (count: number) => string][] = [
+  [365 * DAY, (count) => (count === 1 ? "last year" : `${count} years ago`)],
+  [30 * DAY, (count) => (count === 1 ? "last month" : `${count} months ago`)],
+  [DAY, (count) => (count === 1 ? "yesterday" : `${count} days ago`)],
+  [HOUR, (count) => `${count} hr ago`],
+  [MINUTE, (count) => `${count} min ago`],
 ];
 
-// How long ago `at` was from `from`, in its largest whole unit ("3 min. ago", "yesterday"); under a minute is "now".
+// How long ago `at` was from `from`, in its largest whole unit; under a minute is "now".
 function relativeText(at: number, from: number): string {
   const elapsed = Math.max(0, from - at);
-  for (const [unit, size] of UNITS) {
+  for (const [size, text] of UNITS) {
     if (elapsed >= size) {
-      return FORMAT.format(-Math.floor(elapsed / size), unit);
+      return text(Math.floor(elapsed / size));
     }
   }
-  return FORMAT.format(0, "second");
+  return "now";
 }
 
 // A time as how long ago it was (design/components.md, Status and labels), in a <time> carrying the instant.
