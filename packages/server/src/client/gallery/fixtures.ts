@@ -117,6 +117,38 @@ const ALL_ROWS: Spec[] = [
   ...DEFAULT_ROWS.slice(8),
 ];
 
+// PR list / Repository menu: the followed repositories of one owner, which the menu names without the owner, more
+// than the room below the trigger holds.
+const MENU_REPOS = [
+  "atlas",
+  "beacon",
+  "cinder",
+  "delta-sync",
+  "dotfiles",
+  "ember",
+  "fjord",
+  "gale",
+  "harbor",
+  "ion",
+  "juniper",
+  "kite",
+  "kopje",
+  "lumen",
+  "mesa",
+  "nimbus",
+  "orbit",
+  "prq",
+  "pylon",
+  "quill",
+  "rivet",
+  "sable",
+  "tundra",
+  "zenith",
+];
+
+export const menuRepos = (names: readonly string[] = MENU_REPOS) =>
+  names.map((name) => ({ value: `shuymn/${name}`, label: name }));
+
 export const defaultRows = (now: number) => DEFAULT_ROWS.map((spec) => row(spec, now));
 export const allRows = (now: number) => ALL_ROWS.map((spec) => row(spec, now));
 

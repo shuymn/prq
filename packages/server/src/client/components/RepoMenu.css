@@ -1,0 +1,45 @@
+@layer components {
+  [data-component="RepoMenu"] {
+    box-sizing: border-box;
+    inline-size: var(--size-popover);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    margin: 0;
+    /* The border falls inside the inset, as the design's inside stroke does. */
+    padding: calc(var(--inset-card) - var(--border-width-thin));
+    border: var(--border-width-thin) solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    color: var(--color-fg-default);
+    background: var(--color-bg-overlay);
+    box-shadow: var(--shadow-overlay);
+
+    /* As RepoFilter's popover, the menu hangs below the trigger, aligned to its end, and flips where it would not fit.
+       Where no side holds all of it, it hangs below as high as the room there, and scrolls. */
+    &[popover] {
+      position-area: block-end span-inline-start;
+      position-try-fallbacks:
+        flip-block,
+        flip-inline,
+        flip-block flip-inline,
+        --menu-scrolls,
+        --menu-scrolls flip-inline;
+      inset: auto;
+      margin-block: var(--gap-tight);
+    }
+
+    & [role="group"] {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* An item fills the menu. */
+    & [data-component="RepoMenuItem"] {
+      inline-size: auto;
+    }
+  }
+
+  @position-try --menu-scrolls {
+    position-area: block-end span-inline-start;
+    max-block-size: stretch;
+  }
+}
