@@ -1,5 +1,6 @@
 // The PR list over a fetch the test answers (plan P2.5–P2.7): its failures and Try again, its empty states, the next
-// page after a refresh, and how it names repositories and reads them for the menu.
+// page after a refresh, Needs attention as the Hub's view counts it, and how it names repositories and reads them for
+// the menu.
 
 import { type HubView, LedgerRow } from "@prq/protocol";
 import * as v from "valibot";
@@ -132,6 +133,35 @@ describe("the PR list's next page", () => {
     await expect
       .poll(() => fetch.requests.map(path))
       .toEqual(["/api/ledger?state=open", "/api/ledger?state=open", "/api/ledger?state=open&cursor=second"]);
+  });
+});
+
+describe("Needs attention", () => {
+  test("ends when the Hub's view counts nothing needing it, in storage too; entering it again takes a press", async () => {
+    const { fetch, rerender } = await list(hubOf(view({ needsAttention: 1 })));
+    (await fetch.request(0)).respond({ rows: ROWS, nextCursor: null });
+    await page.getByRole("button", { name: "Needs attention · 1" }).click();
+    (await fetch.request(1)).respond({ rows: ROWS.slice(0, 1), nextCursor: null });
+    await expect.poll(titles).toEqual(["Add retry to stalled jobs"]);
+
+    // Nothing needs attention: the list as the other filters have it.
+    await rerender(hubOf(view({ needsAttention: 0 })));
+    (await fetch.request(2)).respond({ rows: ROWS, nextCursor: null });
+    await expect.poll(titles).toEqual(["Add retry to stalled jobs", "Render tables"]);
+
+    // Something needs attention again: the filter shows, not pressed, and the list stays.
+    await rerender(hubOf(view({ needsAttention: 1 })));
+    const filter = page.getByRole("button", { name: "Needs attention · 1" });
+    await expect.element(filter).toHaveAttribute("aria-pressed", "false");
+    expect(fetch.requests.map(path)).toEqual([
+      "/api/ledger?state=open",
+      "/api/ledger?attention=1",
+      "/api/ledger?state=open",
+    ]);
+    expect(JSON.parse(localStorage.getItem("prq:list-filter") ?? "null")).toMatchObject({ attention: false });
+
+    await filter.click();
+    expect(path(await fetch.request(3))).toBe("/api/ledger?attention=1");
   });
 });
 

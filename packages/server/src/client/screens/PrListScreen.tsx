@@ -44,16 +44,17 @@ function writePreferences(preferences: Preferences): void {
 export function PrListScreen({ hub, notice }: { hub: Hub; notice?: ReactNode }) {
   const fetcher = useFetch();
   const [preferences, setPreferences] = useState(readPreferences);
-  const choose = (change: Partial<Preferences>) => {
-    setPreferences((current) => {
-      const next = { ...current, ...change };
-      writePreferences(next);
-      return next;
-    });
-  };
+  useEffect(() => {
+    writePreferences(preferences);
+  }, [preferences]);
+  const choose = (change: Partial<Preferences>) => setPreferences((current) => ({ ...current, ...change }));
   const needsAttention = hub.view?.needsAttention ?? 0;
-  // The filter applies while something needs attention (or the Hub's view has yet to say).
+  // Needs attention ends once the Hub's view counts nothing needing it, in storage too: entering it again takes a
+  // press. Before the view, the stored choice applies.
   const attention = preferences.attention && (hub.view === null || needsAttention > 0);
+  if (preferences.attention && !attention) {
+    setPreferences({ ...preferences, attention: false });
+  }
   const filter = useMemo(
     (): ListFilter =>
       attention ? { attention: true } : { attention: false, state: preferences.state, repo: preferences.repo },
