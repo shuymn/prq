@@ -1,5 +1,6 @@
 // The server's test projects and type checks as they resolve: the Worker's tests never collect the web UI's files, the
-// workerd project stops without the UI's build, and `pnpm run typecheck` covers the UI and its build configuration.
+// workerd project stops without the UI's build, the node project runs the scripts' tests, and `pnpm run typecheck`
+// covers the UI, its build configuration and the secrets command.
 
 import { execFile } from "node:child_process";
 import { relative } from "node:path";
@@ -28,14 +29,19 @@ function listFiles(project: string): Promise<string[]> {
 describe("the server's test projects", () => {
   let vitest: Vitest;
   let workerd: TestProject;
+  let node: TestProject;
 
   beforeAll(async () => {
     vitest = await createVitest("test", { root: SERVER, watch: false }, {}, {});
-    const found = vitest.projects.find((project) => project.name === "workerd");
-    if (found === undefined) {
-      throw new Error("no workerd project");
-    }
-    workerd = found;
+    const project = (name: string) => {
+      const found = vitest.projects.find((each) => each.name === name);
+      if (found === undefined) {
+        throw new Error(`no ${name} project`);
+      }
+      return found;
+    };
+    workerd = project("workerd");
+    node = project("node");
   });
   afterAll(async () => {
     await vitest.close();
@@ -44,6 +50,11 @@ describe("the server's test projects", () => {
   test("the workerd project collects the Worker's tests and none of the web UI's", () => {
     expect(workerd.matchesTestGlob(`${SERVER}src/names.test.ts`)).toBe(true);
     expect(workerd.matchesTestGlob(`${SERVER}src/client/components/AppHeader.test.ts`)).toBe(false);
+  });
+
+  test("the node project collects the scripts' tests, which the workerd project does not", () => {
+    expect(node.matchesTestGlob(`${SERVER}scripts/secrets.node.test.ts`)).toBe(true);
+    expect(workerd.matchesTestGlob(`${SERVER}scripts/secrets.node.test.ts`)).toBe(false);
   });
 
   test("the workerd project's global setup is the client build's guard", () => {
@@ -61,6 +72,9 @@ describe("the type checks", () => {
     expect(client).toContain("src/client/components/BrandMark.tsx");
     expect(node).toContain("vite.config.ts");
     expect(node).toContain("build/tokens.ts");
+    expect(node).toContain("scripts/secrets.ts");
+    expect(node).toContain("scripts/secrets.node.test.ts");
+    expect(worker).not.toContain("scripts/secrets.ts");
     expect(worker?.filter((file) => file.startsWith("src/client/"))).toEqual([]);
   });
 

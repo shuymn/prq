@@ -66,9 +66,10 @@ catalog:
   "@vitest/browser-playwright": 5.1.0
   vitest-browser-react: 2.3.0
 
-  # The CLI: Node's types on the runtime's major line (mise.toml), so an API newer than Node 24 does not type-check;
-  # and wrangler for its tests, which run the Worker through its test harness (the version the vitest plugin resolves).
+  # Node's types on the runtime's major line (mise.toml), so an API newer than Node 24 does not type-check.
   "@types/node": 24.19.2
+  # The CLI's test harness, which runs the Worker (the version the vitest plugin resolves), and the server's secrets
+  # command, which puts the production secrets on the Worker.
   wrangler: 4.161.0
 
   # Lint, format, unused files, dependencies and exports (knip.jsonc), commit messages, and the Git hooks.

@@ -58,7 +58,7 @@ const modelSchema = v.object(
   "is missing",
 );
 
-const MODEL_VARS = ["MODEL_BASE_URL", "MODEL_API_KEY", "MODEL_ID", "MODEL_CONTEXT_TOKENS"] as const;
+const MODEL_VARS = Object.keys(modelSchema.entries);
 
 export type ModelConfig = v.InferOutput<typeof modelSchema>;
 
@@ -124,7 +124,12 @@ const githubAppSchema = v.object(
   "is missing",
 );
 
-const GITHUB_APP_VARS = ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"] as const;
+const GITHUB_APP_VARS = Object.keys(githubAppSchema.entries);
+
+// The ten secrets, by group in the order above.
+export const SECRET_NAMES: readonly string[] = [accessSchema, webhookSchema, modelSchema, githubAppSchema].flatMap(
+  (schema) => Object.keys(schema.entries),
+);
 
 export type GithubAppConfig = v.InferOutput<typeof githubAppSchema>;
 
