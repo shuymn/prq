@@ -1,30 +1,48 @@
 import "./Markdown.css";
-import { memo } from "react";
-import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
+import { createContext, memo, type ReactNode, use } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { CodeBlock } from "./CodeBlock.tsx";
-
-// The syntax tree's element, as react-markdown passes it to a component, and what an element holds.
-type Element = NonNullable<ExtraProps["node"]>;
-type ElementContent = Element["children"][number];
-
-// A link's text, an image in it given by its alt text: a linked image is one link, not a link holding another.
-function labelOf(node: ElementContent): string {
-  if (node.type === "text") {
-    return node.value;
-  }
-  if (node.type !== "element") {
-    return "";
-  }
-  const alt = node.properties["alt"];
-  return node.tagName === "img" ? (typeof alt === "string" ? alt : "") : node.children.map(labelOf).join("");
-}
 
 // An absolute URL of one of these schemes, or null: a relative URL, mailto: and every other scheme are not followed.
 function absolute(href: string | undefined, schemes: readonly string[]): string | null {
   const url = href === undefined ? null : URL.parse(href);
   return url !== null && schemes.includes(url.protocol) ? url.href : null;
+}
+
+// Inside a link: an image there is its alt text, so a linked image is one link, whatever inline nodes hold it.
+const InLink = createContext(false);
+
+// A link opens in a new tab when it is an absolute http(s) URL; any other is its text alone.
+function MarkdownLink({ href, children }: { href?: string | undefined; children?: ReactNode }) {
+  const target = absolute(href, ["https:", "http:"]);
+  const label = <InLink value>{children}</InLink>;
+  return target === null ? (
+    <span>{label}</span>
+  ) : (
+    <a href={target} target="_blank" rel="noreferrer">
+      {label}
+    </a>
+  );
+}
+
+// An image is never fetched: in a link, its alt text (its address when it has none); else an https URL is a link named
+// by the alt text, anything else the alt text alone.
+function MarkdownImage({ src, alt }: { src?: unknown; alt?: string | undefined }) {
+  const address = typeof src === "string" ? src : "";
+  const label = alt ?? "";
+  if (use(InLink)) {
+    return label === "" ? address : label;
+  }
+  const target = absolute(address, ["https:"]);
+  return target === null ? (
+    <span>{label}</span>
+  ) : (
+    <a href={target} target="_blank" rel="noreferrer">
+      {label === "" ? target : label}
+    </a>
+  );
 }
 
 const COMPONENTS: Components = {
@@ -50,32 +68,8 @@ const COMPONENTS: Components = {
       </div>
     );
   },
-  // A link opens in a new tab when it is an absolute http(s) URL; any other is its text alone. A linked image is the
-  // link alone, named by its text.
-  a({ node, href, children }) {
-    const target = absolute(href, ["https:", "http:"]);
-    const linksImage = node?.children.some((child) => child.type === "element" && child.tagName === "img") === true;
-    const label = linksImage ? node?.children.map(labelOf).join("") : children;
-    return target === null ? (
-      <span>{label}</span>
-    ) : (
-      <a href={target} target="_blank" rel="noreferrer">
-        {label}
-      </a>
-    );
-  },
-  // An image is never fetched: an https URL is a link named by the alt text, anything else the alt text alone.
-  img({ src, alt }) {
-    const target = absolute(typeof src === "string" ? src : undefined, ["https:"]);
-    const label = alt ?? "";
-    return target === null ? (
-      <span>{label}</span>
-    ) : (
-      <a href={target} target="_blank" rel="noreferrer">
-        {label === "" ? target : label}
-      </a>
-    );
-  },
+  a: MarkdownLink,
+  img: MarkdownImage,
 };
 
 // A summary or an answer, which an agent wrote in Markdown (design/components.md, PR detail): GitHub's extensions,
