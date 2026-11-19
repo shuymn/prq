@@ -21,7 +21,7 @@ import { Agent, createServer, type IncomingMessage, request, type ServerResponse
 import { extname, join, resolve as resolvePath, sep } from "node:path";
 import type { Duplex } from "node:stream";
 
-import type { Latch } from "./latch.ts";
+import { type Latch, latch } from "./latch.ts";
 import type { Worker } from "./worker.ts";
 
 const DOOR_ANSWER_MS = 30_000;
@@ -78,6 +78,21 @@ export type Door = {
 };
 
 type Upstream = Pick<Worker, "url" | "token">;
+
+// Gates the upgrades a path matches until released, a retry's too (PartySocket gives an upgrade up after 4 s), up to
+// `attempts` in all: the first one's arrival opens arrived.
+export function gateUpgrades(
+  door: Pick<Door, "plan">,
+  match: (path: string) => boolean,
+  attempts: number,
+): { arrived: Latch; release: Latch } {
+  const arrived = latch();
+  const release = latch();
+  for (let i = 0; i < attempts; i += 1) {
+    door.plan(match, { kind: "gate", arrived: i === 0 ? arrived : latch(), release });
+  }
+  return { arrived, release };
+}
 
 // Raw headers (Node's rawHeaders) as [name, value] pairs.
 function pairsOf(raw: readonly string[]): [string, string][] {
@@ -251,7 +266,8 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
 
   async function forwardUpgrade(req: IncomingMessage, socket: Duplex, first: Buffer): Promise<void> {
     socket.on("error", () => socket.destroy());
-    const plan = planFor(req.url ?? "/", true);
+    const path = req.url ?? "/";
+    const plan = planFor(path, true);
     const gone = new AbortController();
     let upstream: ReturnType<typeof request> | undefined;
     const fail = (status: 502 | 504) => {
@@ -311,13 +327,12 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
       // Each side's end ends the other's writing; a close or an error on either side ends both.
       upstreamSocket.pipe(socket);
       socket.pipe(upstreamSocket);
-      const entry = { path: req.url ?? "/", end: () => {} };
       const end = () => {
         open.delete(entry);
         socket.destroy();
         upstreamSocket.destroy();
       };
-      entry.end = end;
+      const entry = { path, end };
       open.add(entry);
       upstreamSocket.once("close", end);
       upstreamSocket.on("error", end);

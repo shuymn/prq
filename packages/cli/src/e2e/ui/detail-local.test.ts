@@ -13,7 +13,7 @@ import { describe, expect, test, vi } from "vitest";
 import { useBrowser } from "../../test/browser.ts";
 import { result } from "../../test/cli.ts";
 import { conversation, summary } from "../../test/detail-page.ts";
-import { latch } from "../../test/latch.ts";
+import { gateUpgrades } from "../../test/door.ts";
 import { buildOldBundle } from "../../test/old-bundle.ts";
 import { ask, push, sessionView, sha, storedMessages } from "../../test/pr.ts";
 import { useStack } from "../../test/stack.ts";
@@ -35,15 +35,8 @@ const sessionSocket = (path: string) => path.startsWith(`/agents/pr-session/${se
 const historyReads = () =>
   stack.access().door.log.filter((entry) => entry.path === `/agents/pr-session/${sessionName(PR)}/get-messages`);
 
-// Gates the upgrades a path matches, a retry's too (PartySocket gives one up after 4 s), until released.
-function gateUpgrades(match: (path: string) => boolean) {
-  const arrived = latch();
-  const release = latch();
-  for (let i = 0; i < 8; i += 1) {
-    stack.access().door.plan(match, { kind: "gate", arrived: i === 0 ? arrived : latch(), release });
-  }
-  return { arrived, release };
-}
+// Gates the upgrades a path matches until released, over as many retries as the tests' waits take.
+const gate = (match: (path: string) => boolean) => gateUpgrades(stack.access().door, match, 8);
 
 // The agent is present first (its wait was a contact), so the pull request's session is local.
 async function present(): Promise<void> {
@@ -100,7 +93,7 @@ describe("the session's reads", () => {
     await push(stack.worker(), PR, sha("h1"));
     const claimed = await claim();
     await writeFile(claimed.answer, "The summary of h1.\n");
-    const upgrade = gateUpgrades(sessionSocket);
+    const upgrade = gate(sessionSocket);
     const page = browser.page();
     await page.goto(door(DETAIL));
     await upgrade.arrived.promise;
@@ -125,7 +118,7 @@ describe("the session's reads", () => {
     );
     await vi.waitFor(async () => expect(await send(page).isEnabled()).toBe(true));
 
-    const reopen = gateUpgrades(sessionSocket);
+    const reopen = gate(sessionSocket);
     expect(stack.access().door.cut(sessionSocket)).toBe(1);
     await page.getByText("Reconnecting… Showing the last known content.").waitFor();
     await reopen.arrived.promise;
@@ -317,7 +310,7 @@ ${"const value = compute(".repeat(12)}
     try {
       await push(stack.worker(), PR, sha("h1"));
       stack.access().door.serve(bundle.dir);
-      const hub = gateUpgrades((path) => path.startsWith("/agents/hub/"));
+      const hub = gate((path) => path.startsWith("/agents/hub/"));
       const page = browser.page();
       await page.setViewportSize({ width: 360, height: 800 });
       await page.goto(door(DETAIL));
