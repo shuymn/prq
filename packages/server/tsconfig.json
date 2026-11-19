@@ -9,6 +9,7 @@
     "src/**/*.node.test.ts",
     "scripts/secrets.ts",
     "scripts/operations.ts",
+    "scripts/release-check.ts",
     "scripts/**/*.node.test.ts",
     "src/client"
   ]

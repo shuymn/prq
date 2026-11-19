@@ -11,7 +11,8 @@
     "check:provider": "node --env-file-if-exists=.dev.vars scripts/provider-check.ts",
     "check:github": "node --env-file-if-exists=.dev.vars scripts/github-check.ts",
     "check:tools": "node --env-file-if-exists=.dev.vars scripts/tools-check.ts",
-    "secrets": "node scripts/secrets.ts"
+    "secrets": "node scripts/secrets.ts",
+    "release-check": "node scripts/release-check.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "catalog:",

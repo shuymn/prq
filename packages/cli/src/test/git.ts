@@ -596,6 +596,20 @@ export class FixtureRepo {
     await this.#git("tag", "--end-of-options", name, target);
   }
 
+  // An annotated tag, a release's; force replaces a tag of that name here with a new tag object.
+  async tagAnnotated(name: string, target: string, message: string, { force = false } = {}): Promise<void> {
+    await this.#git(
+      "tag",
+      "--annotate",
+      ...(force ? ["--force"] : []),
+      "-m",
+      message,
+      "--end-of-options",
+      name,
+      target,
+    );
+  }
+
   // A key in the repository's own config. Not user.*, whose identity no fixture sets, nor core.worktree, which would
   // move the work tree out of the root.
   async configSet(key: string, value: string, { add = false } = {}): Promise<void> {
