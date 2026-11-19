@@ -150,7 +150,8 @@ describe("the list's reads", () => {
     await push(worker, pr("prq", 3), sha("c"));
     await page.locator('a.title[href="/pr/shuymn/prq/3"]').waitFor();
     expect(ledgerReads().map((entry) => entry.path)).toEqual(Array(5).fill("/api/ledger?state=open"));
-  });
+    // Three `prq wait` runs in the body take most of 30 s on a loaded machine.
+  }, 60_000);
 });
 
 // A title and a URL at their longest in bytes, so that a page of the ledger holds few rows.
