@@ -1,0 +1,911 @@
+// The deploy (deploy.ts) run as the package script runs it, from a host's clone whose origin is a GitHub URL that the
+// fixture's git config rewrites to a bare repository, all in the OS temp directory: stand-ins for wrangler (its answers
+// kept in a state file each call reads and changes), mise, pnpm and gh record every call, and a local server answers
+// the ledger for the idle check. A release deploy needs a terminal: those runs get one from the system's script(1).
+// Nothing reaches the network or an account.
+
+import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import * as v from "valibot";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { unstable_readConfig } from "wrangler";
+
+import { FixtureGit, type FixtureRepo, fixtureRoot } from "../../cli/src/test/git.ts";
+
+const SCRIPT = fileURLToPath(new URL("deploy.ts", import.meta.url));
+const CONFIG = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url));
+const REPOSITORY = "prq-test/prq";
+const TAG = "v0.1.0";
+const ACCOUNT = "5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e";
+const HOST = "prq.sentinel-zone.example";
+const TEAM = "https://sentinel-team.cloudflareaccess.example";
+const AUD = "sentinel-aud-5e3c0b9a7d1f4e2a";
+const TOKEN = { id: "sentinel-client-id.access", secret: "sentinel-client-secret-77aa" };
+const APPLICATION = "prq-workspace";
+// The tag's Worker configuration: what the deploy checks of it.
+const WORKER_CONFIG = '{ "name": "prq", "workers_dev": false, "preview_urls": false }\n';
+
+// The stand-in for wrangler. Its state (FAKE_WRANGLER_STATE): the live versions, each version's tag, the container
+// applications, how many reads of a changed application still find its rollout active, whether a deploy changes the
+// image, and a behavior per call ("fail", "hang", or for deploy "fail-after-upload"). Each call appends its arguments,
+// working directory, parent and environment (and a deploy its config file) to FAKE_WRANGLER_LOG; a hanging call writes
+// its pid and its child's to FAKE_WRANGLER_PIDS.
+const FAKE_WRANGLER = `#!${process.execPath}
+import { spawn } from "node:child_process";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+const call = ["containers", "deployments", "versions"].includes(args[0]) ? args[0] + " " + args[1] : args[0];
+const flag = (name) => args.find((arg) => arg.startsWith("--" + name + "="))?.slice(name.length + 3) ?? null;
+const config = call === "deploy" && flag("config") !== null ? readFileSync(flag("config"), "utf8") : null;
+const env = {};
+for (const name of ["CLOUDFLARE_ACCOUNT_ID", "WRANGLER_OUTPUT_FILE_PATH", "WRANGLER_LOG_SANITIZE", "PRQ_ACCESS_CLIENT_SECRET"]) {
+  env[name] = process.env[name] ?? null;
+}
+appendFileSync(process.env.FAKE_WRANGLER_LOG, JSON.stringify({ call, args, cwd: process.cwd(), ppid: process.ppid, env, config }) + "\\n");
+const statePath = process.env.FAKE_WRANGLER_STATE;
+const state = JSON.parse(readFileSync(statePath, "utf8"));
+const save = () => writeFileSync(statePath, JSON.stringify(state));
+const behavior = state.behavior?.[call];
+const json = (value) => console.log(JSON.stringify(value, null, 2));
+if (behavior === "hang") {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  writeFileSync(process.env.FAKE_WRANGLER_PIDS, JSON.stringify([process.pid, child.pid]));
+  setInterval(() => {}, 1000);
+} else if (behavior === "fail") {
+  console.error("✘ [ERROR] A request to the Cloudflare API failed. [code: 10000]");
+  process.exit(1);
+} else if (call === "whoami") {
+  json({ loggedIn: true, accounts: [{ id: process.env.CLOUDFLARE_ACCOUNT_ID, name: "Synthetic Account" }] });
+} else if (call === "deployments status") {
+  if (state.deployment === null) {
+    console.error("✘ [ERROR] A request to the Cloudflare API (/accounts/x/workers/scripts/prq/deployments) failed.");
+    console.error("  This Worker does not exist on your account. [code: 10007]");
+    process.exit(1);
+  }
+  json({ id: "deployment-" + state.uploads, versions: state.deployment.map((id) => ({ version_id: id, percentage: 100 })) });
+} else if (call === "versions view") {
+  // The bootstrap's Worker and a version secrets put made of it have no binding but secrets; a release has prq's.
+  const tag = state.versions[args[2]] ?? undefined;
+  const bindings = tag === undefined || tag === "prq-bootstrap" ? [{ type: "secret_text" }] : [{ type: "durable_object_namespace" }, { type: "assets" }];
+  json({ id: args[2], annotations: { "workers/tag": tag }, resources: { bindings } });
+} else if (call === "containers list") {
+  json(state.applications.map((app) => ({ id: app.id, name: app.name, state: "ready", version: app.version })));
+} else if (call === "containers info") {
+  const app = state.applications.find((each) => each.id === args[2]);
+  const rolling = state.rolloutReads > 0;
+  if (rolling) {
+    state.rolloutReads -= 1;
+    save();
+  }
+  json({ id: app.id, name: app.name, version: app.version, configuration: { image: app.image }, active_rollout_id: rolling ? "rollout-" + app.version : undefined });
+} else if (call === "containers instances") {
+  const app = state.applications.find((each) => each.id === args[2]);
+  json([{ id: "instance-1", name: null, state: "running", version: state.rolloutReads > 0 ? app.version - 1 : app.version }]);
+} else if (call === "deploy") {
+  state.uploads += 1;
+  const id = String(state.uploads).padStart(8, "0") + "-0000-4000-8000-000000000000";
+  state.versions[id] = flag("tag");
+  state.deployment = [id];
+  if (flag("tag") !== "prq-bootstrap" && !args.includes("--containers-rollout=none")) {
+    const app = state.applications.find((each) => each.name === "prq-workspace");
+    if (app === undefined) {
+      state.applications.push({ id: "a1b2c3d4-0000-4000-8000-00000000000a", name: "prq-workspace", version: 1, image: "registry.example/prq-workspace:" + id.slice(0, 8) });
+    } else if (state.imageChanges) {
+      app.version += 1;
+      app.image = "registry.example/prq-workspace:" + id.slice(0, 8);
+      state.rolloutReads = state.rolloutAfterDeploy;
+    }
+  }
+  save();
+  console.log("Uploaded prq");
+  if (behavior === "fail-after-upload") {
+    console.error("✘ [ERROR] The container image could not be pushed.");
+    process.exit(1);
+  }
+  appendFileSync(process.env.WRANGLER_OUTPUT_FILE_PATH, JSON.stringify({ type: "deploy", version: 1, worker_name: "prq", version_id: id }) + "\\n");
+  console.log("Current Version ID: " + id);
+}
+`;
+
+// mise: trust and install recorded, exec runs what follows -- with this terminal and exits as it does.
+const FAKE_MISE = `#!${process.execPath}
+import { spawn } from "node:child_process";
+import { appendFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "mise", args, cwd: process.cwd(), pid: process.pid, ppid: process.ppid }) + "\\n");
+if (args[0] === "exec") {
+  const rest = args.slice(args.indexOf("--") + 1);
+  const child = spawn(rest[0], rest.slice(1), { stdio: "inherit" });
+  child.on("exit", (code) => process.exit(code ?? 1));
+}
+`;
+
+const FAKE_PNPM = `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+
+appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "pnpm", args: process.argv.slice(2), cwd: process.cwd() }) + "\\n");
+`;
+
+const FAKE_GH = `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+
+appendFileSync(process.env.FAKE_TOOLS_LOG, JSON.stringify({ tool: "gh", args: process.argv.slice(2), cwd: process.cwd() }) + "\\n");
+process.stdout.write(process.env.FAKE_GH_ANSWER ?? "{}");
+`;
+
+const WranglerCall = v.object({
+  call: v.string(),
+  args: v.array(v.string()),
+  cwd: v.string(),
+  ppid: v.number(),
+  env: v.record(v.string(), v.nullable(v.string())),
+  config: v.nullable(v.string()),
+});
+type WranglerCall = v.InferOutput<typeof WranglerCall>;
+const ToolCall = v.object({
+  tool: v.string(),
+  args: v.array(v.string()),
+  cwd: v.string(),
+  ppid: v.optional(v.number()),
+});
+type ToolCall = v.InferOutput<typeof ToolCall>;
+
+type State = {
+  deployment: string[] | null;
+  versions: Record<string, string | null>;
+  applications: { id: string; name: string; version: number; image: string }[];
+  uploads: number;
+  imageChanges: boolean;
+  rolloutReads: number;
+  rolloutAfterDeploy: number;
+  behavior: Record<string, string>;
+};
+type Result = { code: number | null; signal: NodeJS.Signals | null; output: string };
+
+let bin: string;
+let root: string;
+let fixture: FixtureGit;
+let origin: FixtureRepo;
+let seed: FixtureRepo;
+let host: FixtureRepo;
+let commit: string;
+let env: Record<string, string>;
+let server: Server;
+let port: number;
+let ledger: { rows: unknown[]; nextCursor: string | null }[];
+let ledgerRequests: { url: string; headers: IncomingHttpHeaders }[];
+
+const LIVE = "00000009-0000-4000-8000-000000000000";
+const APP = {
+  id: "a1b2c3d4-0000-4000-8000-00000000000a",
+  name: APPLICATION,
+  version: 3,
+  image: "registry.example/prq-workspace:00000009",
+};
+
+// A ledger row of a pull request, its owner and its jobs.
+function ledgerRow(number: number, owner: string, waiting: number, running: number) {
+  return {
+    pr: { owner: "prq-test", repo: "app", number },
+    details: null,
+    owner,
+    latestEvent: null,
+    problem: null,
+    jobs: { waiting, running, failed: 0 },
+    claims: [],
+  };
+}
+
+function checkRuns(sha: string): string {
+  return JSON.stringify({
+    total_count: 1,
+    check_runs: [
+      { name: "Check", head_sha: sha, status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+    ],
+  });
+}
+
+// One stand-in each, run once here: macOS checks a new executable on its first run, which can take seconds.
+beforeAll(async () => {
+  bin = await fixtureRoot("prq-deploy-bin-");
+  for (const [name, text] of [
+    ["wrangler", FAKE_WRANGLER],
+    ["mise", FAKE_MISE],
+    ["pnpm", FAKE_PNPM],
+    ["gh", FAKE_GH],
+  ] as const) {
+    await writeFile(join(bin, name), text, { mode: 0o700 });
+    await new Promise<void>((resolve) => {
+      execFile(join(bin, name), ["warm"], { env: { FAKE_TOOLS_LOG: join(bin, "warm.jsonl") }, timeout: 60_000 }, () =>
+        resolve(),
+      );
+    });
+  }
+  server = createServer((request, response) => {
+    ledgerRequests.push({ url: request.url ?? "", headers: request.headers });
+    const cursor = new URL(request.url ?? "/", "http://localhost").searchParams.get("cursor");
+    const page = ledger[cursor === null ? 0 : Number(cursor)] ?? { rows: [], nextCursor: null };
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(page));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  port = typeof address === "object" && address !== null ? address.port : 0;
+}, 120_000);
+
+afterAll(async () => {
+  await new Promise((resolve) => server.close(resolve));
+  await rm(bin, { recursive: true, force: true });
+});
+
+beforeEach(async () => {
+  root = await fixtureRoot("prq-deploy-");
+  fixture = await FixtureGit.create(root, { [`https://github.com/${REPOSITORY}.git`]: "origin.git" });
+  origin = await fixture.init("origin.git", { bare: true });
+  seed = await fixture.init("seed");
+  for (const path of ["packages/server", "packages/cli"]) {
+    await mkdir(join(seed.path, path), { recursive: true });
+    await writeFile(join(seed.path, path, "package.json"), `${JSON.stringify({ version: "0.1.0" })}\n`);
+  }
+  await writeFile(join(seed.path, "packages/server/wrangler.jsonc"), WORKER_CONFIG);
+  await seed.add("packages");
+  await seed.commit("chore(release): v0.1.0");
+  commit = await seed.headCommit();
+  await seed.push(origin, "HEAD:refs/heads/main");
+  await seed.tagAnnotated(TAG, commit, `prq ${TAG}`);
+  await seed.push(origin, `refs/tags/${TAG}`);
+  host = await fixture.clone(origin, "host");
+
+  const directory = join(root, "deploy");
+  await mkdir(directory, { mode: 0o700 });
+  await chmod(directory, 0o700);
+  await writeFile(join(directory, "target.env"), `PRQ_HOST=${HOST}\nCLOUDFLARE_ACCOUNT_ID=${ACCOUNT}\n`, {
+    mode: 0o600,
+  });
+  await writeFile(join(directory, "worker.env"), `ACCESS_TEAM_DOMAIN=${TEAM}\nACCESS_AUD=${AUD}\n`, { mode: 0o600 });
+  await mkdir(join(root, "tmp"));
+  await saveState({});
+  ledger = [{ rows: [], nextCursor: null }];
+  ledgerRequests = [];
+  env = {
+    ...fixture.env,
+    PATH: `${bin}:${fixture.env["PATH"] ?? ""}`,
+    TMPDIR: join(root, "tmp"),
+    PRQ_DEPLOY_DIRECTORY: directory,
+    PRQ_DEPLOY_WRANGLER: join(bin, "wrangler"),
+    PRQ_DEPLOY_WAIT_MS: "15000",
+    PRQ_DEPLOY_POLL_MS: "50",
+    PRQ_DEPLOY_ORIGIN: `http://127.0.0.1:${port}`,
+    PRQ_ACCESS_CLIENT_ID: TOKEN.id,
+    PRQ_ACCESS_CLIENT_SECRET: TOKEN.secret,
+    FAKE_WRANGLER_STATE: join(root, "wrangler-state.json"),
+    FAKE_WRANGLER_LOG: join(root, "wrangler.jsonl"),
+    FAKE_WRANGLER_PIDS: join(root, "wrangler-pids.json"),
+    FAKE_TOOLS_LOG: join(root, "tools.jsonl"),
+    FAKE_GH_ANSWER: checkRuns(commit),
+  };
+});
+
+// The processes a test started, and those the stand-in recorded: a test that failed leaves none running.
+const started: ChildProcess[] = [];
+
+afterEach(async () => {
+  for (const child of started.splice(0)) {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  }
+  for (const pid of await hangingPids(false)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // It has ended.
+    }
+  }
+  await rm(root, { recursive: true, force: true });
+});
+
+async function saveState(state: Partial<State>): Promise<void> {
+  const full: State = {
+    deployment: null,
+    versions: {},
+    applications: [],
+    uploads: 9,
+    imageChanges: false,
+    rolloutReads: 0,
+    rolloutAfterDeploy: 2,
+    behavior: {},
+    ...state,
+  };
+  await writeFile(join(root, "wrangler-state.json"), JSON.stringify(full));
+}
+
+// A release live, with its container application, as after an earlier deploy.
+async function released(state: Partial<State> = {}): Promise<void> {
+  await saveState({ deployment: [LIVE], versions: { [LIVE]: "v0.0.9" }, applications: [{ ...APP }], ...state });
+}
+
+// The bootstrap's Worker live, before the first release.
+async function bootstrapped(state: Partial<State> = {}): Promise<void> {
+  await saveState({ deployment: [LIVE], versions: { [LIVE]: "prq-bootstrap" }, ...state });
+}
+
+// A pseudo-terminal for a run, from the machine's python3 (as the skill runner's tests use it): its pty module runs
+// the command on a terminal of its own, copies this side's stdin to it and its output here, and exits as it did.
+const IN_TERMINAL = [
+  "import os, pty, sys",
+  "code = os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:]))",
+  "sys.exit(code if code >= 0 else 128 - code)",
+].join("\n");
+
+// The deploy with these arguments, in a terminal unless told otherwise, answering each question it asks in turn.
+// Its output never holds a value it must not print.
+function start(args: string[], { terminal = true, answers = [] as string[] } = {}) {
+  const command = [process.execPath, SCRIPT, ...args];
+  const argv = terminal ? ["python3", "-I", "-S", "-c", IN_TERMINAL, ...command] : command;
+  const child = spawn(argv[0] ?? "", argv.slice(1), { cwd: host.path, env, stdio: ["pipe", "pipe", "pipe"] });
+  started.push(child);
+  let output = "";
+  let asked = 0;
+  const read = (chunk: string) => {
+    output += chunk;
+    const questions = output.split(/\[y\/N\] |, or none: /).length - 1;
+    while (asked < questions && asked < answers.length) {
+      child.stdin.write(`${answers[asked] ?? ""}\n`);
+      asked += 1;
+    }
+  };
+  child.stdout.setEncoding("utf8").on("data", read);
+  child.stderr.setEncoding("utf8").on("data", read);
+  const result = new Promise<Result>((resolve) => {
+    child.on("close", (code, signal) => resolve({ code, signal, output: output.replaceAll("\r\n", "\n") }));
+  }).then((outcome) => {
+    child.stdin.destroy();
+    for (const secret of [TEAM, "sentinel-team", AUD, TOKEN.secret]) {
+      expect(outcome.output).not.toContain(secret);
+    }
+    return outcome;
+  });
+  return { child, result };
+}
+
+function deploy(args: string[], options: { terminal?: boolean; answers?: string[] } = {}): Promise<Result> {
+  return start(args, options).result;
+}
+
+async function lines<T extends v.GenericSchema>(file: string, schema: T): Promise<v.InferOutput<T>[]> {
+  const text = await readFile(file, "utf8").catch(() => "");
+  return text
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => v.parse(schema, JSON.parse(line)));
+}
+
+function wranglerCalls(): Promise<WranglerCall[]> {
+  return lines(join(root, "wrangler.jsonl"), WranglerCall);
+}
+
+function toolCalls(): Promise<ToolCall[]> {
+  return lines(join(root, "tools.jsonl"), ToolCall);
+}
+
+async function deployCalls(): Promise<WranglerCall[]> {
+  return (await wranglerCalls()).filter((call) => call.call === "deploy");
+}
+
+// The records the deploys kept, oldest first.
+async function recordDirs(): Promise<string[]> {
+  const dir = join(root, ".local", "state", "prq", "deploys");
+  const names = (await readdir(dir).catch(() => [])).filter((name) => name !== "bootstrap").toSorted();
+  return names.map((name) => join(dir, name));
+}
+
+const RecordJson = v.looseObject({
+  tag: v.string(),
+  sha: v.string(),
+  outcome: v.string(),
+  idle: v.nullable(v.string()),
+  application: v.nullable(v.string()),
+  upload: v.nullable(v.looseObject({ exit: v.nullable(v.number()), versionId: v.nullable(v.string()) })),
+  after: v.nullable(
+    v.looseObject({
+      deployment: v.nullable(v.looseObject({ versions: v.array(v.looseObject({ versionId: v.string() })) })),
+    }),
+  ),
+  readBack: v.nullable(
+    v.looseObject({
+      state: v.string(),
+      reason: v.string(),
+      provisioning: v.nullable(v.string()),
+      rounds: v.array(v.unknown()),
+    }),
+  ),
+});
+
+async function record(dir: string): Promise<v.InferOutput<typeof RecordJson>> {
+  return v.parse(RecordJson, JSON.parse(await readFile(join(dir, "record.json"), "utf8")));
+}
+
+async function onlyRecord(): Promise<{ dir: string; data: v.InferOutput<typeof RecordJson> }> {
+  const dirs = await recordDirs();
+  expect(dirs).toHaveLength(1);
+  const dir = dirs[0] ?? "";
+  return { dir, data: await record(dir) };
+}
+
+// What is left in the deploy's temp directory besides its clones.
+async function leftInTmp(): Promise<string[]> {
+  return (await readdir(join(root, "tmp"))).filter((name) => !/^prq-deploy-v[0-9]/.test(name));
+}
+
+async function hangingPids(wait = true): Promise<number[]> {
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    const text = await readFile(join(root, "wrangler-pids.json"), "utf8").catch(() => "");
+    if (text !== "" || !wait) {
+      return text === "" ? [] : v.parse(v.array(v.number()), JSON.parse(text));
+    }
+    if (Date.now() > deadline) {
+      throw new Error("the stand-in for wrangler did not hang");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+async function ended(pid: number): Promise<boolean> {
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    if (Date.now() > deadline) {
+      return false;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+async function until<T>(read: () => Promise<T | undefined>): Promise<T> {
+  const deadline = Date.now() + 20_000;
+  for (;;) {
+    const value = await read();
+    if (value !== undefined) {
+      return value;
+    }
+    if (Date.now() > deadline) {
+      throw new Error("not reached in time");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+describe("the Worker's configuration", () => {
+  it("keeps workers.dev and preview URLs off for every deploy, and names the application the deploy reads", () => {
+    const config = unstable_readConfig({ config: CONFIG });
+
+    expect(config.workers_dev).toBe(false);
+    expect(config.preview_urls).toBe(false);
+    expect(config.containers?.map((container: { name?: string }) => container.name)).toEqual([APPLICATION]);
+  });
+});
+
+describe("deploy --bootstrap", () => {
+  it("deploys an inert Worker with workers.dev and preview URLs off, then records its version and the subdomain", async () => {
+    const result = await deploy(["--bootstrap"], { terminal: false, answers: ["synthetic-sub"] });
+
+    expect(result.code).toBe(0);
+    const [call] = await deployCalls();
+    expect(call?.args).toEqual([
+      "deploy",
+      `--config=${join(call?.cwd ?? "", "wrangler.jsonc")}`,
+      "--tag=prq-bootstrap",
+      "--message=prq bootstrap: serves nothing",
+    ]);
+    expect(call?.env).toMatchObject({ CLOUDFLARE_ACCOUNT_ID: ACCOUNT, WRANGLER_LOG_SANITIZE: "true" });
+    expect(JSON.parse(call?.config ?? "")).toEqual({
+      name: "prq",
+      main: "index.js",
+      compatibility_date: "2026-11-10",
+      workers_dev: false,
+      preview_urls: false,
+    });
+    const version = "00000010-0000-4000-8000-000000000000";
+    expect(result.output).toContain(`version: ${version} (prq-bootstrap)`);
+    expect(result.output).toContain(
+      "in the dashboard (Workers & Pages → prq → Settings → Domains & Routes): workers.dev and Preview URLs disabled, no custom domain",
+    );
+    const dir = join(root, ".local", "state", "prq", "deploys", "bootstrap");
+    const [file] = await readdir(dir);
+    expect(JSON.parse(await readFile(join(dir, file ?? ""), "utf8"))).toMatchObject({
+      accountId: ACCOUNT,
+      versionId: version,
+      tag: "prq-bootstrap",
+      subdomain: "synthetic-sub",
+      urls: {
+        production: "https://prq.synthetic-sub.workers.dev/",
+        preview: "https://00000010-prq.synthetic-sub.workers.dev/",
+      },
+    });
+    expect(await leftInTmp()).toEqual([]);
+  });
+
+  it("refuses while a Worker prq has a live version, and deploys nothing", async () => {
+    await released();
+
+    const result = await deploy(["--bootstrap"], { terminal: false });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(
+      `deploy: the Worker prq has a live version (${LIVE} (v0.0.9, 100 %)): the bootstrap only creates it`,
+    );
+    expect(await deployCalls()).toEqual([]);
+  });
+
+  it("resumes only over a live version tagged prq-bootstrap", async () => {
+    await released();
+    const refused = await deploy(["--bootstrap", "--resume"], { terminal: false });
+    expect(refused.code).toBe(1);
+    expect(refused.output).toContain(`deploy: the live version ${LIVE} is tagged v0.0.9, not prq-bootstrap`);
+    expect(await deployCalls()).toEqual([]);
+
+    await bootstrapped();
+    const resumed = await deploy(["--bootstrap", "--resume"], { terminal: false, answers: ["none"] });
+    expect(resumed.code).toBe(0);
+    expect(await deployCalls()).toHaveLength(1);
+  });
+
+  it("records no subdomain it cannot read, and says the bootstrap is not complete", async () => {
+    const result = await deploy(["--bootstrap"], { terminal: false, answers: ["https://not a subdomain"] });
+
+    expect(result.code).toBe(2);
+    expect(result.output).toContain("deploy: no workers.dev subdomain recorded");
+  });
+
+  it("removes its Worker's directory when the upload fails", async () => {
+    await saveState({ behavior: { deploy: "fail" } });
+
+    const result = await deploy(["--bootstrap"], { terminal: false });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("deploy: wrangler deploy failed (exit 1)");
+    expect(await leftInTmp()).toEqual([]);
+  });
+});
+
+describe("deploy <tag>", () => {
+  it("refuses without a terminal, before it clones or calls anything", async () => {
+    await bootstrapped();
+
+    const result = await deploy([TAG], { terminal: false });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toBe(
+      "deploy: the deploy runs in a terminal: wrangler asks there before it replaces a DNS record or another Worker's domain\n",
+    );
+    expect(await wranglerCalls()).toEqual([]);
+    expect(await toolCalls()).toEqual([]);
+  });
+
+  it("deploys a clean clone of the tag with its pinned tools, to exactly the hostname, once the owner confirms", async () => {
+    await bootstrapped();
+
+    const result = await deploy([TAG], { answers: ["y", "y"] });
+
+    expect(result.code).toBe(0);
+    const clone = /clone: (\S+) \(kept\)/.exec(result.output)?.[1] ?? "";
+    expect(clone.startsWith(join(root, "tmp", `prq-deploy-${TAG}-`))).toBe(true);
+    const tools = (await toolCalls()).map(({ tool, args, cwd }) => ({ tool, args, cwd }));
+    expect(tools.slice(0, -1)).toEqual([
+      { tool: "gh", args: ["api", `repos/${REPOSITORY}/commits/${commit}/check-runs?check_name=Check`], cwd: clone },
+      { tool: "mise", args: ["trust"], cwd: clone },
+      { tool: "mise", args: ["install"], cwd: clone },
+      { tool: "mise", args: ["exec", "--", "pnpm", "install", "--frozen-lockfile"], cwd: clone },
+      { tool: "pnpm", args: ["install", "--frozen-lockfile"], cwd: clone },
+      { tool: "mise", args: ["exec", "--", "pnpm", "--dir", "packages/server", "run", "build"], cwd: clone },
+      { tool: "pnpm", args: ["--dir", "packages/server", "run", "build"], cwd: clone },
+    ]);
+    // The upload with the clone's tools, from its server package.
+    expect(tools.at(-1)?.args.slice(0, 4)).toEqual(["exec", "--", join(bin, "wrangler"), "deploy"]);
+    expect(tools.at(-1)?.cwd).toBe(join(clone, "packages", "server"));
+    const [call] = await deployCalls();
+    const { dir, data } = await onlyRecord();
+    expect(call?.args).toEqual([
+      "deploy",
+      `--config=${join(clone, "packages", "server", "wrangler.jsonc")}`,
+      `--domain=${HOST}`,
+      `--tag=${TAG}`,
+      `--message=prq ${TAG} ${commit}`,
+    ]);
+    expect(call?.cwd).toBe(join(clone, "packages", "server"));
+    expect(call?.env).toMatchObject({
+      CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
+      WRANGLER_LOG_SANITIZE: "true",
+      WRANGLER_OUTPUT_FILE_PATH: join(dir, "wrangler-output.jsonl"),
+    });
+    expect(result.output.indexOf(`Deploy ${TAG} to ${HOST}? [y/N]`)).toBeLessThan(
+      result.output.indexOf("Uploaded prq"),
+    );
+    expect(data).toMatchObject({
+      tag: TAG,
+      sha: commit,
+      outcome: "deployed",
+      idle: "skipped: the live Worker is the bootstrap's (no binding but secrets), which serves nothing at the hostname",
+      application: "created",
+      upload: { exit: 0, versionId: "00000010-0000-4000-8000-000000000000" },
+      readBack: { state: "complete", provisioning: "observed" },
+    });
+    expect(ledgerRequests).toEqual([]);
+    expect(await leftInTmp()).toEqual([]);
+  });
+
+  it("skips the idle check over a version secrets put made of the bootstrap's Worker", async () => {
+    const secrets = "0000000a-0000-4000-8000-000000000000";
+    await saveState({ deployment: [secrets], versions: { [LIVE]: "prq-bootstrap", [secrets]: null } });
+    ledger = [{ rows: [ledgerRow(3, "cloud", 1, 0)], nextCursor: null }];
+
+    const result = await deploy([TAG], { answers: ["y", "y"] });
+
+    expect(result.code).toBe(0);
+    expect(ledgerRequests).toEqual([]);
+    expect((await onlyRecord()).data.idle).toMatch(/^skipped: the live Worker is the bootstrap's/);
+  });
+
+  it("deploys nothing when the owner does not confirm", async () => {
+    await bootstrapped();
+
+    const result = await deploy([TAG], { answers: ["n"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("deploy: nothing deployed");
+    expect(await deployCalls()).toEqual([]);
+    expect((await onlyRecord()).data.outcome).toBe("declined");
+  });
+
+  it("deploys nothing when the release check refuses the tag", async () => {
+    await bootstrapped();
+    env["FAKE_GH_ANSWER"] = JSON.stringify({ total_count: 0, check_runs: [] });
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(
+      `release-check: GitHub reports no successful Check run of GitHub Actions for ${commit}`,
+    );
+    expect(result.output).toContain("deploy: the release check failed (exit 1)");
+    expect(await deployCalls()).toEqual([]);
+    expect((await toolCalls()).filter((call) => call.tool !== "gh")).toEqual([]);
+  });
+
+  it("refuses a tag whose files hold a deployment value, naming the variable and the path alone", async () => {
+    await bootstrapped();
+    await writeFile(join(seed.path, "notes.md"), `served at ${HOST.toUpperCase()}\naudience ${AUD}\n`);
+    for (const path of ["packages/server", "packages/cli"]) {
+      await writeFile(join(seed.path, path, "package.json"), `${JSON.stringify({ version: "0.1.1" })}\n`);
+    }
+    await seed.add("notes.md", "packages");
+    await seed.commit("chore(release): v0.1.1");
+    const release = await seed.headCommit();
+    await seed.push(origin, "HEAD:refs/heads/main");
+    await seed.tagAnnotated("v0.1.1", release, "prq v0.1.1");
+    await seed.push(origin, "refs/tags/v0.1.1");
+    env["FAKE_GH_ANSWER"] = checkRuns(release);
+
+    const result = await deploy(["v0.1.1"], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("deploy: PRQ_HOST is in notes.md\n");
+    expect(result.output).toContain("deploy: ACCESS_AUD is in notes.md\n");
+    expect(result.output).not.toContain(HOST.toUpperCase());
+    expect(await deployCalls()).toEqual([]);
+    expect(await leftInTmp()).toEqual([]);
+  });
+
+  it("refuses a tag whose Worker configuration would put it on workers.dev or a preview URL", async () => {
+    await bootstrapped();
+    await writeFile(join(seed.path, "packages/server/wrangler.jsonc"), '{ "name": "prq", "preview_urls": false }\n');
+    for (const path of ["packages/server", "packages/cli"]) {
+      await writeFile(join(seed.path, path, "package.json"), `${JSON.stringify({ version: "0.1.1" })}\n`);
+    }
+    await seed.add("packages");
+    await seed.commit("chore(release): v0.1.1");
+    const release = await seed.headCommit();
+    await seed.push(origin, "HEAD:refs/heads/main");
+    await seed.tagAnnotated("v0.1.1", release, "prq v0.1.1");
+    await seed.push(origin, "refs/tags/v0.1.1");
+    env["FAKE_GH_ANSWER"] = checkRuns(release);
+
+    const result = await deploy(["v0.1.1"], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(
+      "deploy: the tag's packages/server/wrangler.jsonc does not name the Worker prq with workers_dev and preview_urls false",
+    );
+    expect(await deployCalls()).toEqual([]);
+  });
+
+  it("refuses while cloud work waits or runs, reading every ledger page with the service token", async () => {
+    await released();
+    ledger = [
+      { rows: [ledgerRow(1, "local", 1, 1), ledgerRow(2, "cloud", 0, 0)], nextCursor: "1" },
+      { rows: [ledgerRow(3, "cloud", 0, 1)], nextCursor: null },
+    ];
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("deploy: cloud work is waiting or running: prq-test/app#3 (waiting 0, running 1)");
+    expect(ledgerRequests.map((request) => request.url)).toEqual([
+      "/api/ledger?state=all",
+      "/api/ledger?state=all&cursor=1",
+    ]);
+    expect(ledgerRequests[0]?.headers).toMatchObject({
+      "cf-access-client-id": TOKEN.id,
+      "cf-access-client-secret": TOKEN.secret,
+    });
+    expect(await deployCalls()).toEqual([]);
+    expect((await onlyRecord()).data.outcome).toMatch(/^refused: cloud work is waiting or running/);
+  });
+
+  it("deploys with a warning past busy cloud work under --ignore-running", async () => {
+    await released();
+    ledger = [{ rows: [ledgerRow(3, "cloud", 1, 0)], nextCursor: null }];
+
+    const result = await deploy([TAG, "--ignore-running"], { answers: ["y"] });
+
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("deploy: warning (--ignore-running): cloud work is waiting or running");
+    expect(await deployCalls()).toHaveLength(1);
+    expect((await onlyRecord()).data.idle).toMatch(/^ignored: cloud work is waiting or running/);
+  });
+
+  it("reads a changed application's rollout until it is complete, and passes --immediate on", async () => {
+    await released({ imageChanges: true, rolloutAfterDeploy: 2 });
+
+    const result = await deploy([TAG, "--immediate"], { answers: ["y"] });
+
+    expect(result.code).toBe(0);
+    expect((await deployCalls())[0]?.args).toContain("--durable-objects-code-update-mode=immediate");
+    const { data } = await onlyRecord();
+    expect(data).toMatchObject({ application: "changed", readBack: { state: "complete" } });
+    expect(data.readBack?.rounds).toHaveLength(2);
+    expect(result.output).toContain("read-back complete: the application's rollout of version 4 is complete");
+  });
+
+  it("completes at once for an unchanged application", async () => {
+    await released();
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(0);
+    expect((await onlyRecord()).data).toMatchObject({ application: "unchanged", readBack: { state: "complete" } });
+  });
+
+  it("keeps the image under --keep-image, and refuses it before the application exists", async () => {
+    await bootstrapped();
+    const refused = await deploy([TAG, "--keep-image"], { answers: ["y"] });
+    expect(refused.code).toBe(1);
+    expect(refused.output).toContain(
+      "deploy: --keep-image keeps the container application's image, and prq-workspace does not exist yet",
+    );
+    expect(await deployCalls()).toEqual([]);
+
+    await released({ imageChanges: true });
+    const kept = await deploy([TAG, "--keep-image"], { answers: ["y"] });
+    expect(kept.code).toBe(0);
+    expect((await deployCalls())[0]?.args).toContain("--containers-rollout=none");
+    expect((await record((await recordDirs())[1] ?? "")).application).toBe("kept");
+  });
+
+  it("records what is live when the upload fails after the version went live, and exits as wrangler did", async () => {
+    await released({ behavior: { deploy: "fail-after-upload" } });
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    const { dir, data } = await onlyRecord();
+    expect(data).toMatchObject({
+      outcome: "the upload failed (exit 1)",
+      upload: { exit: 1, versionId: null },
+      after: { deployment: { versions: [{ versionId: "00000010-0000-4000-8000-000000000000" }] } },
+      readBack: null,
+    });
+    expect(result.output).toContain(`deploy: record: ${dir} (docs/operations.md, Recovery)`);
+
+    const again = await deploy(["--read-back", dir], { terminal: false });
+    expect(again.code).toBe(2);
+    expect(again.output).toContain(
+      `deploy: verification incomplete: the upload did not finish (the upload failed (exit 1)): deploy ${TAG} again`,
+    );
+  });
+
+  it("records a new application's provisioning as unverified unless the owner saw it, and --read-back resumes it", async () => {
+    await bootstrapped();
+
+    const result = await deploy([TAG], { answers: ["y", "n"] });
+
+    expect(result.code).toBe(2);
+    const { dir, data } = await onlyRecord();
+    expect(data).toMatchObject({
+      application: "created",
+      readBack: { state: "incomplete", provisioning: "unverified" },
+    });
+    expect(result.output).toContain(
+      `deploy: resume it with pnpm --dir packages/server run deploy -- --read-back ${dir}`,
+    );
+
+    const again = await deploy(["--read-back", dir], { terminal: false, answers: ["y"] });
+    expect(again.code).toBe(0);
+    expect((await record(dir)).readBack).toMatchObject({ state: "complete", provisioning: "observed" });
+  });
+
+  it("exits 2 with the read-back incomplete when the owner stops the rollout's poll, and --read-back finishes it", async () => {
+    await released({ imageChanges: true, rolloutAfterDeploy: 1_000_000 });
+    const { result } = start([TAG], { answers: ["y"] });
+
+    const deployPid = await until(async () => {
+      const reads = (await wranglerCalls()).filter((call) => call.call === "containers info");
+      return reads.length >= 3 ? reads.at(-1)?.ppid : undefined;
+    });
+    process.kill(deployPid, "SIGINT");
+
+    const stopped = await result;
+    expect(stopped.code).toBe(2);
+    const { dir, data } = await onlyRecord();
+    expect(data.readBack).toMatchObject({ state: "incomplete", reason: "the owner stopped the rollout's read-back" });
+
+    const state = v.parse(
+      v.looseObject({ rolloutReads: v.number() }),
+      JSON.parse(await readFile(env["FAKE_WRANGLER_STATE"] ?? "", "utf8")),
+    );
+    await writeFile(env["FAKE_WRANGLER_STATE"] ?? "", JSON.stringify({ ...state, rolloutReads: 1 }));
+    const again = await deploy(["--read-back", dir], { terminal: false });
+    expect(again.code).toBe(0);
+    expect((await record(dir)).readBack).toMatchObject({ state: "complete" });
+  });
+
+  it("stops the upload with all it started at the end of its bound, and records it", async () => {
+    await released({ behavior: { deploy: "hang" } });
+    env["PRQ_DEPLOY_STEP_MS"] = "8000";
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    for (const pid of await hangingPids()) {
+      expect(await ended(pid)).toBe(true);
+    }
+    expect((await onlyRecord()).data.outcome).toBe("the upload did not finish within 8 s and was stopped");
+  });
+
+  it("stops the upload with all it started when the deploy gets SIGTERM, and records it", async () => {
+    await released({ behavior: { deploy: "hang" } });
+    const { result } = start([TAG], { answers: ["y"] });
+
+    const pids = await hangingPids();
+    const mise = (await toolCalls()).findLast((call) => call.tool === "mise");
+    process.kill(mise?.ppid ?? 0, "SIGTERM");
+
+    await result;
+    for (const pid of pids) {
+      expect(await ended(pid)).toBe(true);
+    }
+    expect((await onlyRecord()).data.outcome).toBe("stopped by SIGTERM during the upload; what is live is unread");
+  });
+
+  it("prints its usage for anything else", async () => {
+    for (const args of [[], ["0.1.0"], [TAG, "--force"], [TAG, "--immediate", "--immediate"], ["--bootstrap", TAG]]) {
+      expect(await deploy(args, { terminal: false })).toMatchObject({
+        code: 1,
+        output:
+          "deploy: usage: deploy --bootstrap [--resume] | <tag> [--ignore-running] [--immediate] [--keep-image] | --read-back <record>\n",
+      });
+    }
+    expect(await wranglerCalls()).toEqual([]);
+  });
+});

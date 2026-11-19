@@ -8,6 +8,10 @@
   // The Agents SDK needs the Node.js APIs. enable_request_signal (the default from 2026-11-17, later than the date
   // above) fires an incoming request's signal when its client goes away: the Hub ends a wait whose agent left with it.
   "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
+  // Served only at the host's custom domain, behind Access (docs/design.md, Authentication boundary): wrangler sets
+  // both on every deploy, so a deploy never puts the Worker on workers.dev or on a version's preview URL.
+  "workers_dev": false,
+  "preview_urls": false,
   "durable_objects": {
     "bindings": [
       { "name": "Hub", "class_name": "Hub" },

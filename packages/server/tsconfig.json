@@ -10,6 +10,7 @@
     "scripts/secrets.ts",
     "scripts/operations.ts",
     "scripts/release-check.ts",
+    "scripts/deploy.ts",
     "scripts/**/*.node.test.ts",
     "src/client"
   ]

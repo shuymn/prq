@@ -7,11 +7,11 @@
 // Nothing printed holds a value read: every line printed through print() and printError() has each value hide() was
 // given (as it is, as JSON escapes it, and each line of it) replaced, and a refusal names a file or a variable.
 //
-// wrangler runs in a process group of its own with a bound on its time; a timeout, or a signal to this process, stops
-// the group (SIGTERM, then SIGKILL after a grace), and this process then ends as the signal would have ended it. Its
-// environment is wranglerEnv()'s.
+// A program runs with a bound on its time, in a process group of its own unless it runs in the foreground; a timeout,
+// or a signal to this process, stops it with what it started (SIGTERM, then SIGKILL after a grace), and this process
+// then ends as the signal would have ended it. wrangler's environment is wranglerEnv()'s.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -24,7 +24,7 @@ import * as v from "valibot";
 // The Worker's name in wrangler.jsonc.
 export const WORKER = "prq";
 export const WORKER_ENV = "worker.env";
-const TARGET_ENV = "target.env";
+export const TARGET_ENV = "target.env";
 const NOT_INSTALLED = "wrangler is not installed: run pnpm install --frozen-lockfile in the repository";
 
 const SERVER = fileURLToPath(new URL("..", import.meta.url));
@@ -44,7 +44,7 @@ const EXIT_UNCONFIRMED = 2;
 const directory = process.env["PRQ_DEPLOY_DIRECTORY"] ?? join(homedir(), ".config", "prq", "deploy");
 const wranglerOverride = process.env["PRQ_DEPLOY_WRANGLER"];
 export const CONFIG = process.env["PRQ_DEPLOY_WRANGLER_CONFIG"] ?? join(SERVER, "wrangler.jsonc");
-const waitMs = /^[1-9][0-9]*$/.test(process.env["PRQ_DEPLOY_WAIT_MS"] ?? "")
+export const waitMs = /^[1-9][0-9]*$/.test(process.env["PRQ_DEPLOY_WAIT_MS"] ?? "")
   ? Number(process.env["PRQ_DEPLOY_WAIT_MS"])
   : DEFAULT_WAIT_MS;
 
@@ -197,13 +197,17 @@ export type Outcome = {
   timedOut: boolean;
 };
 
-// How a program runs: in cwd with env, its stdin given input (none: closed), its output kept, in a process group of
-// its own, ended after timeoutMs.
-type RunOptions = {
+// How a program runs: in cwd with env, its stdin given input (none: closed), its output kept or shown, ended after
+// timeoutMs. A program runs in a process group of its own unless it is in the foreground: then it shares this
+// process's group and its terminal, which it can read (wrangler asks there), and stopping it signals it and every
+// process it started.
+export type RunOptions = {
   cwd: string;
   env: NodeJS.ProcessEnv;
   input?: string | undefined;
+  output: "keep" | "show";
   timeoutMs: number;
+  foreground?: boolean;
 };
 
 // The program running now, stopped by a signal to this process, at its time bound, or when this process exits.
@@ -222,6 +226,39 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
     process.kill(-pid, signal);
   } catch {
     // The group has ended.
+  }
+}
+
+// A process and the processes it started, as ps lists them now, the descendants first.
+function tree(pid: number): number[] {
+  const listed = spawnSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8", timeout: 5_000 });
+  const children = new Map<number, number[]>();
+  for (const line of (listed.stdout ?? "").split("\n")) {
+    const [child, parent] = line.trim().split(/\s+/).map(Number);
+    if (child !== undefined && parent !== undefined && Number.isInteger(child) && Number.isInteger(parent)) {
+      children.set(parent, [...(children.get(parent) ?? []), child]);
+    }
+  }
+  const found: number[] = [];
+  const visit = (parent: number) => {
+    for (const child of children.get(parent) ?? []) {
+      if (!found.includes(child) && child !== process.pid) {
+        visit(child);
+        found.push(child);
+      }
+    }
+  };
+  visit(pid);
+  return [...found, pid];
+}
+
+function signalTree(pid: number, signal: NodeJS.Signals): void {
+  for (const each of tree(pid)) {
+    try {
+      process.kill(each, signal);
+    } catch {
+      // It has ended.
+    }
   }
 }
 
@@ -250,13 +287,23 @@ process.on("exit", () => {
 });
 
 // A program run as options say; refused when it cannot start.
-async function run(name: string, command: string, args: readonly string[], options: RunOptions): Promise<Outcome> {
-  const { input } = options;
+export async function run(
+  name: string,
+  command: string,
+  args: readonly string[],
+  options: RunOptions,
+): Promise<Outcome> {
+  const { input, foreground = false } = options;
+  const shown = options.output === "show";
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: options.env,
-    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-    detached: true,
+    stdio: [
+      foreground ? "inherit" : input === undefined ? "ignore" : "pipe",
+      shown ? "inherit" : "pipe",
+      shown ? "inherit" : "pipe",
+    ],
+    detached: !foreground,
   });
   let stdout = "";
   let stderr = "";
@@ -277,7 +324,7 @@ async function run(name: string, command: string, args: readonly string[], optio
     throw new Refusal(`${name} could not start (${errorCode(started)})`);
   }
 
-  const signalAll = (signal: NodeJS.Signals) => signalGroup(pid, signal);
+  const signalAll = (signal: NodeJS.Signals) => (foreground ? signalTree(pid, signal) : signalGroup(pid, signal));
   let stopping: Promise<void> | null = null;
   current = {
     stop: async (signal) => {
@@ -330,7 +377,7 @@ function wranglerCommand(): [string, string[]] {
 // wrangler's environment on the account. Each variable set, not left out: wrangler reads a variable its environment
 // lacks from a .env file in packages/server, and one set here, not empty, wins over the file. A call given values on
 // its stdin writes no log file.
-function wranglerEnv(accountId: string, { values = false } = {}): NodeJS.ProcessEnv {
+export function wranglerEnv(accountId: string, { values = false } = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     CLOUDFLARE_ACCOUNT_ID: accountId,
@@ -350,19 +397,31 @@ function wranglerEnv(accountId: string, { values = false } = {}): NodeJS.Process
   return env;
 }
 
-// The repository's wrangler with args on the account, input (if any) on its stdin, its output kept for the caller.
+// The repository's wrangler with args on the account, input (if any) on its stdin, its output kept for the caller; or,
+// shown, its output on this process's. env adds to its environment.
 export async function wrangler(
   args: readonly string[],
   accountId: string,
-  { input }: { input?: string | undefined } = {},
+  {
+    input,
+    output = "keep",
+    cwd = SERVER,
+    env = {},
+  }: { input?: string | undefined; output?: "keep" | "show"; cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<Outcome> {
   const [program, base] = wranglerCommand();
   return run("wrangler", program, [...base, ...args], {
-    cwd: SERVER,
-    env: wranglerEnv(accountId, { values: input !== undefined }),
+    cwd,
+    env: { ...wranglerEnv(accountId, { values: input !== undefined }), ...env },
     input,
+    output,
     timeoutMs: waitMs,
   });
+}
+
+// The command that runs wrangler: the override tests give, else Node with the given wrangler's own file.
+export function wranglerProgram(cli: string): [string, string[]] {
+  return wranglerOverride !== undefined ? [wranglerOverride, []] : ["node", ["--no-warnings", cli]];
 }
 
 // Whether a wrangler call succeeded: exit 0 within its wait.
@@ -422,33 +481,48 @@ export async function accountName(accountId: string): Promise<string> {
   return found.name ?? "unnamed";
 }
 
-// One line from stdin within the wait; none (stdin ended, or the wait passed) is a no.
-export async function answer(question: string): Promise<boolean> {
+// One line from stdin within the bound (the wait unless given), null when stdin ends or the bound passes. stdin is
+// paused afterwards, not closed: a later question reads it again, and a program run in the foreground meanwhile reads
+// the terminal alone.
+export async function ask(question: string, boundMs = waitMs): Promise<string | null> {
+  const stdinHandle: { ref?: () => void; unref?: () => void } = process.stdin;
   process.stdout.write(question);
   const line = await new Promise<string | null>((resolve) => {
     let text = "";
     const finish = (value: string | null) => {
       clearTimeout(timer);
       process.stdin.off("data", onData).off("end", onEnd).off("error", onEnd);
-      // Not read again: wrangler gets a stdin of its own.
-      process.stdin.destroy();
+      process.stdin.pause();
+      // A paused pipe or terminal would still keep this process alive (a file has nothing to hold it).
+      stdinHandle.unref?.();
       resolve(value);
     };
     const onData = (chunk: string) => {
       text += chunk;
       const newline = text.indexOf("\n");
       if (newline !== -1) {
-        finish(text.slice(0, newline));
+        finish(text.slice(0, newline).replace(/\r$/, ""));
       }
     };
     const onEnd = () => finish(null);
-    const timer = setTimeout(() => finish(null), waitMs);
+    const timer = setTimeout(() => finish(null), boundMs);
+    if (process.stdin.readableEnded) {
+      finish(null);
+      return;
+    }
     process.stdin.setEncoding("utf8").on("data", onData).once("end", onEnd).once("error", onEnd);
+    stdinHandle.ref?.();
     process.stdin.resume();
   });
   if (line === null) {
     process.stdout.write("\n");
   }
+  return line;
+}
+
+// A [y/N] question: yes only on y or yes.
+export async function answer(question: string, boundMs = waitMs): Promise<boolean> {
+  const line = await ask(question, boundMs);
   return line !== null && /^\s*y(es)?\s*$/i.test(line);
 }
 

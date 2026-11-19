@@ -75,10 +75,12 @@ describe("the type checks", () => {
     expect(node).toContain("scripts/secrets.ts");
     expect(node).toContain("scripts/operations.ts");
     expect(node).toContain("scripts/release-check.ts");
+    expect(node).toContain("scripts/deploy.ts");
     expect(node).toContain("scripts/secrets.node.test.ts");
     expect(worker).not.toContain("scripts/secrets.ts");
     expect(worker).not.toContain("scripts/operations.ts");
     expect(worker).not.toContain("scripts/release-check.ts");
+    expect(worker).not.toContain("scripts/deploy.ts");
     expect(worker?.filter((file) => file.startsWith("src/client/"))).toEqual([]);
   });
 
