@@ -7,6 +7,12 @@ version = "1.7.12"
 backend = "aqua:rhysd/actionlint"
 specifiers = ["1"]
 
+[tools.actionlint."platforms.linux-arm64"]
+checksum = "sha256:325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6"
+url = "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/rhysd/actionlint/releases/assets/384924897"
+provenance = "github-attestations"
+
 [tools.actionlint."platforms.linux-x64"]
 checksum = "sha256:8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
 url = "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz"
@@ -24,6 +30,12 @@ version = "1.10.1"
 backend = "aqua:betterleaks/betterleaks"
 specifiers = ["1"]
 
+[tools.betterleaks."platforms.linux-arm64"]
+checksum = "sha256:62a63199f9f61a6b5e5a6f58f048493db20fbc8c770014f4d903a4d97886e1bf"
+url = "https://github.com/betterleaks/betterleaks/releases/download/v1.10.1/betterleaks_1.10.1_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/betterleaks/betterleaks/releases/assets/740237676"
+provenance = "cosign"
+
 [tools.betterleaks."platforms.linux-x64"]
 checksum = "sha256:c174b42d7aa60caf58c0c3e555c0e4bed01fe6b0d99a412bce777b5af4ce913e"
 url = "https://github.com/betterleaks/betterleaks/releases/download/v1.10.1/betterleaks_1.10.1_linux_x64.tar.gz"
@@ -40,6 +52,14 @@ provenance = "cosign"
 version = "1.4.4"
 backend = "core:bun"
 specifiers = ["1"]
+
+[tools.bun."platforms.linux-arm64"]
+checksum = "sha256:baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64.zip"
+
+[tools.bun."platforms.linux-arm64-musl"]
+checksum = "sha256:57f01b02ac7113c61c935f28f38c2eab849e3c970dab21f8b640a87b1ef65009"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64-musl.zip"
 
 [tools.bun."platforms.linux-x64"]
 checksum = "sha256:bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c"
@@ -66,6 +86,11 @@ version = "1.6.0"
 backend = "aqua:suzuki-shunsuke/ghalint"
 specifiers = ["1"]
 
+[tools.ghalint."platforms.linux-arm64"]
+checksum = "sha256:f9d8e20a75c934d21ee6ab1967eb79fa125237ef5633c6bfd03b27999c6a6cda"
+url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554152"
+
 [tools.ghalint."platforms.linux-x64"]
 checksum = "sha256:eda1af79c1a4a31c2de5831cd1333ad582fa6fa72015f8e9c1c4525d550c1d35"
 url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_linux_amd64.tar.gz"
@@ -80,6 +105,11 @@ url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/
 version = "0.20.0"
 backend = "github:babarot/gh-infra"
 specifiers = ["0.20"]
+
+[tools."github:babarot/gh-infra"."platforms.linux-arm64"]
+checksum = "sha256:f958bdc10081ab3ed3678ed86077f800c46d60900810f405d8075829a0f04d5e"
+url = "https://github.com/babarot/gh-infra/releases/download/v0.20.0/gh-infra_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/babarot/gh-infra/releases/assets/730122228"
 
 [tools."github:babarot/gh-infra"."platforms.linux-x64"]
 checksum = "sha256:78e66c9c441c1df9fb14f0945e9b60aeef9b428098bbf531de4fa017872f8687"
@@ -96,6 +126,10 @@ version = "24.22.3"
 backend = "core:node"
 specifiers = ["24"]
 
+[tools.node."platforms.linux-arm64"]
+checksum = "sha256:261af2af250dfd7e9f25cf151d1b2713a0adf8f10a9ad116c4947f68627affe8"
+url = "https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-arm64.tar.gz"
+
 [tools.node."platforms.linux-x64"]
 checksum = "sha256:061ec3e3062115705b56b51fa9cc330ab50d34b6969387d4e4b1a50c6809acc2"
 url = "https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-x64.tar.gz"
@@ -108,6 +142,12 @@ url = "https://nodejs.org/dist/v24.22.3/node-v24.22.3-darwin-arm64.tar.gz"
 version = "12.21.0"
 backend = "aqua:pnpm/pnpm"
 specifiers = ["12"]
+
+[tools.pnpm."platforms.linux-arm64"]
+checksum = "sha256:6c5913a48c93b3a556b71c3bd9bf12c6bf9fbfbbbd2dcbd1d52a85c539751b9e"
+url = "https://github.com/pnpm/pnpm/releases/download/v12.21.0/pnpm-linux-arm64.tar.gz"
+url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/744357257"
+provenance = "github-attestations"
 
 [tools.pnpm."platforms.linux-x64"]
 checksum = "sha256:84c4773bcf4a217f4083cd7b2a91e4cee6103cf42426c1282ef37d308f55a410"

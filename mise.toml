@@ -14,7 +14,8 @@ ghalint = "1"
 
 [settings]
 lockfile = true
-lockfile_platforms = ["macos-arm64", "linux-x64"]
+# The developers' and CI's platforms, and linux-arm64 for the release workflow's runner (.github/workflows/release.yml).
+lockfile_platforms = ["macos-arm64", "linux-x64", "linux-arm64"]
 locked = true
 # Matches pnpm-workspace.yaml's minimumReleaseAge and the shared Renovate preset's.
 minimum_release_age = "3d"
