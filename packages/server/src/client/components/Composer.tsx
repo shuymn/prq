@@ -32,12 +32,13 @@ function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
 
 // The question field (design/components.md, PR detail): Enter sends and Shift+Enter starts a new line, not while an
 // input method composes; the field grows with its text. While the connection is down the field is marked disabled
-// with the reason (it stays focusable); while a sent question is unconfirmed Send is off and the draft stays
-// editable. Above the field, while an earlier version is shown, the SHA questions are answered at.
+// with the reason (it stays focusable); while the page loads or a sent question is unconfirmed Send is off and the
+// draft stays editable. Above the field, while an earlier version is shown, the SHA questions are answered at.
 export function Composer({
   value,
   onChange,
   onSend,
+  loading = false,
   down = null,
   held = null,
   answeredAt = null,
@@ -47,6 +48,8 @@ export function Composer({
   value: string;
   onChange?: ((value: string) => void) | undefined;
   onSend?: ((text: string) => void) | undefined;
+  // Until the page's first view and history read: a question sent then would have no row to show it.
+  loading?: boolean | undefined;
   down?: ComposerDown | null | undefined;
   held?: ComposerHeld | null | undefined;
   answeredAt?: string | null | undefined;
@@ -54,7 +57,8 @@ export function Composer({
   preview?: "focus" | undefined;
 }) {
   const reasonId = useId();
-  const canSend = down === null && held === null && value.trim() !== "";
+  const off = loading || down !== null || held !== null;
+  const canSend = !off && value.trim() !== "";
   const send = (event: FormEvent) => {
     event.preventDefault();
     if (canSend) {
@@ -95,7 +99,7 @@ export function Composer({
       )}
       <div className="footer">
         <p className="hint">{held === null ? "Enter to send · Shift+Enter for a new line" : HELD[held]}</p>
-        <Button variant="primary" size="md" label="Send" type="submit" disabled={down !== null || held !== null} />
+        <Button variant="primary" size="md" label="Send" type="submit" disabled={off} />
       </div>
     </form>
   );

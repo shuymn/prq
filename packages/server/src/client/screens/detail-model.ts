@@ -72,7 +72,8 @@ export type DetailModel = {
   header: Header | null;
   body: DetailBody;
   banner: ConnectionState | null;
-  composer: { down: ComposerDown | null; held: ComposerHeld | null; answeredAt: string | null };
+  // Send waits for the first view and history read (loading), the connection (down) and a held question (held).
+  composer: { loading: boolean; down: ComposerDown | null; held: ComposerHeld | null; answeredAt: string | null };
 };
 
 const clock = new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
@@ -380,7 +381,7 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
   const base = {
     header: view === null ? null : headerOf(view),
     banner: BANNER[session.connection],
-    composer: { down: DOWN[session.connection], held, answeredAt: null },
+    composer: { loading: true, down: DOWN[session.connection], held, answeredAt: null },
   };
   if (session.history === "failed") {
     return { ...base, body: { kind: "load-failed" } };
@@ -399,6 +400,7 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
     ...base,
     composer: {
       ...base.composer,
+      loading: false,
       answeredAt:
         completed !== undefined && shown !== undefined && shown.job.jobId !== completed.job.jobId
           ? versionOf(completed).sha

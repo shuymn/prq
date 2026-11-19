@@ -278,6 +278,7 @@ export function PrDetail({
               value={draft}
               onChange={actions.onDraft}
               onSend={actions.onSend}
+              loading={composer.loading}
               down={composer.down}
               held={composer.held}
               answeredAt={composer.answeredAt}

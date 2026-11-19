@@ -653,7 +653,7 @@ describe("the connection", () => {
     await expect.element(sendButton()).toBeEnabled();
   });
 
-  test("the page loads until the first view and the first history read; an unknown pull request shows only after both (P3.15)", async () => {
+  test("the page loads until the first view and the first history read, Send off and the draft kept meanwhile; an unknown pull request shows only after both (P3.15)", async () => {
     const { fetch, sockets } = await detail();
     const socket = await sockets.socket(0);
     await expect.poll(() => document.querySelector("[data-component=Summary]")?.getAttribute("aria-busy")).toBe("true");
@@ -665,6 +665,12 @@ describe("the connection", () => {
     await settled();
     expect(page.getByText("Unknown pull request").elements()).toEqual([]);
     expect(document.querySelector("[data-component=Summary]")?.getAttribute("aria-busy")).toBe("true");
+    await userEvent.fill(field(), "Early?");
+    await expect.element(sendButton()).toBeDisabled();
+    document.querySelector("form")?.requestSubmit();
+    await settled();
+    expect(chatRequests(sockets)).toEqual([]);
+    await expect.element(field()).toHaveValue("Early?");
     (await fetch.request(0)).respond([]);
     await expect.element(page.getByRole("heading", { level: 1, name: "Unknown pull request" })).toBeVisible();
     await expect.element(page.getByText("prq has nothing for shuymn/prq#42.", { exact: false })).toBeVisible();
