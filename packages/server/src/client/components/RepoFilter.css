@@ -19,14 +19,13 @@
       background: var(--color-bg-subtle);
       cursor: pointer;
 
-      &:hover {
+      &:hover:not([aria-expanded="true"]) {
         background: var(--color-bg-muted);
       }
 
-      /* While its menu is open, as VersionMenu's open trigger. */
+      /* While its menu is open, as VersionMenu's open trigger, on the base fill. */
       &[aria-expanded="true"] {
         border-color: var(--color-border-strong);
-        background: var(--color-bg-subtle);
       }
 
       &:focus-visible {

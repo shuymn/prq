@@ -1,5 +1,5 @@
 import "./RepoMenu.css";
-import type { ComponentProps, MouseEvent, Ref } from "react";
+import type { ComponentProps, MouseEvent } from "react";
 
 import { Button } from "./Button.tsx";
 import { Notice } from "./Notice.tsx";
@@ -36,8 +36,7 @@ export function RepoMenu({
   labelledBy?: string | undefined;
   onChoose?: ((event: MouseEvent, repo: string | null) => void) | undefined;
   onRetry?: ((event: MouseEvent) => void) | undefined;
-  ref?: Ref<HTMLDivElement> | undefined;
-} & Pick<ComponentProps<"div">, "id" | "popover" | "onToggle" | "onKeyDown" | "onBlur">) {
+} & Pick<ComponentProps<"div">, "ref" | "id" | "popover" | "onToggle" | "onKeyDown" | "onBlur">) {
   const options = [{ value: null, label: ALL_REPOSITORIES }, ...(items.state === "ready" ? items.repos : [])];
   return (
     <div
