@@ -46,6 +46,10 @@ catalog:
   "@fontsource/jetbrains-mono": 5.3.0
   # The icons the components show: GitHub's Octicons as React components.
   "@primer/octicons-react": 19.42.0
+  # Summaries and answers rendered from Markdown with GitHub's extensions (tables, task lists, autolinks) and without
+  # raw HTML.
+  react-markdown: 10.1.0
+  remark-gfm: 4.0.1
   "@types/react": 19.3.0
   "@types/react-dom": 19.3.0
   "@vitejs/plugin-react": 6.3.0

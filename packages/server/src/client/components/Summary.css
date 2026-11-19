@@ -1,0 +1,85 @@
+@layer components {
+  [data-component="Summary"] {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-group);
+    box-sizing: border-box;
+    padding: calc(var(--inset-card) - var(--border-width-thin));
+    border: var(--border-width-thin) solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    font: var(--text-body);
+    font-size-adjust: from-font;
+    color: var(--color-fg-default);
+
+    & p {
+      margin: 0;
+    }
+
+    & .header {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-tight);
+    }
+
+    & .title-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--gap-related);
+    }
+
+    & .title {
+      margin: 0;
+      font: var(--text-heading);
+      font-size-adjust: from-font;
+    }
+
+    & .progress,
+    & .running,
+    & .meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--gap-tight);
+      font: var(--text-small);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+
+    & .running {
+      gap: var(--gap-related);
+    }
+
+    & .skeleton {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-related);
+
+      & [data-component="Skeleton"] {
+        inline-size: 100%;
+      }
+
+      & [data-component="Skeleton"]:nth-child(3) {
+        inline-size: var(--size-popover);
+      }
+    }
+
+    & .body {
+      display: flex;
+      flex-direction: column;
+      min-inline-size: 0;
+    }
+
+    /* The caret after the text that has arrived. */
+    & .caret,
+    &[data-state="streaming"] .body [data-component="Markdown"] > :last-child::after {
+      content: "";
+      display: inline-block;
+      inline-size: var(--border-width-thick);
+      block-size: var(--size-icon);
+      margin-inline-start: var(--gap-tight);
+      vertical-align: text-bottom;
+      background: var(--color-accent-fg);
+    }
+  }
+}

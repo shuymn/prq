@@ -1,0 +1,50 @@
+@layer components {
+  [data-component="JobRow"] {
+    display: flex;
+    align-items: center;
+    gap: var(--gap-related);
+    padding-inline: var(--inset-control-md);
+    font: var(--text-small);
+    font-size-adjust: from-font;
+    color: var(--color-fg-muted);
+
+    & .info {
+      display: flex;
+      align-items: center;
+      gap: var(--gap-related);
+      min-inline-size: 0;
+    }
+
+    & :where(.target-row, .meta-row) {
+      display: flex;
+      align-items: center;
+      gap: var(--gap-related);
+      min-inline-size: 0;
+    }
+
+    & :where(.target, .at) {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--gap-tight);
+      white-space: nowrap;
+    }
+
+    /* The question is cut with an ellipsis inside its quotes. */
+    & .target-label {
+      gap: 0;
+      min-inline-size: 0;
+    }
+
+    & .cut {
+      min-inline-size: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    &[data-density="compact"] .info {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--gap-related);
+    }
+  }
+}

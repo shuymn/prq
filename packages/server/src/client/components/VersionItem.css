@@ -1,0 +1,44 @@
+@layer components {
+  [data-component="VersionItem"] {
+    display: flex;
+    align-items: center;
+    gap: var(--gap-related);
+    box-sizing: border-box;
+    inline-size: 100%;
+    min-block-size: var(--size-control-md);
+    padding-block: 0;
+    padding-inline: var(--inset-control-md);
+    border: 0;
+    border-radius: var(--radius-md);
+    font: var(--text-body);
+    font-size-adjust: from-font;
+    text-align: start;
+    color: var(--color-fg-default);
+    background: transparent;
+    cursor: pointer;
+
+    &:hover {
+      background: var(--color-bg-muted);
+    }
+
+    &:focus-visible {
+      outline: var(--border-width-thick) solid var(--color-border-focus);
+      outline-offset: calc(-1 * var(--border-width-thick));
+    }
+
+    &[data-selected="true"] {
+      background: var(--color-accent-bg);
+    }
+
+    & .lead {
+      display: flex;
+      flex: none;
+      inline-size: var(--size-icon);
+    }
+
+    & .time {
+      margin-inline-start: auto;
+      white-space: nowrap;
+    }
+  }
+}

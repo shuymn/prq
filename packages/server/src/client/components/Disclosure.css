@@ -1,0 +1,66 @@
+@layer components {
+  /* The summary row is a target size.control.sm high, the chevron in a lead of that height, and the content lines up
+     under the label. The meta, outside <summary>, is anchored after the label in the same row. Each rule reaches its
+     own parts only, never those of the content's components. */
+  [data-component="Disclosure"] {
+    position: relative;
+    anchor-scope: --disclosure-label;
+
+    & > details > summary {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--gap-tight);
+      block-size: var(--size-control-sm);
+      list-style: none;
+      cursor: pointer;
+
+      &::-webkit-details-marker {
+        display: none;
+      }
+
+      &:focus-visible {
+        outline: var(--border-width-thick) solid var(--color-border-focus);
+        outline-offset: var(--focus-offset);
+        border-radius: var(--radius-sm);
+      }
+    }
+
+    & > details > summary > .lead {
+      display: flex;
+      align-items: center;
+      color: var(--color-fg-muted);
+    }
+
+    & > details > summary > .label {
+      anchor-name: --disclosure-label;
+      font: var(--text-body-strong);
+      font-size-adjust: from-font;
+      color: var(--color-fg-default);
+
+      &[data-heading] {
+        font: var(--text-heading);
+        font-size-adjust: from-font;
+      }
+    }
+
+    & > .meta {
+      position: absolute;
+      position-anchor: --disclosure-label;
+      position-area: center inline-end;
+      display: flex;
+      align-items: center;
+      margin-inline-start: var(--gap-related);
+      font: var(--text-small);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+
+    /* The content starts under the label: past the chevron and the gap after it. */
+    & > details > .content {
+      margin-block-start: var(--gap-tight);
+      margin-inline-start: calc(var(--size-icon) + var(--gap-tight));
+      font: var(--text-body);
+      font-size-adjust: from-font;
+    }
+  }
+}
