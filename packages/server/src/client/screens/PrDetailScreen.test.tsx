@@ -49,7 +49,9 @@ type JobSpec = {
   failure?: string;
 } & ({ analysis: string } | { question: string });
 
-const T0 = Date.parse("2026-11-19T10:14:00");
+// The jobs' times: 10:14 local time, as the running lines show it, on a date before any run of these tests in any
+// time zone, since a stalled line's elapsed time counts from it to the real clock.
+const T0 = Date.parse("2026-11-01T10:14:00");
 
 function job(spec: JobSpec, index: number) {
   return {
