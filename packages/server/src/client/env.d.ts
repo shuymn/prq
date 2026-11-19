@@ -7,9 +7,9 @@ declare const __PRQ_VERSION__: string;
 // HTML attributes Chrome implements that React's types do not list yet; React passes them to the DOM as they are.
 declare namespace React {
   interface ButtonHTMLAttributes<T> {
-    // Invoker commands: the button acts on the element of that ID (a popover it toggles).
+    // Invoker commands: the button acts on the element of that ID (a popover it toggles, a dialog it closes).
     commandfor?: string | undefined;
-    command?: "toggle-popover" | "show-popover" | "hide-popover" | `--${string}` | undefined;
+    command?: "toggle-popover" | "show-popover" | "hide-popover" | "close" | `--${string}` | undefined;
   }
   interface HTMLAttributes<T> {
     // Arrow-key focus navigation among the element's items (`menu nomemory` for a menu).

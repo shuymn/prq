@@ -1,0 +1,82 @@
+@layer components {
+  /* The box is a dialog's (modal.css): the title and description, the facts, a failed confirm's Notice, the actions.
+     Each fact is a line of small muted text after its icon; a fact that can wrap (the source, the files) centres its
+     icon on its first line. */
+  [data-component="SkillReview"] {
+    & ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    & .head {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-tight);
+    }
+
+    & .description {
+      font: var(--text-body);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+
+    & .facts {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-related);
+
+      & > li {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--gap-tight);
+        font: var(--text-small);
+        font-size-adjust: from-font;
+        color: var(--color-fg-muted);
+      }
+
+      & > li.pin,
+      & > li.tools {
+        align-items: center;
+      }
+
+      & .badges {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--gap-related);
+      }
+
+      & .lead {
+        display: flex;
+        align-items: center;
+        block-size: 1lh;
+      }
+    }
+
+    & .files {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-related);
+      min-inline-size: 0;
+
+      & li {
+        display: flex;
+        align-items: center;
+        gap: var(--gap-tight);
+      }
+
+      & code {
+        font: var(--text-code-small);
+        font-size-adjust: from-font;
+        color: var(--color-fg-default);
+      }
+    }
+
+    /* The files' lead is a line of code high. */
+    & .facts > li:last-child .lead {
+      font: var(--text-code-small);
+      font-size-adjust: from-font;
+    }
+  }
+}

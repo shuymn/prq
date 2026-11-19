@@ -1,0 +1,15 @@
+@layer components {
+  /* The box is a dialog's (modal.css). */
+  [data-component="Dialog"] {
+    & > .head {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-tight);
+    }
+
+    & > .head > .text {
+      font: var(--text-body);
+      font-size-adjust: from-font;
+    }
+  }
+}

@@ -19,6 +19,10 @@ type Props = {
   pressed?: boolean | undefined;
   // A form's submit button (the Composer's Send).
   type?: "button" | "submit" | undefined;
+  // The ID of the dialog the button closes (a dialog's Cancel), as an invoker command.
+  closes?: string | undefined;
+  // The control a dialog focuses when it opens or changes what it shows.
+  autofocus?: boolean | undefined;
   onClick?: ((event: MouseEvent<HTMLButtonElement>) => void) | undefined;
   preview?: PreviewState | undefined;
 };
@@ -32,6 +36,8 @@ export function Button({
   busy = false,
   pressed,
   type = "button",
+  closes,
+  autofocus = false,
   onClick,
   preview,
 }: Props) {
@@ -46,6 +52,9 @@ export function Button({
       disabled={disabled}
       aria-disabled={busy || undefined}
       aria-pressed={pressed}
+      commandfor={closes}
+      command={closes === undefined ? undefined : "close"}
+      data-autofocus={autofocus || undefined}
       onClick={busy ? undefined : onClick}
     >
       {busy && <Spinner />}

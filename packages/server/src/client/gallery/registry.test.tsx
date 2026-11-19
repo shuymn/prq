@@ -15,18 +15,10 @@ import { REGISTRY } from "./registry.tsx";
 
 const design = designNames(componentsMd, screensMd);
 
-// What the UI has yet to build, by component and by state ID (plan §4: the settings in PR 6). A pending item must name
-// something the design has.
-const PENDING_COMPONENTS = [
-  "TextField",
-  "TextArea",
-  "PromptEditor",
-  "SkillRow",
-  "SkillRegisterForm",
-  "SkillReview",
-  "Dialog",
-];
-const PENDING_STATES = ["settings."];
+// What the UI has yet to build, by component and by state ID (plan §4): nothing now. A pending item must name something
+// the design has.
+const PENDING_COMPONENTS: string[] = [];
+const PENDING_STATES: string[] = [];
 
 // States the code has and the design draws no frame for, which the gallery shows for the owner's review beside the
 // others (design/components.md): the pool's popover while its read is under way.

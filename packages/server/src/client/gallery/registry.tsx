@@ -1,7 +1,9 @@
 // The gallery's entries (plan §1.17): one per component name of design/components.md and one per state ID of
 // design/screens.md, as far as the UI has them (registry.test.tsx holds the rest as pending). A component entry renders
 // the real component with the props its name gives, so its root carries them as data-<prop>; a state entry renders
-// the real screen from fixtures. State IDs that share a frame share one rendering.
+// the real screen from fixtures. State IDs that share a frame share one rendering. A state whose dialog opens over the
+// page (`modal`) shows only on its own page, since an open modal makes the rest of the gallery inert. COPY_ENTRIES are
+// states the design gives as copy rather than as a state ID (design/components.md, Feedback).
 
 import type { HubView, LedgerRow } from "@prq/protocol";
 import type { ReactNode } from "react";
@@ -13,6 +15,7 @@ import { Button, type ButtonVariant, type ControlSize } from "../components/Butt
 import { CodeBlock } from "../components/CodeBlock.tsx";
 import { Composer } from "../components/Composer.tsx";
 import { ConnectionBanner } from "../components/ConnectionBanner.tsx";
+import { Dialog } from "../components/Dialog.tsx";
 import { Disclosure } from "../components/Disclosure.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
 import { Icon, ICON_NAMES } from "../components/Icon.tsx";
@@ -24,6 +27,7 @@ import { Notice, type NoticeTone } from "../components/Notice.tsx";
 import { PoolPopover } from "../components/PoolPopover.tsx";
 import { type PoolState, PoolStatus } from "../components/PoolStatus.tsx";
 import { PrHeader } from "../components/PrHeader.tsx";
+import { PromptEditor, type PromptStatus } from "../components/PromptEditor.tsx";
 import { PrRow } from "../components/PrRow.tsx";
 import { type PrState, PrStateLabel } from "../components/PrStateLabel.tsx";
 import { PrTableHeader } from "../components/PrTableHeader.tsx";
@@ -35,9 +39,14 @@ import { RetryButton, RetryError } from "../components/retry.tsx";
 import { SegmentedControl } from "../components/SegmentedControl.tsx";
 import { Sha } from "../components/Sha.tsx";
 import { Skeleton } from "../components/Skeleton.tsx";
+import { SkillRegisterForm } from "../components/SkillRegisterForm.tsx";
+import { SkillReview } from "../components/SkillReview.tsx";
+import { SkillRow } from "../components/SkillRow.tsx";
 import { Spinner } from "../components/Spinner.tsx";
 import { Status, type StatusState } from "../components/Status.tsx";
 import { Summary } from "../components/Summary.tsx";
+import { TextArea } from "../components/TextArea.tsx";
+import { TextField } from "../components/TextField.tsx";
 import { VersionItem, type VersionStatus } from "../components/VersionItem.tsx";
 import { type Version, VersionMenu } from "../components/VersionMenu.tsx";
 import { Frame } from "../frame.tsx";
@@ -48,6 +57,8 @@ import { detailModel } from "../screens/detail-model.ts";
 import { listBody } from "../screens/list-model.ts";
 import { PrDetail } from "../screens/PrDetail.tsx";
 import { PrList } from "../screens/PrList.tsx";
+import { Settings } from "../screens/Settings.tsx";
+import type { SettingsState } from "../settings.ts";
 import { DETAIL_FIXTURES, type DetailFixture, HEADS, SUMMARY } from "./detail-fixtures.ts";
 import {
   allRows,
@@ -60,8 +71,9 @@ import {
   poolAgents,
   poolRows,
 } from "./fixtures.ts";
+import { REGISTER_PREVIEW, SETTINGS_STATES, SKILLS, UPDATE_PREVIEW } from "./settings-fixtures.ts";
 
-export type Entry = { name: string; render: () => ReactNode };
+export type Entry = { name: string; render: () => ReactNode; modal?: boolean };
 
 const VERSION = "v0.4.0";
 
@@ -358,6 +370,136 @@ function detailEntries(): Entry[] {
   ];
 }
 
+// The settings over a store in this state, under the header with its Settings link marked.
+function SettingsPage({ state }: { state: SettingsState }) {
+  return (
+    <Frame view={EMPTY_LOCAL} version={VERSION} layout="page" settings>
+      <Settings state={state} />
+    </Frame>
+  );
+}
+
+const settingsPage = (fixture: string) => {
+  const state = SETTINGS_STATES[fixture];
+  if (state === undefined) {
+    throw new Error(`no settings fixture ${fixture}`);
+  }
+  return () => <SettingsPage state={state()} />;
+};
+const settingsState = (name: string, modal = false): Entry => ({
+  name: `settings.${name}`,
+  render: settingsPage(name),
+  modal,
+});
+
+const SKILL_URL = "https://github.com/acme/skills/blob/main/skills/review/SKILL.md";
+const REVIEW_SKILL = SKILLS[0];
+
+// The settings' components, each with its name's props, with the texts of their Pencil components.
+function settingsEntries(): Entry[] {
+  const field = { label: "GitHub URL", hint: "The repository that holds the skill." };
+  const area = { label: "Analysis prompt", hint: "Used for every summary." };
+  const prompt = "Write in Japanese. Polish the final text with the yomiyasu skill.";
+  return [
+    ...variants("TextField", ["rest", "focus", "invalid", "disabled"] as const, (state) => (
+      <TextField
+        {...field}
+        value={state === "invalid" ? "github.com/acme" : "https://github.com/acme/skills"}
+        error={state === "invalid" ? "Enter a repository URL such as https://github.com/owner/repo." : null}
+        disabled={state === "disabled"}
+        preview={state === "focus" ? "focus" : undefined}
+      />
+    )),
+    ...variants("TextArea", ["rest", "focus", "invalid"] as const, (state) => (
+      <TextArea
+        {...area}
+        value={prompt}
+        error={state === "invalid" ? "Enter a prompt or leave it empty to use the default." : null}
+        preview={state === "focus" ? "focus" : undefined}
+      />
+    )),
+    ...variants("PromptEditor", ["idle", "empty", "saving", "saved", "failed"] as PromptStatus[], (status) => (
+      <PromptEditor
+        title="Analysis prompt"
+        purpose="Free-form instructions the agent follows when it writes a summary."
+        placeholder="For example: Write in Japanese. Keep the summary under 200 words."
+        value={status === "empty" ? "" : prompt}
+        status={status}
+        savedAt={new Date().setHours(10, 2, 0, 0)}
+      />
+    )),
+    ...variants("SkillRow", ["rest", "update-ref", "update-review"] as const, (state) => (
+      <ul className="specimen-list">
+        <SkillRow
+          name="review"
+          description={REVIEW_SKILL?.description ?? ""}
+          source={{ owner: "acme", repo: "skills", path: "skills/review" }}
+          skillRef={{ name: "main", kind: "branch" }}
+          sha={REVIEW_SKILL?.sha ?? ""}
+          allowedTools={REVIEW_SKILL?.allowedTools ?? null}
+          state={state}
+          refForm={{ value: state === "update-review" ? "v2" : "main", busy: false, error: null }}
+        />
+      </ul>
+    )),
+    ...variants("SkillRegisterForm", ["idle", "registering", "failed"] as const, (state) => (
+      <SkillRegisterForm
+        state={state}
+        url={SKILL_URL}
+        reason={state === "failed" ? "No SKILL.md at this link. Check that it points to a SKILL.md file." : null}
+      />
+    )),
+    {
+      name: "SkillReview/register",
+      render: () => (
+        <SkillReview
+          preview={{ mode: "register", skill: { ...REGISTER_PREVIEW, ...REVIEW_PREVIEW } }}
+          error={{ title: "Couldn't register the skill", text: "Couldn't reach the server. Try again.", final: false }}
+        />
+      ),
+    },
+    {
+      name: "SkillReview/update",
+      render: () => (
+        <SkillReview
+          preview={{ mode: "update", skill: UPDATE_PREVIEW }}
+          error={{
+            title: "Couldn't apply the update",
+            text: "The skill changed since this review. Cancel, then choose Review update for a fresh review.",
+            final: true,
+          }}
+        />
+      ),
+    },
+    {
+      name: "Dialog",
+      render: () => (
+        <Dialog
+          title="Remove the skill review?"
+          text="Analyses and answers stop using it. Registering it again resolves the ref anew."
+          error={{ title: "Couldn't remove the skill", text: "Couldn't reach the server. Try again." }}
+          actions={
+            <>
+              <Button variant="secondary" size="md" label="Cancel" preview="focus" />
+              <Button variant="danger" size="md" label="Remove skill" />
+            </>
+          }
+        />
+      ),
+    },
+  ];
+}
+
+// The register review's specimen as its Pencil component shows it: the review skill at a1b2c3d.
+const REVIEW_PREVIEW = {
+  name: "review",
+  description: REVIEW_SKILL?.description ?? "",
+  source: { owner: "shuymn", repo: "kopje", path: "skills/review" },
+  sha: REVIEW_SKILL?.sha ?? "",
+  allowedTools: REVIEW_SKILL?.allowedTools ?? null,
+  files: UPDATE_PREVIEW.files,
+};
+
 export const REGISTRY: Entry[] = [
   // Foundations
   ...variants("Icon", ICON_NAMES, (name) => <Icon name={name} />),
@@ -467,6 +609,8 @@ export const REGISTRY: Entry[] = [
   )),
   // PR detail
   ...detailEntries(),
+  // Settings
+  ...settingsEntries(),
   // Brand
   ...variants("BrandMark", ["brand", "face"] as const, (variant) => <BrandMark variant={variant} size={2} />),
   // 1. PR list
@@ -514,6 +658,16 @@ export const REGISTRY: Entry[] = [
   { name: "pool.loading", render: poolEntry(CLOUD_ONLY, null, "loading") },
   // The popover while its read is under way, which the design has no frame for (design/components.md, PoolPopover).
   { name: "pool.local-reading", render: poolEntry(POOL_LOCAL, "reading") },
+  // 4. Settings
+  settingsState("default"),
+  settingsState("empty"),
+  settingsState("registering", true),
+  settingsState("register-review", true),
+  settingsState("register-failed", true),
+  settingsState("saving"),
+  settingsState("save-failed"),
+  settingsState("update", true),
+  settingsState("remove", true),
   // 5. Panel
   { name: "panel.default", render: panel("panel-default") },
   { name: "panel.version-menu", render: panel("panel-default", true) },
@@ -526,4 +680,10 @@ export const REGISTRY: Entry[] = [
   { name: "panel.send-failed", render: panel("panel-send-failed") },
   { name: "panel.waiting-agent", render: panel("panel-waiting-agent") },
   { name: "panel.unavailable", render: panel("panel-unavailable") },
+];
+
+export const COPY_ENTRIES: Entry[] = [
+  { name: "settings (loading)", render: settingsPage("loading") },
+  { name: "settings (load failed)", render: settingsPage("load-failed") },
+  { name: "settings (refresh failed)", render: settingsPage("refresh-failed") },
 ];

@@ -36,8 +36,8 @@ describe("the build's notice", () => {
 
   test("an asset counts as failed once Vite reports a failed preload", async () => {
     const { result } = await renderHook(() => useAssetFailed());
-    expect(result.current).toBe(false);
+    expect(result.current[0]).toBe(false);
     window.dispatchEvent(new Event("vite:preloadError"));
-    await expect.poll(() => result.current).toBe(true);
+    await expect.poll(() => result.current[0]).toBe(true);
   });
 });

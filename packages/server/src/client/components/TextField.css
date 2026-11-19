@@ -1,0 +1,89 @@
+@layer components {
+  /* A field and a multi-line field share their label, hint, boundary and error (design/components.md, Settings). The
+     boundary at rest is border.strong, which meets WCAG 1.4.11 against the canvas; the inset counts from the outer
+     edge, the border inside it. */
+  :is([data-component="TextField"], [data-component="TextArea"]) {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-tight);
+    min-inline-size: 0;
+
+    & p {
+      margin: 0;
+    }
+
+    & .label {
+      font: var(--text-body-strong);
+      font-size-adjust: from-font;
+      color: var(--color-fg-default);
+    }
+
+    & .hint {
+      font: var(--text-small);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+
+    & .input {
+      box-sizing: border-box;
+      inline-size: 100%;
+      margin: 0;
+      border: var(--border-width-thin) solid var(--color-border-strong);
+      border-radius: var(--radius-md);
+      font: var(--text-input);
+      font-size-adjust: from-font;
+      color: var(--color-fg-default);
+      background: var(--color-bg-canvas);
+
+      &::placeholder {
+        color: var(--color-fg-muted);
+      }
+
+      &:focus-visible {
+        outline: var(--border-width-thick) solid var(--color-border-focus);
+        outline-offset: calc(-1 * var(--border-width-thick));
+      }
+    }
+
+    &[data-state="focus"] .input {
+      outline: var(--border-width-thick) solid var(--color-border-focus);
+      outline-offset: calc(-1 * var(--border-width-thick));
+    }
+
+    &[data-state="invalid"] .input {
+      border-color: var(--color-danger-fg);
+    }
+
+    &[data-state="disabled"] .input {
+      border-color: var(--color-border-default);
+      color: var(--color-fg-disabled);
+      background: var(--color-bg-subtle);
+    }
+
+    /* The reason wraps under its own start; its icon centres on the first line. */
+    & .error {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--gap-tight);
+      font: var(--text-small);
+      font-size-adjust: from-font;
+      color: var(--color-danger-fg);
+
+      & .lead {
+        display: flex;
+        align-items: center;
+        block-size: 1lh;
+      }
+    }
+  }
+
+  [data-component="TextField"] {
+    inline-size: var(--size-panel);
+
+    & .input {
+      block-size: var(--size-control-md);
+      padding-block: 0;
+      padding-inline: calc(var(--inset-control-md) - var(--border-width-thin));
+    }
+  }
+}

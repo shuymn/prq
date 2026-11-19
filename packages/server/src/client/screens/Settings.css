@@ -1,0 +1,80 @@
+@layer screens {
+  /* The settings' column: the content width, centred, its sections a section apart. Each section is its heading, then
+     its content a group below. */
+  .settings {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-section);
+    box-sizing: border-box;
+    inline-size: 100%;
+    max-inline-size: var(--size-content);
+    margin-inline: auto;
+    padding-block: var(--inset-page);
+
+    & h2,
+    & p {
+      margin: 0;
+    }
+
+    /* The page's heading names it for assistive technology and takes focus when the page opens; the header's marked
+       Settings link shows where the host is. */
+    & .page-title {
+      position: absolute;
+      inline-size: var(--border-width-thin);
+      block-size: var(--border-width-thin);
+      margin: 0;
+      overflow: hidden;
+      clip-path: inset(var(--border-width-thin));
+      white-space: nowrap;
+    }
+
+    & section {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-group);
+    }
+
+    & h2 {
+      font: var(--text-heading);
+      font-size-adjust: from-font;
+      color: var(--color-fg-default);
+    }
+
+    & .skills-head {
+      display: flex;
+      align-items: center;
+      gap: var(--gap-group);
+    }
+
+    & .intro {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      gap: var(--gap-tight);
+      color: var(--color-fg-muted);
+    }
+
+    & .skill-list {
+      display: flex;
+      flex-direction: column;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    /* Until the first read: a title and a field for each editor, a block for each row of the list. */
+    & .placeholder {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-related);
+
+      & [data-component="Skeleton"][data-shape="block"] {
+        inline-size: 100%;
+      }
+    }
+
+    & .prompts .placeholder [data-component="Skeleton"][data-shape="block"] {
+      max-inline-size: var(--size-dialog);
+    }
+  }
+}

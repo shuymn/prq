@@ -1,14 +1,17 @@
-import { useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 
 import { Frame } from "./frame.tsx";
 import { useHub } from "./hub.ts";
 import { useLayout } from "./layout.ts";
-import { BuildNotice, useAssetFailed } from "./notices.tsx";
+import { BuildNotice, ChunkBoundary, useAssetFailed } from "./notices.tsx";
 import { type Route, useRoute } from "./routes.ts";
 import { NotFound } from "./screens/NotFound.tsx";
 import { PrDetailScreen } from "./screens/PrDetailScreen.tsx";
 import { PrListScreen } from "./screens/PrListScreen.tsx";
 import { useUnsent } from "./slots.ts";
+
+// The settings come in a chunk of their own, loaded when the page opens.
+const SettingsScreen = lazy(() => import("./screens/SettingsScreen.tsx"));
 
 // The route's view as a key: a change of it is a navigation to another view.
 const viewKey = (route: Route) => (route.name === "detail" ? `detail:${JSON.stringify(route.ref)}` : route.name);
@@ -37,7 +40,7 @@ export function App() {
   const hub = useHub();
   const route = useRoute();
   const layout = useLayout();
-  const assetFailed = useAssetFailed();
+  const [assetFailed, failAsset] = useAssetFailed();
   const unsent = useUnsent();
   const notice = (sessionVersion: string | null = null) => (
     <BuildNotice serverVersions={[hub.serverVersion, sessionVersion]} assetFailed={assetFailed} unsent={unsent} />
@@ -63,10 +66,18 @@ export function App() {
       version={__PRQ_VERSION__}
       layout={layout}
       header={!(layout === "panel" && route.name === "detail")}
+      settings={route.name === "settings"}
     >
       {route.name === "list" && <PrListScreen key={key} hub={hub} notice={notice()} />}
       {route.name === "detail" && (
         <PrDetailScreen key={key} prRef={route.ref} hub={hub} layout={layout} notice={notice} />
+      )}
+      {route.name === "settings" && (
+        <ChunkBoundary key={key} onError={failAsset} fallback={notice()}>
+          <Suspense fallback={notice()}>
+            <SettingsScreen notice={notice()} />
+          </Suspense>
+        </ChunkBoundary>
       )}
       {route.name === "not-found" && <NotFound key={key} notice={notice()} />}
     </Frame>

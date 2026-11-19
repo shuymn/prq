@@ -106,8 +106,8 @@ export type DetailModel = {
 
 const clock = new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
-// A time of day as the running and waiting lines give it ("10:14").
-const clockTime = (at: number): string => clock.format(at);
+// A time of day as the running and waiting lines and a saved prompt give it ("10:14").
+export const clockTime = (at: number): string => clock.format(at);
 
 const RUNNING = new Set<JobView["state"]>(["claimed", "running"]);
 
