@@ -5,8 +5,4 @@
 import { runAppCheck } from "./app-check.ts";
 import { checkWorkspace } from "./workspace.ts";
 
-await runAppCheck(
-  "workspace",
-  (settings, pr, print, values) => checkWorkspace(settings, pr, print, { browser: values.browser }),
-  { browser: { type: "boolean" } },
-);
+await runAppCheck("workspace", checkWorkspace, { browser: { type: "boolean" } });

@@ -26,6 +26,7 @@ import type { GithubApp } from "./reconcile.ts";
 import { SCRIPTED_MODEL, serveScripted } from "./scripted.ts";
 import { checkAfterRemoval, checkContext, type Verdict } from "./skill-context.ts";
 import {
+  answerOf,
   api,
   appGithub,
   type Github,
@@ -119,8 +120,7 @@ async function pageDriver(shown: OwnerBrowser): Promise<Driver> {
       throw error;
     }
     const answer = await response;
-    const text = await answer.text();
-    return { status: answer.status(), body: text === "" ? null : (JSON.parse(text) as unknown) };
+    return answerOf(answer.status(), await answer.text());
   };
   // A review the check moved past is closed first, as Escape closes it.
   const closeDialog = async () => {
