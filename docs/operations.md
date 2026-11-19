@@ -1,10 +1,11 @@
 # Operations
 
-How to host prq: what it needs, how to set up the accounts and the private files its deployment reads, and how to
-rotate each credential. Deploying the Worker and releasing `prq` are not described here yet.
+How to host prq: what it needs, how to set up the accounts and the private files its deployment reads, how to release
+and deploy it and recover from a deploy that stopped part-way, and how to rotate each credential. Publishing `prq`'s
+binaries is not described here yet.
 
 Every command runs from the root of a clone of this repository. `<host>` is the hostname prq is served at,
-`<team>` the Zero Trust team name, and `<account-id>` the Cloudflare account's ID.
+`<team>` the Zero Trust team name, `<account-id>` the Cloudflare account's ID, and `vX.Y.Z` a release's version.
 
 ## What a host needs
 
@@ -239,6 +240,230 @@ To remove a secret the Worker no longer reads:
 ```sh
 CLOUDFLARE_ACCOUNT_ID=<account-id> pnpm --dir packages/server exec wrangler secret delete <NAME>
 ```
+
+## Releases
+
+A release is one version, `vX.Y.Z` (SemVer; a pre-release such as `v0.2.0-rc.1` too), for the Worker, the web UI and
+`prq` alike: the `version` of `packages/server/package.json` and of `packages/cli/package.json`, which a test holds
+equal ([design.md](design.md#versions)). Every deploy is a release:
+
+1. A release pull request, `chore(release): vX.Y.Z`, changes only the two versions. While the version is 0.x, a change
+   to the protocol that `prq` must follow raises the minor version, anything else the patch.
+2. Once it is merged, check its merge commit `<sha>` (the full SHA) before tagging it, with `gh` logged in:
+
+   ```sh
+   git fetch origin
+   pnpm --dir packages/server run release-check -- vX.Y.Z --pre-tag <sha>
+   ```
+
+   It checks that both versions at `<sha>` are the tag's, that `<sha>` is on `origin`'s `main`, and that GitHub reports a
+   completed, successful `Check` run of GitHub Actions for it.
+
+3. Tag it, annotated, and push the tag:
+
+   ```sh
+   git tag -a vX.Y.Z -m vX.Y.Z <sha>
+   git push origin vX.Y.Z
+   ```
+
+   Only the repository's admin can create a `v*` tag, and nobody can move or delete one (the tag rulesets in
+   `.github/infra.yaml`), so a pushed tag is there for good: a mistaken one costs its version, and the release takes the
+   next. A signature (`git tag -s`) is welcome but not checked.
+
+The release check without `--pre-tag` is what the deploy runs on the tag: the tag is annotated, `origin` has the same tag
+object, it peels to the commit checked out, and that commit passes the checks above. It uses Node's built-ins, git and
+`gh` alone, so it runs before any install.
+
+## The deploy command
+
+`pnpm --dir packages/server run deploy -- <arguments>` deploys the Worker `prq` to the account and hostname
+`target.env` names, through wrangler logged in as in [Cloudflare account](#4-cloudflare-account). It never uploads the
+checkout it runs in.
+
+- `--bootstrap`: once, before prq's first upload. It deploys an inert Worker named `prq` (every request answers 404
+  with an `x-prq-bootstrap` header; no assets, Durable Objects or container) with workers.dev and preview URLs off and
+  the version tag `prq-bootstrap`, so that no upload of prq is ever reachable at those addresses. It refuses while the
+  Worker `prq` has a live version. It prints the version's ID, asks for the account's workers.dev subdomain as the
+  dashboard shows it (Workers & Pages, `<subdomain>.workers.dev`) or `none`, and records both. `--bootstrap --resume`
+  deploys the same Worker again over a live version tagged `prq-bootstrap` alone.
+- `vX.Y.Z`: a release, in a terminal (it refuses otherwise: wrangler asks there before it replaces a DNS record or
+  another Worker's domain on the hostname). In order, it
+  1. clones the tag from `origin` into a new directory of the OS temp directory, `prq-deploy-vX.Y.Z-…`, which it prints
+     and keeps;
+  2. runs, in the clone, the release check, `mise trust`, `mise install` (the tag's pinned tools),
+     `pnpm install --frozen-lockfile` and the web UI's build, each stopped after an hour;
+  3. refuses when the tag's tracked files hold the value of `PRQ_HOST`, `CLOUDFLARE_ACCOUNT_ID`, `ACCESS_TEAM_DOMAIN`
+     (its hostname) or `ACCESS_AUD`, naming the variable and the file, never the value, or when its `wrangler.jsonc`
+     would turn workers.dev or preview URLs on;
+  4. reads what is live, and refuses when the Worker has no live version (the bootstrap comes first);
+  5. prints the account, the live versions, the hostname, the tag and its commit, the container application and what the
+     deploy does to it, and asks `Deploy vX.Y.Z to <host>? [y/N]`;
+  6. checks that no cloud work waits or runs: it reads every page of the ledger at `https://<host>/api/ledger` with the
+     service token of `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET`, set in the shell as for `prq`, and refuses
+     while a pull request the cloud agent owns has a job waiting or running, or when the ledger cannot be read. The check
+     is skipped while the live Worker is still the bootstrap's (versions with no binding but secrets), which serves
+     nothing at the hostname;
+  7. has the clone's wrangler deploy it, with `<host>` as the Worker's custom domain, the tag as the version's tag and
+     `prq vX.Y.Z <sha>` as its message, its output shown, stopped after two hours. wrangler uploads the Worker first,
+     then builds the workspace container's image with the local Docker, pushes it and rolls it out, and then sets
+     workers.dev, preview URLs and the custom domain;
+  8. reads what is live again, then the read-back below.
+
+  `--immediate` has the Durable Objects take the new code at once rather than within wrangler's deferred window (up to
+  5 minutes). `--keep-image` deploys without building or rolling out the container's image, and refuses before the
+  container application exists. `--ignore-running` turns a busy or unreadable ledger into a warning.
+
+- `--read-back <record>`: a release's read-back again, on the account and container application its record names.
+
+**The record.** Every run keeps one in `~/.local/state/prq/deploys` (`$XDG_STATE_HOME/prq/deploys` when that is set),
+readable by you alone: the bootstrap's as `bootstrap/<time>.json`, a release's as `<time>-vX.Y.Z/record.json` beside
+wrangler's output file. A release's record holds the tag, its commit, the account, the hostname and the clone; the live
+versions (ID, tag, share of traffic) and the container application `prq-workspace` (ID, version, image, active
+rollout) before the upload and after it; the idle check's result; the upload's exit and the version it made; and the
+read-back. It is written as each is known, so a failed or stopped upload leaves one too.
+
+**The read-back.** The version the deploy made must be live alone. Then, by what the deploy did to the container
+application:
+
+- _created_ (the first release): wrangler creates the application directly, with no rollout to follow, and Cloudflare
+  provisions a new application over several minutes, in which its containers can fail to start. The command asks you to
+  answer `y` once the dashboard (Workers & Pages → Containers → `prq-workspace`) shows it ready, or `n`, which records
+  the provisioning unverified.
+- _changed_ (a new image): it reads the application and its instances every 10 seconds, for up to 30 minutes, until the
+  application, still with the image this deploy pushed, has no active rollout, and every instance listed reports the
+  application's version, none provisioning or failed.
+- _unchanged_, or _kept_ with `--keep-image`: complete once the version is live.
+
+It exits 0 once the read-back is complete. When the upload failed it exits with wrangler's code, 1 when it was stopped
+at its bound. Otherwise it exits 2 with `verification incomplete`, the reason, and the command that resumes it,
+`pnpm --dir packages/server run deploy -- --read-back <record>`; Ctrl-C during the read-back ends it the same way. It
+also prints what to read in the dashboard (Workers & Pages → `prq` → Settings → Domains & Routes).
+
+**The quiet interval.** A new Worker version can run with the previous image while the new one is pushed and rolled out,
+and a running container keeps the previous image until it is replaced. One host avoids that by deploying when nothing
+happens: no new pushes to its pull requests and no questions from the idle check until the read-back is complete. The
+idle check is a snapshot of a ledger that can lag its sessions; keeping the interval is yours.
+
+## First deploy
+
+Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `secrets check` passes:
+
+1. **Protect the release tags.** Apply the repository settings, which hold the two tag rulesets, with
+   `mise exec -- gh-infra plan .github/infra.yaml` and then `mise exec -- gh-infra apply .github/infra.yaml`, and read
+   them back in the repository's Settings → Rules → Rulesets: `release-tag-creation` and `release-tag-immutability`
+   active on `refs/tags/v*`, the first with the admin role as its only bypass, the second with none.
+2. **The first release**, `v0.1.0`, as in [Releases](#releases): the release pull request, the check with `--pre-tag`,
+   the tag.
+3. **The bootstrap**: `pnpm --dir packages/server run deploy -- --bootstrap`. Then, in the dashboard's Domains & Routes
+   for `prq`: workers.dev and Preview URLs disabled, no custom domain. Checking by request that the addresses it prints
+   answer nothing of prq comes with the deployed checks.
+
+   If the bootstrap stopped part-way and running it again is refused because the Worker has a live version tagged
+   `prq-bootstrap`, run `pnpm --dir packages/server run deploy -- --bootstrap --resume`: it deploys the same Worker over
+   that version, so its settings apply, and records it. `--resume` works only until the next step, whose versions carry
+   no tag.
+
+4. **The secrets**: `pnpm --dir packages/server run secrets put` until it exits 0
+   ([The secrets command](#the-secrets-command)), then `secrets status`, which lists all ten and nothing besides.
+5. **The deploy**, in a terminal with Docker running: `pnpm --dir packages/server run deploy -- v0.1.0`. Before
+   answering `y`, check the account, the hostname, and that the applications "prq" and "prq webhook" cover it
+   ([Zero Trust and Access](#5-zero-trust-and-access-zone)). The idle check is skipped, since nothing is served at the
+   hostname yet. The container application is created: answer `y` once the dashboard shows `prq-workspace` ready. If
+   the dashboard does not show it, answer `n` and wait the provisioning time Cloudflare documents before going on; the
+   record then says the provisioning is unverified, and `--read-back <record>` lets you answer again later.
+6. **What is served**: the dashboard's Domains & Routes for `prq` shows `<host>` as its custom domain, with workers.dev
+   and Preview URLs still disabled; signing in at `https://<host>` with the one-time PIN shows the web UI with
+   `v0.1.0`. Checking the deployment through Access by request comes with the deployed checks.
+7. **The webhook**: turn it on as in [GitHub App](#6-github-app), in one save, then the Pull request event.
+8. **The first pull request**: stop every `prq wait` and let 10 minutes pass (an agent stays in the pool that long after
+   its last contact), so the cloud agent owns the next new pull request. Open one in the private test repository and
+   see its analysis prepare the workspace (`prq.workspace.prepared`) and finish (`prq.job.usage` with the outcome
+   `done`) in the logs ([Rotation](#rotation) says where). A pull request opened before the Pull request event was
+   subscribed has no delivery in the App's Recent deliveries: open a new one. Retrying an analysis that failed while
+   the container application was still provisioning comes with the deployed checks.
+
+## Each release
+
+1. The release pull request, the check with `--pre-tag` and the tag, as in [Releases](#releases).
+2. Pick a quiet interval: no cloud job waiting or running, and no pushes or questions until the deploy's read-back is
+   complete.
+3. In a terminal with Docker running, with `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET` set as for `prq`:
+   `pnpm --dir packages/server run deploy -- vX.Y.Z`. It exits 0 once the read-back is complete.
+4. Sign in at `https://<host>`: the web UI shows the new version. The checks after a deploy come with the deployed
+   checks.
+5. Remove the clone the deploy printed once you no longer need it.
+
+## Recovery
+
+The Worker's logs are where [Rotation](#rotation) says.
+
+### What is live
+
+`pnpm --dir packages/server run deploy -- --read-back <record>` reads the live versions and the container application on
+the record's account, records them and reads back what the record lacks. By hand, with the record's account:
+
+```sh
+CLOUDFLARE_ACCOUNT_ID=<account-id> pnpm --dir packages/server exec wrangler deployments status --name prq
+CLOUDFLARE_ACCOUNT_ID=<account-id> pnpm --dir packages/server exec wrangler containers info <application-id>
+```
+
+The application's ID is in the record, or listed by `wrangler containers list`. The hostname, workers.dev and preview
+URLs are in the dashboard's Domains & Routes for `prq`.
+
+### A deploy that stopped part-way
+
+wrangler uploads the Worker first, then the image, then the settings and the custom domain, so a failure can leave the
+new version live with the previous image, or with the previous custom domain settings. The command then exits with
+wrangler's code and prints what is live, which the record holds too.
+
+- **The upload failed or was stopped after the new version went live**: stay in the quiet interval and run
+  `deploy -- vX.Y.Z` again with the same tag. It clones, builds and uploads the tag again, wrangler building the image
+  anew, and its read-back shows the version and the application's rollout; the dashboard's Domains & Routes show the
+  settings and the custom domain.
+- **The upload was stopped** (Ctrl-C, or its bound): the record says what is live is unread. `--read-back <record>`
+  reads it, and completes the read-back when the version the upload made is live alone; otherwise it says to deploy the
+  tag again.
+- **Nothing of the new version went live**: the previous release still serves. Deploy the tag again once the cause is
+  fixed.
+
+### A read-back that stayed incomplete
+
+The record names the reason, and `--read-back <record>` reads again. A new application counts as ready on your `y`. A
+changed application's rollout counts as complete once `wrangler containers info` shows the image the deploy pushed with
+no `active_rollout_id`, and every instance `wrangler containers instances <application-id>` lists reports the
+application's version, none provisioning or failed. Whether Cloudflare clears `active_rollout_id` when a rollout ends is
+first seen on the first deploy that changes the image. Until then, and whenever the read-back keeps waiting for a
+rollout the dashboard (Workers & Pages → Containers → `prq-workspace`) shows done, the dashboard is the evidence, and the
+record stays incomplete with its reason.
+
+### Rollback
+
+```sh
+CLOUDFLARE_ACCOUNT_ID=<account-id> pnpm --dir packages/server exec wrangler rollback <version-id> --name prq
+```
+
+moves the Worker's traffic back to an earlier version; it rolls back neither Durable Object storage nor the container's
+image. Roll back only when, between the two versions, none of these changed: the schema steps
+(`packages/server/src/schema.ts`), the Durable Object migrations and the bindings (`packages/server/wrangler.jsonc`),
+the secrets (a version carries the secrets it was deployed with, so never across a `secrets put`), and the container's
+image. Otherwise release a fix.
+
+### Other failures
+
+- **A failed delivery**: the App's Advanced → Recent deliveries shows each delivery with the Worker's answer and can
+  redeliver it. A 401 (the signature) or a 500 (a webhook secret or host ID missing or malformed) is redelivered once
+  its cause is fixed. After a 503 or a timeout the Worker may still have stored the delivery: its redelivery answers
+  `received` or `duplicate`, and either is one intake.
+- **A failed job** stays `failed` with its reason. Retrying it comes with the deployed checks.
+- **A missing or malformed secret**: the Worker answers every protected request 500 when the Access team domain or
+  audience is, and every delivery 500 when the webhook secret or the host's ID is; it logs `prq.config.invalid` naming
+  the variable. `secrets status` names a missing secret: fix `worker.env`, then `secrets check` and `secrets put`.
+- **The provider refuses a call** (a spend limit, a key or a model it does not accept): the job fails with
+  `provider refused the request (HTTP <status>): <its message>`. Fix the credit or the key (`secrets put` for a new
+  one), then retry the job.
+- **Skill scripts refused** because an earlier run's processes could not be confirmed ended: the workspace runs no
+  script until its container stops, 30 minutes after its last request.
+- **An Access session that ended in the browser**: reload the page; Access asks for a one-time PIN again.
 
 ## Rotation
 

@@ -580,8 +580,23 @@ UI, webhook and CLI input all enter through PrSession.
 ### Versions
 
 - The Worker and the web UI it serves are deployed together and share one version, `vX.Y.Z`; the UI shows it next to
-  the product name. The CLI carries the version it was built with. How releases set the version is decided with the
-  deploy setup.
+  the product name. The CLI carries the version it was built with.
+- A release has one version for the Worker, the UI and the CLI: `v` and the `version` of `packages/server/package.json`
+  (Worker and UI) and of `packages/cli/package.json` (CLI), which a test holds equal. A release pull request changes
+  only the two, and every deploy is a release. Rejected: a version from `git describe` at build time (three places to
+  inject it, and deploys of untagged commits), and one version at the root (a third file to keep equal).
+- A release is an annotated tag `vX.Y.Z` (SemVer, a pre-release allowed) on a commit of `main` whose `Check` passed.
+  Two tag rulesets on `refs/tags/v*` (`.github/infra.yaml`): creation, with the repository's admin as the only bypass,
+  and update and deletion, with none (a ruleset's bypass covers all its rules). A pushed tag therefore names one commit
+  for good, and a mistaken one costs its version. A signature is not checked: creation is the admin's alone, and
+  checking one would need a list of trusted signers on every machine that checks.
+- The release check (`packages/server/scripts/release-check.ts`) decides whether a commit may be released as a tag:
+  both versions equal the tag's; the tag is annotated, `origin` has the same tag object (`git ls-remote` of the tag and
+  its peeled `^{}`), and it peels to the commit being built; that commit is on `origin`'s `main`; and GitHub reports a
+  completed, successful `Check` run of GitHub Actions for that exact SHA. With `--pre-tag <sha>`, before the tag is
+  pushed, it checks the commit alone. It uses Node's built-ins, git and `gh` only, so it runs before any install. The
+  deploy builds and uploads only a clean clone of such a tag, with the tag's pinned tools and frozen lockfile
+  ([operations.md](operations.md#the-deploy-command)).
 - Every `/cli/*` response, including errors and `wait` timeouts, carries the server's version in a `Prq-Version`
   header (named in `@prq/protocol`); response bodies do not change. Every `prq` command that calls `/cli/*` compares
   it with its own version as plain strings, so a pre-release or build differs from the release. On a mismatch it
@@ -1265,6 +1280,12 @@ Server:
   a protected route. Access covers the whole host.
 - There are two Access applications. `/webhook` bypasses Access. The rest of the host is allowed for the host's email
   (browser) or a service token (`prq`). Agents SDK's WebSocket path (`/agents/:binding/:name`) is inside the protection.
+- The Worker is served only at the host's custom domain, never at a `workers.dev` address or a preview URL.
+  `wrangler.jsonc` turns both off, and wrangler applies that on every deploy, but only after the upload, so a Worker's
+  first upload could be reachable there until then. Before prq's first upload, an inert Worker of the same name with
+  both off (`deploy --bootstrap`) takes that first upload, and a release's deploy refuses a tag whose configuration
+  turns either on. The hostname comes from the host's private `target.env` and is attached as the custom domain by a
+  deploy run in a terminal, where wrangler asks before it replaces a DNS record.
 - On every protected path the Worker verifies `Cf-Access-Jwt-Assertion` with `jose`: an RS256 signature from the team's
   key set, the audience, a fixed issuer (the team's domain) and an expiry, which the token must carry. A caller that
   passes Access is treated as the host; the host and the service token are not told apart per path. The verification
@@ -1437,8 +1458,9 @@ prq/
 │  │   │   └─ client/            React UI (Vite): index.html, main.tsx, the components with one stylesheet each,
 │  │   │                         the base styles, the BrandMark's drawing, and public/ (_headers, the favicon set)
 │  │   ├─ scripts/           manual checks of a model provider, the tool loop and the GitHub App
-│  │   │                     (`pnpm run check:provider`, `check:tools`, `check:github`), and the production secrets
-│  │   │                     (`pnpm run secrets`, docs/operations.md); not part of the Worker
+│  │   │                     (`pnpm run check:provider`, `check:tools`, `check:github`), and production's commands:
+│  │   │                     the secrets, the release check and the deploy (`pnpm run secrets`, `release-check`,
+│  │   │                     `deploy`, their shared runner in operations.ts; docs/operations.md); not part of the Worker
 │  │   ├─ container/         the skill runner the image installs (prq-skill-run.py)
 │  │   ├─ Dockerfile         the workspace container's image
 │  │   ├─ build/             the UI's build: the tokens as CSS (Style Dictionary), the generated _headers, the font
@@ -1446,7 +1468,7 @@ prq/
 │  │   ├─ wrangler.jsonc     the Worker, and the UI's build (dist/client) as its static assets
 │  │   ├─ vite.config.ts     src/client into dist/client (`pnpm run build`)
 │  │   └─ vitest.config.ts   two projects: the Worker's tests in workerd, the git procedure's, the skill runner's, the
-│  │                         UI build's and the secrets command's (*.node.test.ts) in Node
+│  │                         UI build's and production's commands' (*.node.test.ts) in Node
 │  └─ cli/                 @prq/cli: prq, compiled by Bun into one binary (dist/prq; Node 24 runs the source too)
 │      └─ src/
 │          ├─ main.ts            the entry the binary is built from: arguments, the command, the exit code
@@ -1500,6 +1522,10 @@ Only a deployment can show these.
   pushes, and how far a replica lags, are tested only with a served API.
 - **Containers in production.** Start and rebuild times, and checkout time of a large repository. The local Docker
   numbers (`check:workspace`) are not production values.
+- **Deploying.** The bootstrap and the deploy have run only against stand-ins for wrangler, mise, pnpm and `gh`. The
+  first real deploy shows wrangler's answers as the command reads them, workers.dev and preview URLs off from the
+  bootstrap on, the image built for amd64 on the host's machine, a new container application's provisioning, and, on
+  the first deploy that changes the image, whether `active_rollout_id` clears when the rollout ends.
 - **Bundling by wrangler.** The PKCS#8-only crypto path of `@octokit/auth-app`, bundled by wrangler, has minted a
   real installation token in wrangler's local runtime (`check:reconcile`); a deployed Worker has not minted one yet.
 - **Billing.** The Durable Object duration of the `wait` long-poll with one waiter, and the real cost of cloud turns.
