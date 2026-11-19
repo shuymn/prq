@@ -11,7 +11,11 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`; host
   they also run in other worktrees, and a branch from before this toolchain cannot commit through them.
 - `pnpm run lint` (oxlint, type-aware), `pnpm run lint:css` (stylelint on the web UI's stylesheets), `pnpm run fmt`
   (oxfmt check; `pnpm run fmt:fix` formats), `pnpm run knip` (unused files, dependencies and exports), `pnpm run
-  typecheck` and `pnpm run test` are the checks CI's `Check` job runs. `pnpm run test` builds the web UI first.
+  typecheck` and `pnpm run test` are the checks CI runs (`.github/workflows/ci.yml`). `pnpm run test` builds the web UI
+  first. CI runs them as parallel jobs: `Lint` runs every check but the tests, and `Test` runs the tests as three jobs,
+  each building the web UI first: the CLI's, the server's `workerd` and `client` projects, and its `node` project
+  (`pnpm run test --project <name>` in `packages/server` runs one). The `Check` job, the required status check and the
+  one the release check reads, succeeds only when all of them did.
 - `pnpm run build` in `packages/server` builds the web UI (`src/client`, Vite) into `dist/client`, which the Worker
   serves as its static assets with the generated `_headers`. Whatever runs the Worker (the tests, `pnpm run stack`, the
   owner's checks) needs that build; the tests stop without it, saying so, and the stack and the checks build it first.
