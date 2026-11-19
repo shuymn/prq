@@ -1231,6 +1231,16 @@ describe("a claim in the panel", () => {
 // The panel's pool line, right under the compact header.
 const poolLine = () => document.querySelector("[data-component=PrHeader] + [data-component=PoolStatus]")?.textContent;
 
+// No local agent present.
+const ABSENT: HubView = {
+  localAgentPresent: false,
+  presentAgents: 0,
+  jobs: { waiting: 0, running: 0, failed: 0 },
+  needsAttention: 0,
+  owners: 1,
+  ledgerVersion: 1,
+};
+
 describe("the pool's line in the panel", () => {
   afterEach(async () => {
     await page.viewport(1280, 800);
@@ -1238,15 +1248,7 @@ describe("the pool's line in the panel", () => {
 
   test("shows under the header while a question waits for a local agent, and whenever the pool's status is unavailable; else none (P5.4)", async () => {
     await page.viewport(360, 800);
-    const absent: HubView = {
-      localAgentPresent: false,
-      presentAgents: 0,
-      jobs: { waiting: 0, running: 0, failed: 0 },
-      needsAttention: 0,
-      owners: 1,
-      ledgerVersion: 1,
-    };
-    const waiting = await detail({ layout: "panel", hub: { ...HUB, view: absent } });
+    const waiting = await detail({ layout: "panel", hub: { ...HUB, view: ABSENT } });
     const socket = await waiting.sockets.socket(0);
     socket.open();
     socket.receive({
@@ -1270,5 +1272,29 @@ describe("the pool's line in the panel", () => {
     (await unavailable.fetch.request(1)).respond([]);
     await expect.element(page.getByText("No questions yet. Ask about this pull request below.")).toBeVisible();
     expect(poolLine()).toBe("Pool unavailable");
+  });
+
+  test("shows while the current head's analysis waits for a local agent with an earlier head's summary shown (P5.4)", async () => {
+    await page.viewport(360, 800);
+    const older = await detail({
+      layout: "panel",
+      hub: { ...HUB, view: { ...ABSENT, jobs: { waiting: 1, running: 0, failed: 0 } } },
+    });
+    const socket = await older.sockets.socket(0);
+    socket.open();
+    socket.receive({
+      type: "cf_agent_state",
+      state: sessionView(
+        [
+          { analysis: OLDER, id: "a1" },
+          { analysis: HEAD, id: "a2", state: "pending" },
+        ],
+        "local",
+      ),
+    });
+    (await older.fetch.request(0)).respond([analysis("a1", OLDER, "A's summary.")]);
+    (await older.fetch.request(1)).respond([analysis("a1", OLDER, "A's summary.")]);
+    await expect.poll(() => textOf("[data-component=Summary] .body")).toContain("A's summary.");
+    expect(poolLine()).toBe("Cloud only· 1 waiting");
   });
 });

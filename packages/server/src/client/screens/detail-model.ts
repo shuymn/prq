@@ -29,9 +29,8 @@ export type DetailInput = {
 
 type Header = { state: PrState | null; repository: string; number: number; title: string; url: string };
 
-// `forAgent`: the empty summary's analysis waits for a local agent.
 type SummaryModel =
-  | { state: "empty"; waiting: string; forAgent?: true }
+  | { state: "empty"; waiting: string }
   | { state: "ready" | "streaming"; text: string; meta: string | null; running: string | null };
 
 export type QuestionItem = {
@@ -86,7 +85,8 @@ export type DetailContent = {
   summary: SummaryModel;
   conversation: (QuestionItem | AnswerItem)[];
   jobs: { active: JobItem[]; done: JobItem[] };
-  // The summary or a question waits for a local agent, which the panel's pool line explains.
+  // An analysis (the current head's, though another version is shown, or the one shown) or a question waits for a local
+  // agent, which the panel's pool line explains.
   waitsForAgent: boolean;
 };
 
@@ -232,7 +232,7 @@ function summaryOf(
     return { state: "streaming", text: "", meta: null, running };
   }
   if (job.state === "pending" && agentAbsent(view, hub)) {
-    return { state: "empty", waiting: `${waitingForAgent(job.updatedAt)} — continues when it returns`, forAgent: true };
+    return { state: "empty", waiting: `${waitingForAgent(job.updatedAt)} — continues when it returns` };
   }
   return { state: "empty", waiting: job.state === "pending" ? "Waiting to start" : "No summary yet" };
 }
@@ -505,7 +505,6 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
       : newest.find(({ job }) => RUNNING.has(job.state) && shown !== undefined && job.createdAt > shown.job.createdAt);
   const claimed =
     stalled === null ? (newer ?? (shown !== undefined && RUNNING.has(shown.job.state) ? shown : undefined)) : current;
-  const summary = summaryOf(shown, session, view, hub);
   const conversation = conversationOf(session, view, slot, hub);
   return {
     ...base,
@@ -527,11 +526,11 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
       stalled,
       claimRetry: claimed === undefined ? null : retryOf(claimed.job, session),
       failed,
-      summary,
+      summary: summaryOf(shown, session, view, hub),
       conversation,
       jobs: jobsOf(session, view, hub),
       waitsForAgent:
-        (summary.state === "empty" && summary.forAgent === true) ||
+        ([current, shown].some((analysis) => analysis?.job.state === "pending") && agentAbsent(view, hub)) ||
         conversation.some((item) => item.kind === "question" && item.state === "waiting-agent"),
     },
   };
