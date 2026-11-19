@@ -796,6 +796,18 @@ and no judgment: there is no stage in the pipeline that "polishes" or translates
   /api/skills/:name/preview` (the new version beside the current one), `PUT /api/skills/:name` (with `expectedRev`),
   `DELETE /api/skills/:name`; `GET /api/instructions` lists the skills sorted by name. A refusal answers 400, 404, 409,
   422 (`invalid_skill`) or 503 with the reason the settings show.
+- **The settings page** (the web UI's `/settings`, loaded as a chunk of its own) reads `GET /api/instructions` when it
+  opens and after each change to the skills. Each prompt saves on its own and the editor keeps the host's draft: a
+  save sends the draft as it is then, typing stays open meanwhile, and a read replaces an editor's text only while the
+  editor holds no unsaved change. A confirm sends exactly what its preview showed (an update with the preview's
+  `current.rev` as `expectedRev`); editing the ref withdraws an update's preview still out. A register answered `409
+  skill_exists` reads the list again, and that skill listed at that commit counts as registered (a confirm the page
+  stopped waiting for that the server applied); `409 skill_changed` reads the list and asks for a fresh review; a
+  remove answered 204 or 404 reads the list. The page gives each request its route's bounds and 15 s more, then counts
+  it as unanswered: 45 s for a read, a save or a remove, 75 s for a preview (the registration's revision and the 30 s
+  read of the skill), 165 s for a confirm (an update's two revision checks and store around the 60 s fetch). Each kind
+  has one request out at a time; closing a dialog or leaving the page aborts what is out, and a dialog closed while its
+  confirm was out reads the list, since the server may have applied it.
 - **Context budget.** Only each skill's `name` and `description` stay in the model context. The body and the files it
   refers to are loaded on demand through two tools: `activate_skill(name)` returns the `SKILL.md` body, and
   `read_skill_resource(name, path)` returns a file inside that skill's directory (path-checked, so it cannot leave it),
@@ -1566,5 +1578,9 @@ Only a deployment can show these.
   local runtime too, the compiled `prq` as a local agent (`check:skills --local <pull request>`: yomiyasu's 42 files,
   about 2.1 MB, in one `/cli/skill` page, equal to GitHub's tree in paths, sizes, modes and blob SHA-1); whether a local
   AI uses a skill it is given is not measured.
-- **Browser client.** `useAgentChat` with a local owner (an appended answer, reconnection) was exercised through a Node
-  client speaking the same WebSocket protocol, not in a browser.
+- **Web UI at the edge.** The UI runs in Chrome only against wrangler's local runtime, through the Access stand-in's
+  browser door: the browser check, and the owner's `check:skills --browser` and `check:workspace --browser`, which
+  drive the settings page and show a streaming summary against real GitHub and the model. A deployment shows the caching headers
+  and the Content Security Policy as Cloudflare's edge serves them behind real Access, a WebSocket reconnecting after
+  the Access session expires, the new version notice after a real deploy, and summaries and answers streamed from the
+  provider through the deployed Worker.
