@@ -340,6 +340,7 @@ const panelDefault = (now: number) =>
 // The failed frames' pull request: its versions (the latest analysis failed, when `analysisFailed`), a done question and a
 // failed one whose text stopped.
 function failedSession(now: number, analysisFailed: boolean) {
+  const answerFailure = analysisFailed ? SPEND_LIMIT : "step limit reached";
   const jobs = [
     job({ id: "a-first", target: { kind: "analysis", headSha: WEBHOOK_HEADS.first }, state: "done", ago: DAY }, now),
     job(
@@ -376,7 +377,7 @@ function failedSession(now: number, analysisFailed: boolean) {
         target: { kind: "answer", messageId: "q-token" },
         state: "failed",
         ago: 5 * MINUTE,
-        failure: analysisFailed ? SPEND_LIMIT : "step limit reached",
+        failure: answerFailure,
       },
       now,
     ),
@@ -387,13 +388,7 @@ function failedSession(now: number, analysisFailed: boolean) {
     question("q-events", Q_EVENTS),
     answer("j-events", "q-events", A_EVENTS, 2_310, WEBHOOK_HEADS.latest),
     question("q-token", Q_TOKEN),
-    incomplete(
-      "j-token",
-      "q-token",
-      A_TOKEN_PARTIAL,
-      analysisFailed ? SPEND_LIMIT : "step limit reached",
-      WEBHOOK_HEADS.latest,
-    ),
+    incomplete("j-token", "q-token", A_TOKEN_PARTIAL, answerFailure, WEBHOOK_HEADS.latest),
   ]);
 }
 
