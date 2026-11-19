@@ -359,9 +359,13 @@ the deploy did to the container application:
   instance reports that version (one with no version does not), none provisioning or failed. A Durable Object with no
   instance is listed as inactive and counted apart. It stops reading 30 minutes after it began; a read under way then
   finishes first, within wrangler's wait of 5 minutes.
-- _unchanged_, or _kept_ with `--keep-image`: complete once the version is live, unless the record shows an active
-  rollout (as after a retry whose image was the same), now or in an earlier read, which is then read as a changed one
-  is, also once the rollout has cleared.
+- _unchanged_, or _kept_ with `--keep-image`: complete once the version is live, unless a read found the application
+  with an active rollout (as before a retry whose image was the same): after the upload, in a `--read-back`, or before
+  the upload with the same version and image. That rollout, with the image and version it was found with, is then read
+  as a changed one is, also once it has cleared.
+
+Once found, the rollout to follow is recorded (`rollout`: the application, its image and version) before its instances
+are read, and every later `--read-back` follows it.
 
 It exits 0 once the read-back is complete. When the upload failed it exits with wrangler's code, 1 when it was stopped
 at its bound. Otherwise it exits 2 with `verification incomplete`, the reason, and the command that resumes it,

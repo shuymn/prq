@@ -1500,6 +1500,60 @@ describe("deploy <tag>", () => {
     });
   });
 
+  it("follows a rollout found before the upload of an unchanged application that the read after it finds cleared", async () => {
+    // A retry whose image was the same: the earlier rollout is under way when the deploy first reads the application,
+    // cleared by its read after the upload, with an active instance still at the earlier version.
+    await released({ rolloutReads: 1, instancePages: [[{ state: "running", version: APP.version - 1 }]] });
+    settings.rolloutMs = 3000;
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(2);
+    const { dir, data } = await onlyRecord();
+    expect(data).toMatchObject({
+      application: "unchanged",
+      rollout: { id: APP.id, image: APP.image, version: APP.version },
+      readBack: { state: "incomplete", reason: "the rollout was not complete within 3 s" },
+    });
+
+    await changeState({ instancePages: null });
+    expect((await deploy(["--read-back", dir], { terminal: false })).code).toBe(0);
+  });
+
+  it("keeps the rollout a --read-back found for the next one, when its instances could not be read", async () => {
+    // The deploy ends while it reads what is live after the upload, with no rollout under way yet.
+    await released({ afterDeploy: { "deployments status": "hang" } });
+    const { result } = start([TAG], { answers: ["y"] });
+    await hangingPids();
+    const read = (await wranglerCalls()).findLast((call) => call.call === "deployments status");
+    process.kill(read?.ppid ?? 0, "SIGTERM");
+    await result;
+    const { dir } = await onlyRecord();
+
+    // The first --read-back finds a rollout under way, then cannot read the instances.
+    await changeState({ behavior: { "containers instances": "fail" }, rolloutReads: 1 });
+    const first = await deploy(["--read-back", dir], { terminal: false });
+    expect(first.code).toBe(2);
+    expect(await record(dir)).toMatchObject({
+      application: "unchanged",
+      rollout: { id: APP.id, image: APP.image, version: APP.version },
+      readBack: {
+        state: "incomplete",
+        reason: "the rollout could not be read: wrangler containers instances failed (exit 1)",
+      },
+    });
+
+    // The second finds it cleared, with an active instance still at the earlier version.
+    await changeState({ behavior: {}, instancePages: [[{ state: "running", version: APP.version - 1 }]] });
+    settings.rolloutMs = 3000;
+    const second = await deploy(["--read-back", dir], { terminal: false });
+    expect(second.code).toBe(2);
+    expect((await record(dir)).readBack).toMatchObject({
+      state: "incomplete",
+      reason: "the rollout was not complete within 3 s",
+    });
+  });
+
   it("stops the upload with all it started at the end of its bound, and records it", async () => {
     await released({ behavior: { deploy: "hang" } });
     settings.stepMs = 8000;
