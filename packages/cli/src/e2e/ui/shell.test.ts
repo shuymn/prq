@@ -32,7 +32,7 @@ const shellHeaders = {
   "x-content-type-options": "nosniff",
 };
 
-const door = (path: string) => new URL(path, stack.access().door).href;
+const door = (path: string) => new URL(path, stack.access().door.url).href;
 
 // The header's version text, once the shell has rendered.
 async function headerVersion(): Promise<string> {
@@ -92,10 +92,7 @@ describe("the shell", () => {
     expect(etag).toMatch(/^"[0-9a-f]+"$/);
     await page.reload();
     // Chrome reports the revalidated page as its cached 200; the door saw the Worker's answer.
-    const shells = stack
-      .access()
-      .doorLog()
-      .filter((entry) => entry.path === "/");
+    const shells = stack.access().door.log.filter((entry) => entry.path === "/");
     expect(shells.map(({ ifNoneMatch, status }) => ({ ifNoneMatch, status }))).toEqual([
       { ifNoneMatch: null, status: 200 },
       { ifNoneMatch: etag, status: 304 },

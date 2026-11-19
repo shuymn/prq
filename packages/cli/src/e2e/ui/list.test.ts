@@ -18,15 +18,11 @@ const browser = useBrowser();
 
 const SERVER_VERSION = `v${(await import("../../../../server/package.json", { with: { type: "json" } })).default.version}`;
 
-const door = (path: string) => new URL(path, stack.access().door).href;
+const door = (path: string) => new URL(path, stack.access().door.url).href;
 const pr = (repo: string, number: number): PrRef => ({ owner: "shuymn", repo, number });
 
 // The ledger reads the door forwarded, in order, each with its query.
-const ledgerReads = () =>
-  stack
-    .access()
-    .doorLog()
-    .filter((entry) => entry.path.startsWith("/api/ledger"));
+const ledgerReads = () => stack.access().door.log.filter((entry) => entry.path.startsWith("/api/ledger"));
 
 // The pull requests the list shows, as the paths their rows link to.
 async function shownRows(page: Page): Promise<string[]> {
@@ -60,7 +56,7 @@ function gateHub() {
   const arrived = latch();
   const release = latch();
   for (let i = 0; i < 5; i += 1) {
-    stack.access().doorPlan((path) => path.startsWith("/agents/hub/"), {
+    stack.access().door.plan((path) => path.startsWith("/agents/hub/"), {
       kind: "gate",
       arrived: i === 0 ? arrived : latch(),
       release,
@@ -75,11 +71,7 @@ async function agentWait(agentId: string): Promise<void> {
 }
 
 // The shell's loads the door forwarded.
-const shells = () =>
-  stack
-    .access()
-    .doorLog()
-    .filter((entry) => entry.path === "/").length;
+const shells = () => stack.access().door.log.filter((entry) => entry.path === "/").length;
 
 // The pool's status in the header once the Hub's view says this.
 const pool = (page: Page, label: string) => page.locator('[data-component="PoolStatus"] .label', { hasText: label });
@@ -186,7 +178,7 @@ describe("a pass superseded while it pages", () => {
     const shown = await shownRows(page);
     // The first page in place, the list asks for the second, which the Worker answers and the door holds.
     const second = { kind: "hold", answered: latch(), release: latch() } as const;
-    stack.access().doorPlan((path) => path.includes("cursor="), second);
+    stack.access().door.plan((path) => path.includes("cursor="), second);
     const readsBefore = ledgerReads().length;
     await page.locator(".next-page").scrollIntoViewIfNeeded();
     await second.answered.promise;
@@ -195,7 +187,7 @@ describe("a pass superseded while it pages", () => {
     const moved = "/pr/shuymn/prq/5";
     expect(first.rows.indexOf(moved)).toBeGreaterThanOrEqual(firstPage);
     const replaced = { kind: "hold", answered: latch(), release: latch() } as const;
-    stack.access().doorPlan((path) => path === "/api/ledger?state=open", replaced);
+    stack.access().door.plan((path) => path === "/api/ledger?state=open", replaced);
     await push(worker, pr("prq", 5), sha("h5-again"), sha("base"), largest(5));
     await replaced.answered.promise;
     expect(await shownRows(page)).toEqual(shown);
@@ -203,7 +195,7 @@ describe("a pass superseded while it pages", () => {
     // A local agent arrives before that pass reaches its second page: presence changes, and another pass replaces it,
     // whose second page the door holds. Until it answers, the rows are those shown before.
     const winning = { kind: "hold", answered: latch(), release: latch() } as const;
-    stack.access().doorPlan((path) => path.includes("cursor="), winning);
+    stack.access().door.plan((path) => path.includes("cursor="), winning);
     await agentWait("laptop");
     await pool(page, "1 local agent").waitFor();
     await winning.answered.promise;
@@ -239,12 +231,9 @@ describe("the repository menu", () => {
     const items = page.getByRole("menuitemradio");
     await page.getByRole("menuitemradio", { name: "prq" }).waitFor();
     expect(await items.allInnerTexts()).toEqual(["All repositories", "kopje", "prq"]);
-    expect(
-      stack
-        .access()
-        .doorLog()
-        .filter((entry) => entry.path.startsWith("/api/repos")),
-    ).toMatchObject([{ path: "/api/repos", status: 200 }]);
+    expect(stack.access().door.log.filter((entry) => entry.path.startsWith("/api/repos"))).toMatchObject([
+      { path: "/api/repos", status: 200 },
+    ]);
     const repositories: unknown = await page.evaluate(
       `[...document.querySelectorAll('[data-component="PrRow"] .repo-cell')].map((cell) => cell.textContent)`,
     );
@@ -257,7 +246,7 @@ describe("an earlier deploy's bundle", () => {
     const bundle = await buildOldBundle({ signal });
     try {
       await push(stack.worker(), pr("prq", 1), sha("a"));
-      stack.access().doorServe(bundle.dir);
+      stack.access().door.serve(bundle.dir);
       const page = browser.page();
       await page.goto(door("/"));
       const version = page.locator('[data-component="AppHeader"] .version');
@@ -271,7 +260,7 @@ describe("an earlier deploy's bundle", () => {
       );
       await page.locator('a.title[href="/pr/shuymn/prq/1"]').waitFor();
 
-      stack.access().doorServe(null);
+      stack.access().door.serve(null);
       await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "Reload" }).click()]);
       await pool(page, "Cloud only").waitFor();
       expect(await version.innerText()).toBe(SERVER_VERSION);

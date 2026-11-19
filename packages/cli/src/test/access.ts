@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { text } from "node:stream/consumers";
 
-import { type Door, type DoorEntry, type DoorPlan, startDoor } from "./door.ts";
+import { type Door, startDoor } from "./door.ts";
 import type { Latch } from "./latch.ts";
 import type { Worker } from "./worker.ts";
 
@@ -47,11 +47,8 @@ type LogEntry = {
 
 export type Access = {
   url: string;
-  // The browser's door to the Worker (door.ts), the requests it forwarded, its plans and the directory it serves.
-  door: string;
-  doorLog(): DoorEntry[];
-  doorPlan(match: (path: string) => boolean, plan: DoorPlan): void;
-  doorServe(dir: string | null): void;
+  // The browser's door to the Worker (door.ts): the requests it forwarded, its plans and the directory it serves.
+  readonly door: Door;
   clientId: string;
   clientSecret: string;
   mode: Mode;
@@ -76,13 +73,8 @@ export async function startAccess(worker: Worker): Promise<Access> {
 
   const access: Access = {
     url: "",
-    door: "",
-    doorLog: () => door?.log ?? [],
-    doorPlan(match, plan) {
-      required(door).plan(match, plan);
-    },
-    doorServe(dir) {
-      required(door).serve(dir);
+    get door() {
+      return required(door);
     },
     clientId,
     clientSecret,
@@ -259,7 +251,6 @@ export async function startAccess(worker: Worker): Promise<Access> {
     server.close();
     throw error;
   }
-  access.door = door.url;
   return access;
 }
 

@@ -56,13 +56,11 @@ const MEDIA_TYPES: Record<string, string> = {
 // What happens to the next request a plan matches: gate holds it before it is forwarded, opening arrived when it
 // reaches the door, and forwards it once release opens; hold forwards it, opens answered once the Worker's answer
 // (its headers) arrived, and passes that answer on once release opens. A gate applies to an upgrade too.
-export type DoorPlan =
-  | { kind: "gate"; arrived: Latch; release: Latch }
-  | { kind: "hold"; answered: Latch; release: Latch };
+type DoorPlan = { kind: "gate"; arrived: Latch; release: Latch } | { kind: "hold"; answered: Latch; release: Latch };
 
 // A forwarded request as the door saw it: the browser's path (with its query) and conditional header, the Worker's
 // status (null until it answered, or when it never did), and whether the browser went away before its answer came.
-export type DoorEntry = { path: string; ifNoneMatch: string | null; status: number | null; cancelled: boolean };
+type DoorEntry = { path: string; ifNoneMatch: string | null; status: number | null; cancelled: boolean };
 
 export type Door = {
   url: string;
@@ -120,8 +118,9 @@ async function serveStatic(dir: string, req: IncomingMessage, res: ServerRespons
   return true;
 }
 
-// Waits for the latch, or until the signal aborts: false then.
-function released(release: Latch, signal: AbortSignal): Promise<boolean> {
+// Opens the stage's latch, then waits for release, or until the signal aborts: false then.
+function released(stage: Latch, release: Latch, signal: AbortSignal): Promise<boolean> {
+  stage.open();
   if (signal.aborted) {
     return Promise.resolve(false);
   }
@@ -210,11 +209,8 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
         upstream?.destroy();
       }
     });
-    if (plan?.kind === "gate") {
-      plan.arrived.open();
-      if (!(await released(plan.release, gone.signal))) {
-        return;
-      }
+    if (plan?.kind === "gate" && !(await released(plan.arrived, plan.release, gone.signal))) {
+      return;
     }
     const options = await upstreamOptions(req, false);
     // The browser went away, or the bound passed, while the token was signed.
@@ -230,12 +226,9 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
         }
       });
       void (async () => {
-        if (plan?.kind === "hold") {
-          plan.answered.open();
-          if (!(await released(plan.release, gone.signal))) {
-            answer.destroy();
-            return;
-          }
+        if (plan?.kind === "hold" && !(await released(plan.answered, plan.release, gone.signal))) {
+          answer.destroy();
+          return;
         }
         clearTimeout(timer);
         if (res.destroyed) {
@@ -276,11 +269,8 @@ export async function startDoor(worker: Upstream, { answerMs = DOOR_ANSWER_MS } 
       gone.abort();
       upstream?.destroy();
     });
-    if (plan?.kind === "gate") {
-      plan.arrived.open();
-      if (!(await released(plan.release, gone.signal))) {
-        return;
-      }
+    if (plan?.kind === "gate" && !(await released(plan.arrived, plan.release, gone.signal))) {
+      return;
     }
     const options = await upstreamOptions(req, true);
     if (gone.signal.aborted || socket.destroyed) {

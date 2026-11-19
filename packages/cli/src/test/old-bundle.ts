@@ -20,7 +20,7 @@ const OLD_BUNDLE_MS = 120_000;
 
 const SERVER = fileURLToPath(new URL("../../../server/", import.meta.url));
 
-export type OldBundle = { dir: string; version: string; close(): Promise<void> };
+type OldBundle = { dir: string; close(): Promise<void> };
 
 // The command that builds into a directory: the server package's Vite.
 type Command = (outDir: string) => { file: string; args: string[] };
@@ -74,5 +74,5 @@ export async function buildOldBundle({
     await remove();
     throw error;
   }
-  return { dir, version: OLD_VERSION, close: remove };
+  return { dir, close: remove };
 }
