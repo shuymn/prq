@@ -270,7 +270,7 @@ function summaryStreaming(now: number, change: Parameters<typeof fixture>[2] = {
 const sendFailed = (now: number, phase: "not-sent" | "unconfirmed") =>
   answeredSession(now, {
     messages: [...SUMMARIES, ...CONVERSATION.slice(0, 2)],
-    slot: { id: "q-unsent", text: Q_UNSENT, at: now - MINUTE, attempt: 1, phase },
+    slot: { id: "q-unsent", text: Q_UNSENT, at: now - MINUTE, phase },
     draft: "And is the old claim's heartbeat ignored after that?",
     newVersion: true,
   });

@@ -2,7 +2,7 @@
 // the page's life, so in-app navigation keeps it. Only a stored list holding a question's ID acknowledges it, at any
 // time. Its send settles when its request ends or SEND_SETTLE_MS after Send; the first history read started after that
 // to complete decides: without the ID "Not sent", failed or none within SEND_SETTLE_MS "Couldn't confirm it was sent".
-// Each attempt has its own number, so what an earlier one leaves behind changes nothing.
+// Each attempt is its own entry, so what an earlier one, or an earlier question, leaves behind changes nothing.
 
 import { createContext, useContext, useSyncExternalStore } from "react";
 
@@ -16,9 +16,13 @@ export type Slot = {
   readonly text: string;
   // When it was first sent.
   readonly at: number;
-  readonly attempt: number;
   readonly phase: SlotPhase;
 };
+
+// How a read decided against the question's send, if it did: what its row, the composer, Try again and the
+// announcement go by.
+export const failureOf = (slot: Slot | null): "not-sent" | "unconfirmed" | null =>
+  slot?.phase === "not-sent" || slot?.phase === "unconfirmed" ? slot.phase : null;
 
 type Entry = { slot: Slot; settledAt: number; timer: ReturnType<typeof setTimeout> };
 
@@ -50,22 +54,25 @@ export class SendSlots {
     if (this.#entries.has(session)) {
       return null;
     }
-    return this.#begin(session, { id: crypto.randomUUID(), text, at: Date.now(), attempt: 1, phase: "pending" });
+    return this.#begin(session, { id: crypto.randomUUID(), text, at: Date.now(), phase: "pending" });
   }
 
   // Try again: the same question, as a new attempt, once a read has decided against the last one.
   retry(session: string): Slot | null {
     const entry = this.#entries.get(session);
-    if (entry === undefined || (entry.slot.phase !== "not-sent" && entry.slot.phase !== "unconfirmed")) {
+    if (entry === undefined || failureOf(entry.slot) === null) {
       return null;
     }
-    clearTimeout(entry.timer);
-    return this.#begin(session, { ...entry.slot, attempt: entry.slot.attempt + 1, phase: "pending" });
+    return this.#begin(session, { ...entry.slot, phase: "pending" });
   }
 
-  // The attempt's request: its end settles the send.
-  sending(session: string, attempt: number, request: Promise<unknown>): void {
-    const settle = () => this.#settle(session, attempt);
+  // The request of the attempt `sent` began: its end settles that attempt alone.
+  sending(session: string, sent: Slot, request: Promise<unknown>): void {
+    const entry = this.#entries.get(session);
+    if (entry?.slot !== sent) {
+      return;
+    }
+    const settle = () => this.#settle(session, entry);
     request.then(settle, settle);
   }
 
@@ -114,16 +121,15 @@ export class SendSlots {
     const entry: Entry = {
       slot,
       settledAt: 0,
-      timer: setTimeout(() => this.#settle(session, slot.attempt), SEND_SETTLE_MS),
+      timer: setTimeout(() => this.#settle(session, entry), SEND_SETTLE_MS),
     };
     this.#entries.set(session, entry);
     this.#notify();
     return slot;
   }
 
-  #settle(session: string, attempt: number): void {
-    const entry = this.#entries.get(session);
-    if (entry?.slot.attempt !== attempt || entry.slot.phase !== "pending") {
+  #settle(session: string, entry: Entry): void {
+    if (this.#entries.get(session) !== entry || entry.slot.phase !== "pending") {
       return;
     }
     clearTimeout(entry.timer);

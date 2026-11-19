@@ -19,7 +19,7 @@ import {
 } from "@prq/protocol";
 import { useAgent } from "agents/react";
 import type { UIMessage } from "ai";
-import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react";
 import * as v from "valibot";
 
 import { type Fetch, readJson, useFetch } from "./reads.ts";
@@ -77,6 +77,17 @@ const Frame = v.pipe(
   v.string(),
   v.parseJson(),
   v.variant("type", [ListFrame, HistoryChangedMessage, ServerVersionMessage, ResponseFrame]),
+);
+// A chat request the socket holds until it opens again, and the questions it carries.
+const RequestFrame = v.pipe(
+  v.string(),
+  v.parseJson(),
+  v.looseObject({
+    type: v.literal("cf_agent_use_chat_request"),
+    init: v.looseObject({
+      body: v.pipe(v.string(), v.parseJson(), v.looseObject({ messages: v.array(v.looseObject({ id: v.string() })) })),
+    }),
+  }),
 );
 const StartChunk = v.pipe(
   v.string(),
@@ -363,6 +374,17 @@ type SessionHandle = {
   read: () => void;
 };
 
+// Takes the question's request out of what the socket holds for its next open, so a discarded question never reaches
+// the server; the other frames stay queued in their order.
+function unsend(socket: Pick<ReturnType<typeof useAgent>, "drainQueuedMessages" | "send">, id: string): void {
+  for (const queued of socket.drainQueuedMessages()) {
+    const request = v.safeParse(RequestFrame, queued);
+    if (!request.success || !request.output.init.body.messages.some((message) => message.id === id)) {
+      socket.send(queued);
+    }
+  }
+}
+
 export function useSession(ref: PrRef): SessionHandle {
   const name = sessionName(ref);
   const fetcher = useFetch();
@@ -379,15 +401,7 @@ export function useSession(ref: PrRef): SessionHandle {
     onMessage: (event: MessageEvent) => store.message(event),
     onStateUpdate: (state: unknown) => store.viewed(state),
   });
-  // The question being sent: the request carries it alone, under its own ID (the server stores new IDs only).
-  const outgoing = useRef<UIMessage[]>([]);
-  const chat = useAgentChat({
-    agent,
-    getInitialMessages: null,
-    syncMessagesToServer: false,
-    resume: true,
-    prepareSendMessagesRequest: () => ({ body: { messages: outgoing.current } }),
-  });
+  const chat = useAgentChat({ agent, getInitialMessages: null, syncMessagesToServer: false, resume: true });
   const { messages, setMessages, sendMessage } = chat;
 
   useEffect(() => {
@@ -401,10 +415,10 @@ export function useSession(ref: PrRef): SessionHandle {
 
   const session = useSyncExternalStore(store.subscribe, store.snapshot);
   const slot = useSlot(slots, name);
+  // The request carries the question alone, under its own ID (the server stores new IDs only).
   const transmit = (sent: Slot) => {
     const message: UIMessage = { id: sent.id, role: "user", parts: [{ type: "text", text: sent.text }] };
-    outgoing.current = [message];
-    slots.sending(name, sent.attempt, sendMessage(message));
+    slots.sending(name, sent, sendMessage(message, { body: { messages: [message] } }));
   };
   return {
     session,
@@ -422,7 +436,12 @@ export function useSession(ref: PrRef): SessionHandle {
         transmit(again);
       }
     },
-    discard: () => slots.discard(name),
+    discard: () => {
+      if (slot !== null) {
+        unsend(agent, slot.id);
+      }
+      slots.discard(name);
+    },
     read: () => store.read(),
   };
 }

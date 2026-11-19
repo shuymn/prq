@@ -10,7 +10,7 @@ import { FAILURES } from "../components/Message.tsx";
 import type { Hub } from "../hub.ts";
 import type { Layout } from "../layout.ts";
 import { useSession } from "../session.ts";
-import { useUnsent } from "../slots.ts";
+import { failureOf, useUnsent } from "../slots.ts";
 import { detailModel } from "./detail-model.ts";
 import { PrDetail } from "./PrDetail.tsx";
 
@@ -48,7 +48,7 @@ export function PrDetailScreen({
       announce(DOWN_REASONS[down], "assertive");
     }
   }, [down]);
-  const failure = slot?.phase === "not-sent" || slot?.phase === "unconfirmed" ? slot.phase : null;
+  const failure = failureOf(slot);
   useEffect(() => {
     if (failure !== null) {
       announce(FAILURES[failure], "assertive");

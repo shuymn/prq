@@ -12,7 +12,7 @@ import type { PrState } from "../components/PrStateLabel.tsx";
 import type { VersionStatus } from "../components/VersionItem.tsx";
 import type { Version } from "../components/VersionMenu.tsx";
 import type { Connection, RunText, Session, StoredMessage } from "../session.ts";
-import type { Slot } from "../slots.ts";
+import { failureOf, type Slot } from "../slots.ts";
 
 export type DetailInput = {
   session: Session;
@@ -277,14 +277,14 @@ function conversationOf(session: Session, view: PrSessionView, slot: Slot | null
     }
   }
   if (slot !== null && !session.messages.some((message) => message.id === slot.id)) {
-    const failed = slot.phase === "not-sent" || slot.phase === "unconfirmed";
+    const failure = failureOf(slot);
     items.push({
       kind: "question",
       id: slot.id,
       text: slot.text,
-      state: failed ? "send-failed" : "sent",
+      state: failure === null ? "sent" : "send-failed",
       at: slot.at,
-      ...(failed ? { failure: slot.phase } : {}),
+      ...(failure === null ? {} : { failure }),
     });
   }
   return items;
@@ -376,8 +376,7 @@ function headerOf(view: PrSessionView): Header {
 
 export function detailModel({ session, slot, hub, picked }: DetailInput): DetailModel {
   const { view } = session;
-  const held: ComposerHeld | null =
-    slot === null ? null : slot.phase === "not-sent" || slot.phase === "unconfirmed" ? "failed" : "pending";
+  const held: ComposerHeld | null = slot === null ? null : failureOf(slot) === null ? "pending" : "failed";
   const base = {
     header: view === null ? null : headerOf(view),
     banner: BANNER[session.connection],

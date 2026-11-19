@@ -242,13 +242,12 @@ const done = (id: string) => ({ type: "cf_agent_use_chat_response", id, body: ""
 const refused = (id: string) => ({ type: "cf_agent_use_chat_response", id, body: "refused", done: true, error: true });
 
 describe("a question sent", () => {
-  test("Send is off until a stored list holds it, which acknowledges it while the request is open; another turn's error changes nothing; a history-changed read acknowledges the next, whose request carries it alone (P3.3, P3.8)", async () => {
+  test("Send is off until a stored list holds it, which acknowledges it while the request is open; another turn's error, and the acknowledged request's end with a read lacking the next, leave the next pending; a history-changed read acknowledges it, its request carrying it alone (P3.3, P3.8)", async () => {
     const { fetch, sockets, socket } = await ready();
     await ask("First?");
     await expect.poll(() => chatRequests(sockets)).toHaveLength(1);
     const [first] = chatRequests(sockets);
     const id = idOf(first);
-    expect(first?.messages).toEqual([{ id, role: "user", parts: [{ type: "text", text: "First?" }] }]);
     await expect.element(page.getByText("First?")).toBeVisible();
     await expect.element(sendButton()).toBeDisabled();
     await expect.element(page.getByText("You can send once the question above is saved.")).toBeVisible();
@@ -263,18 +262,23 @@ describe("a question sent", () => {
 
     socket.receive(listFrame([question(id, "First?")]));
     await expect.element(sendButton()).toBeEnabled();
-    socket.receive(done(first?.id ?? ""));
-    await settled();
-    expect(shown()).toEqual(["First?"]);
     await expect.element(field()).toHaveValue("Next draft");
 
+    // The next question goes before the first's request ends (the server stores a question before its turn).
     await ask("Second?");
     await expect.poll(() => chatRequests(sockets)).toHaveLength(2);
     const second = chatRequests(sockets)[1];
     const secondId = idOf(second);
     expect(second?.messages).toEqual([{ id: secondId, role: "user", parts: [{ type: "text", text: "Second?" }] }]);
+    socket.receive(done(first?.id ?? ""));
+    await settled();
     socket.receive({ type: "prq:history-changed" });
-    (await fetch.request(2)).respond([question(id, "First?"), question(secondId, "Second?")]);
+    (await fetch.request(2)).respond([question(id, "First?")]);
+    await settled();
+    expect(page.getByText("Not sent").elements()).toEqual([]);
+    await expect.element(sendButton()).toBeDisabled();
+    socket.receive({ type: "prq:history-changed" });
+    (await fetch.request(3)).respond([question(id, "First?"), question(secondId, "Second?")]);
     await expect.element(sendButton()).toBeEnabled();
     expect(shown()).toEqual(["First?", "Second?"]);
   });
@@ -409,6 +413,24 @@ describe("a question sent", () => {
     expect(shown()).toEqual(["Queued?"]);
   });
 
+  test("a question held for the reopen, Not sent and discarded, never reaches the socket when it opens (P3.3)", async () => {
+    const { fetch, sockets, socket } = await ready();
+    await userEvent.fill(field(), "Gone?");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    socket.drop();
+    document.querySelector("form")?.requestSubmit();
+    await until(() => document.querySelector("[data-component=Message]") !== null);
+    await vi.advanceTimersByTimeAsync(SEND_SETTLE_MS);
+    (await fetch.request(2)).respond([]);
+    await until(() => textOf("[data-component=Message]").includes("Not sent"));
+    [...document.querySelectorAll("button")].find((button) => button.textContent === "Discard")?.click();
+    await until(() => document.querySelector("[data-component=Message]") === null);
+    const latest = await reconnect(sockets, sockets.sockets.length);
+    latest.open();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(chatRequests(sockets)).toEqual([]);
+  });
+
   test("a cut before the server took the question ends Not sent; one after it was stored, before the list and the terminal frame, ends acknowledged (P3.3)", async () => {
     const { fetch, sockets, socket } = await ready();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -448,7 +470,6 @@ const startOf = (wire: string, messageId: string, metadata: object, extra: objec
 ];
 const delta = (wire: string, text: string, extra: object = {}) =>
   frame(wire, { type: "text-delta", id: "text", delta: text }, extra);
-const ended = (wire: string) => ({ type: "cf_agent_use_chat_response", id: wire, body: "", done: true });
 const answerRun = (run: number) => ({ kind: "answer", jobId: "j1", questionId: "q1", sha: HEAD, run, by: BY });
 
 function receiveAll(socket: TestSocket, frames: object[]) {
@@ -479,7 +500,7 @@ describe("streamed text", () => {
     await expect.element(page.getByText("Fresh text")).toBeVisible();
     expect(page.getByText("Old text").elements()).toEqual([]);
 
-    socket.receive(ended("w2"));
+    socket.receive(done("w2"));
     socket.receive({ type: "cf_agent_state", state: sessionView([{ id: "j1", question: "q1", state: "done" }]) });
     socket.receive({ type: "prq:history-changed" });
     (await fetch.request(2)).fail();
@@ -587,7 +608,7 @@ describe("versions", () => {
     await expect.element(page.getByText("Writing")).toBeVisible();
     await expect.poll(contextLine).toBe(`Questions are answered at ${OLDER.slice(0, 7)} (latest)`);
 
-    socket.receive(ended("w3"));
+    socket.receive(done("w3"));
     socket.receive({
       type: "cf_agent_state",
       state: sessionView([...jobs, { ...newest, state: "done", at: T0 + 300 }]),
