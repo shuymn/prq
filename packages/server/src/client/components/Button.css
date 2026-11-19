@@ -1,0 +1,102 @@
+@layer components {
+  /* A control's focus ring, drawn outside it (design/components.md, Controls: the ring frame in Pencil). */
+  :where([data-component="Button"], [data-component="IconButton"]) {
+    &:focus-visible,
+    &[data-state="focus"] {
+      outline: var(--border-width-thick) solid var(--color-border-focus);
+      outline-offset: var(--focus-offset);
+    }
+  }
+
+  /* The inset counts from the outer edge and the border lies inside it, as Pencil draws a stroke. */
+  [data-component="Button"] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--gap-tight);
+    box-sizing: border-box;
+    min-block-size: var(--size-control-md);
+    padding-block: 0;
+    padding-inline: calc(var(--inset-control-md) - var(--border-width-thin));
+    border: var(--border-width-thin) solid transparent;
+    border-radius: var(--radius-md);
+    font: var(--text-body-strong);
+    font-size-adjust: from-font;
+    white-space: nowrap;
+    color: var(--color-fg-default);
+    text-decoration: none;
+    background: transparent;
+    cursor: pointer;
+
+    &[data-size="sm"] {
+      min-block-size: var(--size-control-sm);
+      padding-inline: calc(var(--inset-control-sm) - var(--border-width-thin));
+      font: var(--text-small-strong);
+      font-size-adjust: from-font;
+    }
+
+    &[data-variant="primary"] {
+      color: var(--color-fg-on-emphasis);
+      background: var(--color-accent-emphasis);
+
+      &:hover,
+      &[data-state="hover"] {
+        background: var(--color-accent-emphasis-hover);
+      }
+    }
+
+    &[data-variant="danger"] {
+      color: var(--color-fg-on-emphasis);
+      background: var(--color-danger-emphasis);
+
+      &:hover,
+      &[data-state="hover"] {
+        background: var(--color-danger-emphasis-hover);
+      }
+    }
+
+    &[data-variant="secondary"] {
+      border-color: var(--color-border-default);
+      background: var(--color-bg-subtle);
+
+      &:hover,
+      &[data-state="hover"] {
+        background: var(--color-bg-muted);
+      }
+    }
+
+    &[data-variant="invisible"] {
+      &:hover,
+      &[data-state="hover"] {
+        background: var(--color-bg-muted);
+      }
+    }
+
+    /* A toggle that is on: a fill and an indicator, as a selected segment, never weight or size. */
+    &[aria-pressed="true"] {
+      background: var(--color-bg-muted);
+      border-block-end-color: var(--color-accent-fg);
+    }
+
+    &:disabled,
+    &[data-state="disabled"] {
+      color: var(--color-fg-disabled);
+      border-color: var(--color-border-default);
+      background: var(--color-bg-subtle);
+      cursor: default;
+
+      &[data-variant="invisible"] {
+        border-color: transparent;
+        background: transparent;
+      }
+    }
+
+    &[data-state="busy"] {
+      cursor: progress;
+    }
+
+    & [data-component="Spinner"] {
+      border-block-start-color: currentColor;
+    }
+  }
+}

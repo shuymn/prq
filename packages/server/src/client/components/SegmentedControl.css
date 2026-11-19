@@ -1,0 +1,54 @@
+@layer components {
+  /* A track around small segments, which makes the control a medium control's height; its inset counts from the
+     outer edge, its border inside it, as Pencil draws a stroke. The chosen segment is a fill and an indicator, never
+     weight or size. */
+  [data-component="SegmentedControl"] {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--gap-tight);
+    box-sizing: border-box;
+    block-size: var(--size-control-md);
+    padding-inline: calc(var(--inset-inline) - var(--border-width-thin));
+    border: var(--border-width-thin) solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-subtle);
+
+    & .segment {
+      position: relative;
+      display: flex;
+      align-items: center;
+      box-sizing: border-box;
+      block-size: var(--size-control-sm);
+      padding-inline: var(--inset-control-sm);
+      border-block-end: var(--border-width-thick) solid transparent;
+      border-radius: var(--radius-md);
+      font: var(--text-small-strong);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+      cursor: pointer;
+
+      &:hover {
+        color: var(--color-fg-default);
+      }
+
+      &:has(:checked) {
+        color: var(--color-fg-default);
+        background: var(--color-bg-muted);
+        border-block-end-color: var(--color-accent-fg);
+      }
+
+      &:has(:focus-visible) {
+        outline: var(--border-width-thick) solid var(--color-border-focus);
+        outline-offset: var(--focus-offset);
+      }
+    }
+
+    /* The radio itself is not drawn: its label is the segment. */
+    & input {
+      appearance: none;
+      position: absolute;
+      margin: 0;
+      opacity: 0;
+    }
+  }
+}

@@ -1,0 +1,99 @@
+@layer components {
+  [data-component="RepoFilter"] {
+    display: inline-flex;
+
+    & .trigger {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--gap-tight);
+      box-sizing: border-box;
+      block-size: var(--size-control-md);
+      padding-block: 0;
+      padding-inline: calc(var(--inset-control-md) - var(--border-width-thin));
+      border: var(--border-width-thin) solid var(--color-border-default);
+      border-radius: var(--radius-md);
+      font: var(--text-body-strong);
+      font-size-adjust: from-font;
+      white-space: nowrap;
+      color: var(--color-fg-default);
+      background: var(--color-bg-subtle);
+      cursor: pointer;
+
+      &:hover,
+      &[aria-expanded="true"] {
+        background: var(--color-bg-muted);
+      }
+
+      &:focus-visible {
+        outline: var(--border-width-thick) solid var(--color-border-focus);
+        outline-offset: var(--focus-offset);
+      }
+    }
+
+    /* The menu hangs below the button, aligned to its end, and flips where it would not fit. */
+    & .menu {
+      position-area: block-end span-inline-start;
+      position-try-fallbacks:
+        flip-block,
+        flip-inline,
+        flip-block flip-inline;
+      inset: auto;
+      box-sizing: border-box;
+      inline-size: var(--size-popover);
+      margin: 0;
+      margin-block: var(--gap-tight);
+      padding: var(--inset-card);
+      border: var(--border-width-thin) solid var(--color-border-default);
+      border-radius: var(--radius-md);
+      color: var(--color-fg-default);
+      background: var(--color-bg-overlay);
+      box-shadow: var(--shadow-overlay);
+    }
+
+    & [role="group"] {
+      display: flex;
+      flex-direction: column;
+    }
+
+    & .item {
+      display: flex;
+      align-items: center;
+      gap: var(--gap-related);
+      box-sizing: border-box;
+      min-block-size: var(--size-control-md);
+      padding-inline: var(--inset-control-sm);
+      border: 0;
+      border-radius: var(--radius-md);
+      font: var(--text-body);
+      font-size-adjust: from-font;
+      text-align: start;
+      color: var(--color-fg-default);
+      background: transparent;
+      cursor: pointer;
+
+      &:hover,
+      &:focus-visible {
+        background: var(--color-bg-muted);
+      }
+
+      &:focus-visible {
+        outline: var(--border-width-thick) solid var(--color-border-focus);
+        outline-offset: calc(-1 * var(--border-width-thick));
+      }
+    }
+
+    /* The check mark's slot, there for every item, so the labels line up. */
+    & .check {
+      display: flex;
+      flex: none;
+      inline-size: var(--size-icon);
+    }
+
+    & .item-label {
+      min-inline-size: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+  }
+}

@@ -1,0 +1,38 @@
+@layer components {
+  [data-component="Badge"] {
+    display: inline-flex;
+    align-items: center;
+    padding-inline: var(--inset-control-sm);
+    border-radius: var(--radius-full);
+    font: var(--text-small-strong);
+    font-size-adjust: from-font;
+    white-space: nowrap;
+    background: var(--color-bg-muted);
+    color: var(--color-fg-default);
+
+    &[data-tone="accent"] {
+      background: var(--color-accent-bg);
+      color: var(--color-accent-fg);
+    }
+
+    &[data-tone="success"] {
+      background: var(--color-success-bg);
+      color: var(--color-success-fg);
+    }
+
+    &[data-tone="attention"] {
+      background: var(--color-attention-bg);
+      color: var(--color-attention-fg);
+    }
+
+    &[data-tone="danger"] {
+      background: var(--color-danger-bg);
+      color: var(--color-danger-fg);
+    }
+
+    &[data-tone="done"] {
+      background: var(--color-done-bg);
+      color: var(--color-done-fg);
+    }
+  }
+}

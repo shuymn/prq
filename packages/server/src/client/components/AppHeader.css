@@ -29,6 +29,12 @@
       gap: var(--gap-related);
     }
 
+    & .end {
+      display: flex;
+      align-items: center;
+      gap: var(--gap-related);
+    }
+
     & .product {
       font: var(--text-heading);
       font-size-adjust: from-font;

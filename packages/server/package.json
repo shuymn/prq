@@ -22,6 +22,7 @@
     "@octokit/auth-app": "catalog:",
     "@octokit/request": "catalog:",
     "@octokit/webhooks-methods": "catalog:",
+    "@primer/octicons-react": "catalog:",
     "@prq/protocol": "workspace:*",
     "@valibot/to-json-schema": "catalog:",
     "agents": "catalog:",
@@ -43,11 +44,13 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
+    "@vitest/browser-playwright": "catalog:",
     "fast-check": "catalog:",
     "playwright": "catalog:",
     "style-dictionary": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "vitest-browser-react": "catalog:"
   }
 }

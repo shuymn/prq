@@ -1,0 +1,34 @@
+@layer components {
+  /* The track in border.default with the arc on one side in accent.fg, turning; under reduced motion it turns slower
+     rather than stopping, so it still says something is in progress. */
+  [data-component="Spinner"] {
+    appearance: none;
+    display: block;
+    flex: none;
+    box-sizing: border-box;
+    inline-size: var(--size-icon);
+    block-size: var(--size-icon);
+    margin: 0;
+    padding: 0;
+    border: var(--border-width-thick) solid var(--color-border-default);
+    border-block-start-color: var(--color-accent-fg);
+    border-radius: var(--radius-full);
+    background: transparent;
+    animation: spinner-turn var(--duration-spinner) linear infinite;
+
+    &::-webkit-progress-bar,
+    &::-webkit-progress-value {
+      background: transparent;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      animation-duration: var(--duration-spinner-reduced);
+    }
+  }
+
+  @keyframes spinner-turn {
+    to {
+      rotate: 360deg;
+    }
+  }
+}

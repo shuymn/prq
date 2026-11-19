@@ -1,4 +1,5 @@
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
+import { playwright } from "@vitest/browser-playwright";
 import { exportJWK, exportPKCS8, generateKeyPair } from "jose";
 import { defineConfig } from "vitest/config";
 
@@ -9,6 +10,8 @@ export default defineConfig(async () => {
   const appKey = await generateKeyPair("RS256", { extractable: true });
   return {
     test: {
+      // A failed client test's screenshot, beside the browser check's (packages/cli/test-output/ui).
+      attachmentsDir: "test-output/client",
       projects: [
         {
           plugins: [
@@ -60,6 +63,26 @@ export default defineConfig(async () => {
             // Real git processes: room for a slow CI runner, as the CLI's git tests have.
             testTimeout: 30_000,
             hookTimeout: 30_000,
+          },
+        },
+        {
+          // The web UI in the machine's Chrome (Vitest's browser mode through playwright; no browser is downloaded):
+          // its components with the design tokens, its reads against a fetch the test controls, and the gallery. The
+          // UI's build configuration gives it its root (src/client), plugins and defines.
+          extends: "./vite.config.ts",
+          test: {
+            name: "client",
+            include: ["src/client/**/*.test.{ts,tsx}"],
+            setupFiles: ["src/client/test/setup.ts"],
+            browser: {
+              enabled: true,
+              headless: true,
+              provider: playwright({ launchOptions: { channel: "chrome" } }),
+              instances: [{ browser: "chromium" as const }],
+              // A desktop window, where the list is a table (the panel's layout starts below design/tokens.json's
+              // narrow breakpoint).
+              viewport: { width: 1280, height: 800 },
+            },
           },
         },
       ],
