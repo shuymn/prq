@@ -23,6 +23,11 @@
       color: var(--color-fg-muted);
     }
 
+    & .repository {
+      min-inline-size: 0;
+      overflow-wrap: anywhere;
+    }
+
     & .title {
       margin: 0;
       font: var(--text-title);
