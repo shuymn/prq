@@ -46,6 +46,8 @@ import {
   answer,
   answerOf,
   ask,
+  checkConfigAccount,
+  CONFIG,
   failed,
   hide,
   onInterrupt,
@@ -78,6 +80,9 @@ const SUBDOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const COMPATIBILITY_DATE = "2026-11-10";
 const DASHBOARD = "Workers & Pages → prq → Settings → Domains & Routes";
 const RESUME = "pnpm --dir packages/server run deploy -- --read-back";
+// The repository's wrangler configuration at its top level, whatever CLOUDFLARE_ENV says, for every read on the account
+// (as the secrets command's calls).
+const TOP_LEVEL = ["--config", CONFIG, "--env", ""];
 // The rollout is read every poll interval, at most this many times (30 minutes at 10 s).
 const POLL_ROUNDS = 180;
 // How long the owner has to look at a new container application in the dashboard.
@@ -240,9 +245,10 @@ async function records(...names: string[]): Promise<string> {
   return made;
 }
 
-// target.env's account and hostname.
+// target.env's account, which the repository's wrangler configuration must not override, and hostname.
 async function target(): Promise<{ accountId: string; host: string }> {
   const accountId = await account();
+  await checkConfigAccount(accountId);
   const host = (parseEnv(await readPrivate(TARGET_ENV))["PRQ_HOST"] ?? "").toLowerCase();
   if (!HOST.test(host)) {
     throw new Refusal(`${TARGET_ENV} does not set PRQ_HOST to a hostname (such as prq.example.com)`);
@@ -270,7 +276,7 @@ async function deployedVersion(file: string): Promise<string | null> {
 
 // A version's tag, and whether it has no binding but secrets.
 async function version(accountId: string, versionId: string): Promise<{ tag: string | null; inert: boolean }> {
-  const outcome = await wrangler(["versions", "view", versionId, "--json", "--name", WORKER], accountId);
+  const outcome = await wrangler(["versions", "view", versionId, "--json", "--name", WORKER, ...TOP_LEVEL], accountId);
   if (!succeeded(outcome)) {
     throw failed("versions view", outcome);
   }
@@ -283,7 +289,7 @@ async function version(accountId: string, versionId: string): Promise<{ tag: str
 
 // The Worker's live versions with their tags; null when there is no Worker prq or it has no deployment.
 async function liveDeployment(accountId: string): Promise<Deployment | null> {
-  const outcome = await wrangler(["deployments", "status", "--json", "--name", WORKER], accountId);
+  const outcome = await wrangler(["deployments", "status", "--json", "--name", WORKER, ...TOP_LEVEL], accountId);
   if (!succeeded(outcome)) {
     // The API's "no such Worker", or wrangler's "has no deployments".
     if (/\[code: 10007\]|has no deployments/.test(`${outcome.stdout}${outcome.stderr}`)) {
@@ -304,7 +310,7 @@ async function liveDeployment(accountId: string): Promise<Deployment | null> {
 }
 
 async function applicationId(accountId: string): Promise<string | null> {
-  const outcome = await wrangler(["containers", "list", "--json"], accountId);
+  const outcome = await wrangler(["containers", "list", "--json", ...TOP_LEVEL], accountId);
   if (!succeeded(outcome)) {
     throw failed("containers list", outcome);
   }
@@ -314,7 +320,7 @@ async function applicationId(accountId: string): Promise<string | null> {
 }
 
 async function applicationInfo(accountId: string, id: string): Promise<Application> {
-  const outcome = await wrangler(["containers", "info", id, "--json"], accountId);
+  const outcome = await wrangler(["containers", "info", id, "--json", ...TOP_LEVEL], accountId);
   if (!succeeded(outcome)) {
     throw failed("containers info", outcome);
   }
@@ -328,7 +334,7 @@ async function applicationInfo(accountId: string, id: string): Promise<Applicati
 }
 
 async function instances(accountId: string, id: string): Promise<v.InferOutput<typeof InstancesAnswer>> {
-  const outcome = await wrangler(["containers", "instances", id, "--json"], accountId);
+  const outcome = await wrangler(["containers", "instances", id, "--json", ...TOP_LEVEL], accountId);
   if (!succeeded(outcome)) {
     throw failed("containers instances", outcome);
   }
@@ -510,13 +516,22 @@ async function publicationCheck(clone: string, values: Readonly<Record<string, s
   }
 }
 
-// The tag's Worker configuration as wrangler reads it: the Worker prq, with workers.dev and preview URLs off, which
-// wrangler sets on every deploy.
+// The tag's Worker configuration as wrangler reads it for the upload (its top level, its warnings not printed): the
+// Worker prq, with workers.dev and preview URLs off, which wrangler sets on every deploy, and no account_id, which
+// wrangler would deploy to in place of target.env's.
 function configCheck(clone: string): void {
-  const config = unstable_readConfig({ config: join(clone, "packages", "server", "wrangler.jsonc") });
+  const config = unstable_readConfig(
+    { config: join(clone, "packages", "server", "wrangler.jsonc"), env: "" },
+    { hideWarnings: true },
+  );
   if (config.name !== WORKER || config.workers_dev !== false || config.preview_urls !== false) {
     throw new Refusal(
       `the tag's packages/server/wrangler.jsonc does not name the Worker ${WORKER} with workers_dev and preview_urls false`,
+    );
+  }
+  if (config.account_id !== undefined) {
+    throw new Refusal(
+      `the tag's packages/server/wrangler.jsonc sets an account_id, which wrangler would deploy to in place of ${TARGET_ENV}'s`,
     );
   }
   print(`configuration: the Worker ${WORKER}, with workers.dev and preview URLs off`);
@@ -844,6 +859,8 @@ async function release(tag: string, flags: Flags): Promise<number> {
       ...base,
       "deploy",
       `--config=${join(clone, "packages", "server", "wrangler.jsonc")}`,
+      "--env",
+      "",
       `--domain=${host}`,
       `--tag=${tag}`,
       `--message=prq ${tag} ${sha}`,
@@ -904,6 +921,7 @@ async function readBackAgain(path: string): Promise<number> {
   }
   const record = new Saved(join(file, ".."), file, parsed.output);
   const { upload, accountId, before, flags, tag } = record.data;
+  await checkConfigAccount(accountId);
   if (upload === null) {
     throw new Refusal(`the record's deploy stopped before its upload (${record.data.outcome}): nothing to read back`);
   }
@@ -940,6 +958,7 @@ const INERT = `export default {
 
 async function bootstrap(resume: boolean): Promise<number> {
   const accountId = await account();
+  await checkConfigAccount(accountId);
   const dir = await records("bootstrap");
   const name = await accountName(accountId);
   print(`account: ${accountId} (${name})`);
@@ -982,6 +1001,8 @@ async function bootstrap(resume: boolean): Promise<number> {
       [
         "deploy",
         `--config=${join(work, "wrangler.jsonc")}`,
+        "--env",
+        "",
         `--tag=${BOOTSTRAP_TAG}`,
         "--message=prq bootstrap: serves nothing",
       ],

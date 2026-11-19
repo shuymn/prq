@@ -315,6 +315,11 @@ checkout it runs in.
 
 - `--read-back <record>`: a release's read-back again, on the account and container application its record names.
 
+The deploy refuses, before any wrangler call, when `packages/server/wrangler.jsonc` here sets an `account_id` other than
+`target.env`'s, and a release also refuses, before its upload, a tag whose `wrangler.jsonc` sets one at all: wrangler
+would use it in place of `target.env`'s. As for the secrets command, each wrangler call uses its configuration's top level, whatever
+`CLOUDFLARE_ENV` says, and Cloudflare's production API, whatever `CLOUDFLARE_API_BASE_URL` or `CF_API_BASE_URL` says.
+
 **The record.** Every run keeps one in `~/.local/state/prq/deploys` (`$XDG_STATE_HOME/prq/deploys` when that is set),
 readable by you alone: the bootstrap's as `bootstrap/<time>.json`, a release's as `<time>-vX.Y.Z/record.json` beside
 wrangler's output file. A release's record holds the tag, its commit, the account, the hostname and the clone; the live

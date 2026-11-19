@@ -21,6 +21,7 @@ const CONFIG = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url));
 const REPOSITORY = "prq-test/prq";
 const TAG = "v0.1.0";
 const ACCOUNT = "5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e";
+const OTHER_ACCOUNT = "feedfacefeedfacefeedfacefeedface";
 const HOST = "prq.sentinel-zone.example";
 const TEAM = "https://sentinel-team.cloudflareaccess.example";
 const AUD = "sentinel-aud-5e3c0b9a7d1f4e2a";
@@ -507,6 +508,8 @@ describe("deploy --bootstrap", () => {
     expect(call?.args).toEqual([
       "deploy",
       `--config=${join(call?.cwd ?? "", "wrangler.jsonc")}`,
+      "--env",
+      "",
       "--tag=prq-bootstrap",
       "--message=prq bootstrap: serves nothing",
     ]);
@@ -586,6 +589,50 @@ describe("deploy --bootstrap", () => {
   });
 });
 
+// The repository's wrangler configuration naming another account, which wrangler would use in place of target.env's.
+async function otherAccount(): Promise<void> {
+  const other = join(root, "other-account.jsonc");
+  await writeFile(other, `${JSON.stringify({ name: "prq", account_id: OTHER_ACCOUNT })}\n`);
+  env["PRQ_DEPLOY_WRANGLER_CONFIG"] = other;
+}
+
+describe("the account", () => {
+  const REFUSAL =
+    "deploy: the wrangler configuration's account_id names another account than target.env's, and wrangler would use it";
+
+  it.each([
+    ["the bootstrap", ["--bootstrap"], false],
+    ["a release", [TAG], true],
+  ])(
+    "is refused for %s when wrangler's configuration names another, before any call",
+    async (_what, args, terminal) => {
+      await bootstrapped();
+      await otherAccount();
+
+      const result = await deploy(args, { terminal, answers: ["y"] });
+
+      expect(result.code).toBe(1);
+      expect(result.output).toContain(REFUSAL);
+      expect(await wranglerCalls()).toEqual([]);
+      expect(await toolCalls()).toEqual([]);
+    },
+  );
+
+  it("is refused for a read-back when wrangler's configuration names another, before any call", async () => {
+    await bootstrapped();
+    expect((await deploy([TAG], { answers: ["y", "n"] })).code).toBe(2);
+    const { dir } = await onlyRecord();
+    const calls = (await wranglerCalls()).length;
+    await otherAccount();
+
+    const result = await deploy(["--read-back", dir], { terminal: false });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(REFUSAL);
+    expect(await wranglerCalls()).toHaveLength(calls);
+  });
+});
+
 describe("deploy <tag>", () => {
   it("refuses without a terminal, before it clones or calls anything", async () => {
     await bootstrapped();
@@ -626,11 +673,17 @@ describe("deploy <tag>", () => {
     expect(call?.args).toEqual([
       "deploy",
       `--config=${join(clone, "packages", "server", "wrangler.jsonc")}`,
+      "--env",
+      "",
       `--domain=${HOST}`,
       `--tag=${TAG}`,
       `--message=prq ${TAG} ${commit}`,
     ]);
     expect(call?.cwd).toBe(join(clone, "packages", "server"));
+    // Every read on the account: the repository's configuration at its top level.
+    for (const read of (await wranglerCalls()).filter((each) => each.call !== "deploy")) {
+      expect(read.args.slice(-4)).toEqual(["--config", CONFIG, "--env", ""]);
+    }
     expect(call?.env).toMatchObject({
       CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
       WRANGLER_LOG_SANITIZE: "true",
@@ -714,9 +767,20 @@ describe("deploy <tag>", () => {
     expect(await leftInTmp()).toEqual([]);
   });
 
-  it("refuses a tag whose Worker configuration would put it on workers.dev or a preview URL", async () => {
+  it.each([
+    [
+      "would put it on workers.dev or a preview URL",
+      { name: "prq", preview_urls: false },
+      "deploy: the tag's packages/server/wrangler.jsonc does not name the Worker prq with workers_dev and preview_urls false",
+    ],
+    [
+      "names an account",
+      { name: "prq", workers_dev: false, preview_urls: false, account_id: OTHER_ACCOUNT },
+      "deploy: the tag's packages/server/wrangler.jsonc sets an account_id, which wrangler would deploy to in place of target.env's",
+    ],
+  ])("refuses a tag whose Worker configuration %s", async (_what, config, refusal) => {
     await bootstrapped();
-    await writeFile(join(seed.path, "packages/server/wrangler.jsonc"), '{ "name": "prq", "preview_urls": false }\n');
+    await writeFile(join(seed.path, "packages/server/wrangler.jsonc"), `${JSON.stringify(config)}\n`);
     for (const path of ["packages/server", "packages/cli"]) {
       await writeFile(join(seed.path, path, "package.json"), `${JSON.stringify({ version: "0.1.1" })}\n`);
     }
@@ -731,9 +795,7 @@ describe("deploy <tag>", () => {
     const result = await deploy(["v0.1.1"], { answers: ["y"] });
 
     expect(result.code).toBe(1);
-    expect(result.output).toContain(
-      "deploy: the tag's packages/server/wrangler.jsonc does not name the Worker prq with workers_dev and preview_urls false",
-    );
+    expect(result.output).toContain(refusal);
     expect(await deployCalls()).toEqual([]);
   });
 
