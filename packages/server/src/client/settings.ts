@@ -214,7 +214,8 @@ export class SettingsStore {
   }
 
   // GET /api/instructions: the skills, and the prompt of each editor that is clean and had no edit or save during the
-  // read. It decides the confirms answered before it started.
+  // read. A ref form whose skill the list no longer has goes, with its preview. It decides the confirms answered before
+  // it started.
   async #read(): Promise<void> {
     const read = ++this.#reads;
     const marks = { ...this.#marks };
@@ -241,11 +242,17 @@ export class SettingsStore {
         ? { ...current, draft: prompts[kind].text, base: prompts[kind].text }
         : current;
     };
+    const form = this.#state.refForm;
+    const orphaned = form !== null && !skills.some((skill) => skill.name === form.name);
+    if (orphaned) {
+      this.#abort("preview:update");
+    }
     this.#update({
       read: "ready",
       refreshFailed: false,
       skills,
       prompts: { analysis: adopt("analysis"), answer: adopt("answer") },
+      refForm: orphaned ? null : form,
     });
     for (const decision of this.#decisions) {
       if (read > decision.after) {

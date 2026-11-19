@@ -415,6 +415,26 @@ describe("a preview's form and input", () => {
       "rest",
     );
   });
+
+  test("a read that no longer lists a skill withdraws its update's preview out; the late review opens nothing (LOW 1)", async () => {
+    const { next } = await settings(instructions([REVIEW, YOMIYASU]));
+    const review = page.getByRole("listitem").filter({ hasText: "review" });
+    await userEvent.click(review.getByRole("button", { name: "Remove" }));
+    await userEvent.click(button("Remove skill"));
+    const remove = await next("DELETE", "/api/skills/review");
+    await userEvent.keyboard("{Escape}");
+    await until(() => dialog() === null);
+    await userEvent.click(review.getByRole("button", { name: "Update" }));
+    await userEvent.click(button("Review update"));
+    const preview = await next("POST", "/api/skills/review/preview");
+    remove.respond(null, 204);
+    (await next("GET", "/api/instructions")).respond(instructions([YOMIYASU]));
+    await until(() => document.querySelectorAll("[data-component=SkillRow]").length === 1);
+    expect(preview.signal.aborted).toBe(true);
+    preview.respond(UPDATE_PREVIEW);
+    await nextTask();
+    expect(dialog()).toBeNull();
+  });
 });
 
 describe("a confirm's outcome", () => {
