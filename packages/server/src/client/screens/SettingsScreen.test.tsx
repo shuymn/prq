@@ -512,6 +512,18 @@ describe("the dialogs", () => {
     }
   });
 
+  test("an update's review returns focus to the control that asked for it, though focus moved while it was out (LOW 1)", async () => {
+    const { next } = await refForm();
+    await userEvent.click(button("Review update"));
+    const preview = await next("POST", "/api/skills/review/preview");
+    await userEvent.click(field("Analysis prompt"));
+    preview.respond(UPDATE_PREVIEW);
+    await until(() => dialog()?.open === true);
+    await userEvent.keyboard("{Escape}");
+    await until(() => dialog() === null);
+    await expect.element(button("Review update")).toHaveFocus();
+  });
+
   test("closing one ends its preview; leaving the page ends its read and its previews, not a save; a late answer changes nothing", async () => {
     const { screen, next } = await settings(instructions([REVIEW, YOMIYASU]));
     await userEvent.click(button("Add skill"));

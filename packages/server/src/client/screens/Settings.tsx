@@ -1,6 +1,6 @@
 import "./Settings.css";
 import type { PromptKind } from "@prq/protocol";
-import { type ReactNode, useEffect, useId } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 
 import { Button } from "../components/Button.tsx";
 import { Dialog } from "../components/Dialog.tsx";
@@ -121,6 +121,8 @@ export function Settings({
 }) {
   const dialogId = useId();
   const titleId = useId();
+  // What had focus when the host asked for an update's review: its dialog returns focus there.
+  const [reviewOpener, setReviewOpener] = useState<HTMLElement | null>(null);
   useEffect(() => {
     document.title = "Settings · prq";
   }, []);
@@ -211,7 +213,11 @@ export function Settings({
                               busy: form.busy,
                               error: form.error,
                               onChange: actions.editRef,
-                              onReview: () => void actions.previewUpdate?.(),
+                              onReview: () => {
+                                const focused = document.activeElement;
+                                setReviewOpener(focused instanceof HTMLElement ? focused : null);
+                                void actions.previewUpdate?.();
+                              },
                               onCancel: actions.cancelUpdate,
                             }
                       }
@@ -230,6 +236,7 @@ export function Settings({
           id={dialogId}
           labelledBy={titleId}
           focusKey={`${dialog.kind}:${dialog.kind !== "register" && dialog.error?.final === true}`}
+          opener={dialog.kind === "update-review" ? reviewOpener : null}
           onClose={() => actions.closeDialog?.()}
         >
           <DialogContent dialog={dialog} titleId={titleId} dialogId={dialogId} actions={actions} />
