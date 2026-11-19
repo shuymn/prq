@@ -6,7 +6,8 @@ import { EmptyState } from "../components/EmptyState.tsx";
 import { Notice } from "../components/Notice.tsx";
 import { PrRow } from "../components/PrRow.tsx";
 import { PrTableHeader } from "../components/PrTableHeader.tsx";
-import { RepoFilter, type RepoItems } from "../components/RepoFilter.tsx";
+import { RepoFilter } from "../components/RepoFilter.tsx";
+import type { RepoItems } from "../components/RepoMenu.tsx";
 import { SegmentedControl } from "../components/SegmentedControl.tsx";
 import { Skeleton } from "../components/Skeleton.tsx";
 
@@ -90,6 +91,7 @@ export function PrList({
   repoLabel,
   repo,
   repoItems,
+  repoMenuOpen,
   onAttention,
   onState,
   onRepoRead,
@@ -107,6 +109,8 @@ export function PrList({
   repoLabel: string;
   repo: string | null;
   repoItems: RepoItems;
+  // The gallery's list.repo-menu: the repository menu open when the list renders.
+  repoMenuOpen?: boolean | undefined;
   onAttention?: (() => void) | undefined;
   onState?: ((state: "open" | "all") => void) | undefined;
   // Reads the repositories, on each opening of the menu and on its Try again.
@@ -133,7 +137,14 @@ export function PrList({
               onClick={onAttention}
             />
           )}
-          <RepoFilter label={repoLabel} selected={repo} items={repoItems} onRead={onRepoRead} onSelect={onRepo} />
+          <RepoFilter
+            label={repoLabel}
+            selected={repo}
+            items={repoItems}
+            open={repoMenuOpen}
+            onRead={onRepoRead}
+            onSelect={onRepo}
+          />
           <SegmentedControl
             label="State"
             first="Open"

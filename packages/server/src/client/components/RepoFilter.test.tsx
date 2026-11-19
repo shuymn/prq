@@ -5,7 +5,8 @@ import { describe, expect, test } from "vitest";
 import { render } from "vitest-browser-react";
 import { page, userEvent } from "vitest/browser";
 
-import { ALL_REPOSITORIES, RepoFilter, type RepoItems } from "./RepoFilter.tsx";
+import { RepoFilter } from "./RepoFilter.tsx";
+import { ALL_REPOSITORIES, type RepoItems } from "./RepoMenu.tsx";
 
 const ITEMS: RepoItems = {
   state: "ready",
@@ -17,7 +18,7 @@ const ITEMS: RepoItems = {
 
 const trigger = () => page.getByRole("button", { name: ALL_REPOSITORIES });
 const item = (name: string) => page.getByRole("menuitemradio", { name });
-const menuOpen = () => document.querySelector(".menu")?.matches(":popover-open") ?? false;
+const menuOpen = () => document.querySelector('[data-component="RepoMenu"]')?.matches(":popover-open") ?? false;
 
 describe("the repository menu", () => {
   test.each(["{Enter}", "{ArrowDown}"])(

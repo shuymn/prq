@@ -19,7 +19,9 @@ import { PrRow } from "../components/PrRow.tsx";
 import { type PrState, PrStateLabel } from "../components/PrStateLabel.tsx";
 import { PrTableHeader } from "../components/PrTableHeader.tsx";
 import { RelativeTime } from "../components/RelativeTime.tsx";
-import { ALL_REPOSITORIES, RepoFilter } from "../components/RepoFilter.tsx";
+import { RepoFilter } from "../components/RepoFilter.tsx";
+import { ALL_REPOSITORIES, RepoMenu, type RepoItems } from "../components/RepoMenu.tsx";
+import { RepoMenuItem } from "../components/RepoMenuItem.tsx";
 import { SegmentedControl } from "../components/SegmentedControl.tsx";
 import { Sha } from "../components/Sha.tsx";
 import { Skeleton } from "../components/Skeleton.tsx";
@@ -29,7 +31,7 @@ import { Frame } from "../frame.tsx";
 import { BuildNotice } from "../notices.tsx";
 import { listBody } from "../screens/list-model.ts";
 import { PrList } from "../screens/PrList.tsx";
-import { allRows, CLOUD_ONLY, defaultRows, EMPTY_LOCAL } from "./fixtures.ts";
+import { allRows, CLOUD_ONLY, defaultRows, EMPTY_LOCAL, menuRepos } from "./fixtures.ts";
 
 export type Entry = { name: string; render: () => ReactNode };
 
@@ -81,17 +83,20 @@ function controlEntries(): Entry[] {
   return entries;
 }
 
-// The PR list over a pass that completed with these rows (null: still loading), under Open or All.
+// The PR list over a pass that completed with these rows (null: still loading), under Open or All, its repository menu
+// open over it with these items where they are given.
 function ListState({
   view,
   rows,
   state = "open",
   notice,
+  repoMenu,
 }: {
   view: HubView;
   rows: LedgerRow[] | null;
   state?: "open" | "all";
   notice?: ReactNode;
+  repoMenu?: RepoItems;
 }) {
   const filter = { attention: false, state, repo: null } as const;
   const body = listBody({ rows, filter, more: false, loadingMore: false, failure: null }, view.owners);
@@ -106,7 +111,8 @@ function ListState({
         state={state}
         repoLabel={ALL_REPOSITORIES}
         repo={null}
-        repoItems={{ state: "loading" }}
+        repoItems={repoMenu ?? { state: "loading" }}
+        repoMenuOpen={repoMenu !== undefined}
       />
     </Frame>
   );
@@ -195,6 +201,15 @@ export const REGISTRY: Entry[] = [
     name: "RepoFilter",
     render: () => <RepoFilter label={ALL_REPOSITORIES} selected={null} items={{ state: "loading" }} />,
   },
+  ...variants("RepoMenuItem", ["true", "false"] as const, (selected) => (
+    <RepoMenuItem label={selected === "true" ? "prq" : "kopje"} selected={selected === "true"} />
+  )),
+  ...variants("RepoMenu", ["ready", "loading", "failed"] as const, (state) => (
+    <RepoMenu
+      items={state === "ready" ? { state, repos: menuRepos(["kopje", "prq", "zenith"]) } : { state }}
+      selected={state === "ready" ? "shuymn/prq" : null}
+    />
+  )),
   // Brand
   ...variants("BrandMark", ["brand", "face"] as const, (variant) => <BrandMark variant={variant} size={2} />),
   // 1. PR list
@@ -212,6 +227,12 @@ export const REGISTRY: Entry[] = [
         rows={defaultRows(Date.now())}
         notice={<BuildNotice serverVersion="v0.5.0" assetFailed={false} />}
       />
+    ),
+  },
+  {
+    name: "list.repo-menu",
+    render: () => (
+      <ListState view={CLOUD_ONLY} rows={defaultRows(Date.now())} repoMenu={{ state: "ready", repos: menuRepos() }} />
     ),
   },
 ];

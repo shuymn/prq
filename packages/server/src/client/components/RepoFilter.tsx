@@ -1,39 +1,31 @@
 import "./RepoFilter.css";
 import { type KeyboardEvent, type MouseEvent, useEffect, useId, useRef, useState } from "react";
 
-import { Button } from "./Button.tsx";
 import { Icon } from "./Icon.tsx";
-import { Notice } from "./Notice.tsx";
-
-// What the menu lists: the repositories as read (each value its owner/name, each label as the list names it), while
-// they are read, or the read's failure.
-export type RepoItems =
-  | { state: "loading" }
-  | { state: "failed" }
-  | { state: "ready"; repos: { value: string; label: string }[] };
-
-export const ALL_REPOSITORIES = "All repositories";
+import { type RepoItems, RepoMenu } from "./RepoMenu.tsx";
 
 const itemsOf = (menu: HTMLElement | null) => [
   ...(menu?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? []),
 ];
 
-// The repository filter (design/components.md, PR list): a button that opens a menu of the followed repositories,
-// "All repositories" first, the chosen one checked. The menu is a popover the button toggles; a keyboard open moves
-// focus to the first item and a pointer open leaves it on the button; while a read a keyboard started (an open or Try
-// again) changes what the menu holds, focus goes to the first item once the options render, or to Try again once the
-// read failed. The arrow keys move between items (focusgroup), Home and End go to the ends; Escape and a choice close
-// it and return focus to the button.
+// The repository filter (design/components.md, PR list): a button that opens RepoMenu, the menu of the followed
+// repositories, as a popover the button toggles. A keyboard open moves focus to the first item and a pointer open
+// leaves it on the button; while a read a keyboard started (an open or Try again) changes what the menu holds, focus
+// goes to the first item once the options render, or to Try again once the read failed. The arrow keys move between
+// items (focusgroup), Home and End go to the ends; Escape and a choice close it and return focus to the button.
 export function RepoFilter({
   label,
   selected,
   items,
+  open = false,
   onRead,
   onSelect,
 }: {
   label: string;
   selected: string | null;
   items: RepoItems;
+  // Opens the menu when the filter renders, with focus left where it is: the gallery's open menu (list.repo-menu).
+  open?: boolean | undefined;
   // Reads the repositories: on each opening of the menu, and on its Try again.
   onRead?: (() => void) | undefined;
   onSelect?: ((repo: string | null) => void) | undefined;
@@ -48,6 +40,12 @@ export function RepoFilter({
   // Set while a read a keyboard started has yet to end.
   const keyboardRead = useRef(false);
   const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (open && trigger.current !== null) {
+      menu.current?.showPopover({ source: trigger.current });
+    }
+  }, [open]);
 
   useEffect(() => {
     if (!keyboardRead.current) {
@@ -84,10 +82,10 @@ export function RepoFilter({
     }
   };
   const onToggle = (event: { newState: string }) => {
-    const open = event.newState === "open";
-    setExpanded(open);
-    keyboardRead.current = open && enter.current;
-    if (open) {
+    const opened = event.newState === "open";
+    setExpanded(opened);
+    keyboardRead.current = opened && enter.current;
+    if (opened) {
       onRead?.();
       if (enter.current) {
         itemsOf(menu.current)[0]?.focus();
@@ -114,7 +112,6 @@ export function RepoFilter({
     close(event.detail > 0);
   };
 
-  const options = [{ value: null, label: ALL_REPOSITORIES }, ...(items.state === "ready" ? items.repos : [])];
   return (
     <div data-component="RepoFilter">
       <button
@@ -137,11 +134,18 @@ export function RepoFilter({
         <span className="label">{label}</span>
         <Icon name="chevron-down" />
       </button>
-      <div
+      <RepoMenu
         ref={menu}
         id={menuId}
-        className="menu"
         popover="auto"
+        items={items}
+        selected={selected}
+        labelledBy={triggerId}
+        onChoose={choose}
+        onRetry={(event) => {
+          keyboardRead.current = event.detail === 0;
+          onRead?.();
+        }}
         onToggle={onToggle}
         onKeyDown={onMenuKey}
         onBlur={(event) => {
@@ -150,43 +154,7 @@ export function RepoFilter({
             menu.current?.hidePopover();
           }
         }}
-      >
-        {items.state === "failed" ? (
-          <Notice
-            tone="danger"
-            title="Couldn't load repositories"
-            actions={
-              <Button
-                variant="secondary"
-                size="sm"
-                label="Try again"
-                onClick={(event) => {
-                  keyboardRead.current = event.detail === 0;
-                  onRead?.();
-                }}
-              />
-            }
-          />
-        ) : (
-          <div focusgroup="menu nomemory" aria-labelledby={triggerId}>
-            <div role="group" aria-label="Repositories">
-              {options.map((option) => (
-                <button
-                  key={option.value ?? ""}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={option.value === selected}
-                  className="item"
-                  onClick={(event) => choose(event, option.value)}
-                >
-                  <span className="check">{option.value === selected && <Icon name="check" />}</span>
-                  <span className="item-label">{option.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+      />
     </div>
   );
 }

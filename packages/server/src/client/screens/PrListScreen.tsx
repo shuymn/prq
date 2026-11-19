@@ -4,7 +4,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import * as v from "valibot";
 
-import { ALL_REPOSITORIES, type RepoItems } from "../components/RepoFilter.tsx";
+import { ALL_REPOSITORIES, type RepoItems } from "../components/RepoMenu.tsx";
 import type { Hub } from "../hub.ts";
 import { type ListFilter, useLedger } from "../ledger.ts";
 import { useFetch } from "../reads.ts";

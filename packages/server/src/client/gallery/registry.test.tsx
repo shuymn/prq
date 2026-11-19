@@ -8,7 +8,7 @@ import { page } from "vitest/browser";
 import componentsMd from "../../../../../design/components.md?raw";
 import { designNames } from "../../../../../design/inventory.mjs";
 import screensMd from "../../../../../design/screens.md?raw";
-import { ALL_REPOSITORIES } from "../components/RepoFilter.tsx";
+import { ALL_REPOSITORIES } from "../components/RepoMenu.tsx";
 import { NotFound } from "../screens/NotFound.tsx";
 import { PrList, type ListBody } from "../screens/PrList.tsx";
 import { REGISTRY } from "./registry.tsx";
@@ -178,7 +178,26 @@ describe("the PR list's states", () => {
     expect(page.getByRole("button", { name: /Needs attention/ }).elements()).toEqual([]);
   });
 
-  test("list.new-version: the version notice with Reload above the list", async () => {
+  test("list.repo-menu: the repository menu open, its trigger expanded, All repositories first and checked, the repositories without their owner", async () => {
+    await render(entry("list.repo-menu"));
+    await expect.element(page.getByRole("button", { name: ALL_REPOSITORIES })).toHaveAttribute("aria-expanded", "true");
+    const items = page.getByRole("menuitemradio");
+    await expect.element(items.first()).toBeVisible();
+    expect(items.elements()).toHaveLength(25);
+    expect(items.elements().filter((item) => item.getAttribute("aria-checked") === "true")).toEqual([
+      items.first().element(),
+    ]);
+    expect(
+      items
+        .elements()
+        .slice(0, 3)
+        .map((item) => item.textContent),
+    ).toEqual([ALL_REPOSITORIES, "atlas", "beacon"]);
+    expect(page.getByText("shuymn/").elements()).toEqual([]);
+    expect(rows().elements()).toHaveLength(11);
+  });
+
+  test("list.new-version:the version notice with Reload above the list", async () => {
     await render(entry("list.new-version"));
     await expect.element(page.getByText("A new version is available")).toBeVisible();
     await expect.element(page.getByRole("button", { name: "Reload" })).toBeVisible();

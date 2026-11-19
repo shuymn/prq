@@ -229,7 +229,9 @@ describe("the PR list's repositories", () => {
     (await fetch.request(1)).respond({ rows: repositories, nextCursor: null });
     const last = page.getByRole("menuitemradio", { name: "repository-25" });
     await expect.element(last).toBeInTheDocument();
-    expect(document.querySelector(".menu")?.getBoundingClientRect().bottom).toBeLessThanOrEqual(innerHeight);
+    expect(document.querySelector('[data-component="RepoMenu"]')?.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      innerHeight,
+    );
 
     await last.click();
     await expect.element(page.getByRole("button", { name: "repository-25" })).toBeVisible();
