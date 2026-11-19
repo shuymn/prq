@@ -1,11 +1,12 @@
 // The header's agent pool over the Hub's socket and a fetch the test answers, with PartySocket unmodified (plan P5.1,
 // P5.3): PoolStatus from the Hub's view and its connection, and the popover's reads of the agents while it is open (on
-// opening, on a new view, on a timer and on resume), to the last page, within one bound, and only while the popover is
-// open and the read the latest.
+// opening, on a new view, on a timer and on resume), to the last page, within one bound, only while the popover is
+// open and the read the latest; and the popover's size in the viewport.
 
 import type { HubView } from "@prq/protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { page } from "vitest/browser";
 
 import { AGENTS_READ_MS, AGENTS_REFRESH_MS } from "./agents.ts";
 import { Frame } from "./frame.tsx";
@@ -374,5 +375,32 @@ describe("the popover's read", () => {
     await navigate("detail");
     await until(() => popover()?.matches(":popover-open") === false && button()?.ariaExpanded === "false");
     expect(held.signal.aborted).toBe(true);
+  });
+});
+
+// Whether an element lies within the viewport's height.
+function inViewport(element: Element | null | undefined): boolean {
+  const box = element?.getBoundingClientRect();
+  return box !== undefined && box.top >= 0 && box.bottom <= innerHeight;
+}
+
+describe("the popover's size", () => {
+  test("with more agents than the viewport holds, it stays within the viewport and scrolls to its last agent, the cloud and the jobs", async () => {
+    await page.viewport(1280, 800);
+    const { fetch, sockets } = await header();
+    await connect(sockets, 0, view({ presentAgents: 60 }));
+    await until(() => status().startsWith("60 local agents"));
+    await toggle(true);
+    const rows = Array.from({ length: 60 }, (_, index) => agent(`agent-${index}`));
+    (await fetch.request(0)).respond({ rows, nextCursor: null });
+    await until(() => agentLines().length === 60);
+    expect(inViewport(popover())).toBe(true);
+
+    for (const selector of [".agent:last-child", ".cloud", ".jobs"]) {
+      const section = popover()?.querySelector(selector);
+      section?.scrollIntoView({ block: "nearest" });
+      expect(inViewport(section)).toBe(true);
+    }
+    expect(popover()?.scrollTop).toBeGreaterThan(0);
   });
 });

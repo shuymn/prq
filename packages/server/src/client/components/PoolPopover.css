@@ -1,10 +1,9 @@
 @layer components {
   [data-component="PoolPopover"] {
-    display: flex;
-    flex-direction: column;
-    gap: var(--gap-group);
     box-sizing: border-box;
     inline-size: var(--size-popover);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     margin: 0;
     /* The border falls inside the inset, as the design's inside stroke does. */
     padding: calc(var(--inset-card) - var(--border-width-thin));
@@ -14,20 +13,26 @@
     background: var(--color-bg-overlay);
     box-shadow: var(--shadow-overlay);
 
-    /* As the header's popover it hangs below PoolStatus, aligned to its end, and flips where it would not fit. */
+    /* As the header's popover it hangs below PoolStatus, aligned to its end, and flips where it would not fit. Where no
+       side holds all of it, it hangs below as high as the room there, and scrolls. */
     &[popover] {
       position-area: block-end span-inline-start;
       position-try-fallbacks:
         flip-block,
         flip-inline,
-        flip-block flip-inline;
+        flip-block flip-inline,
+        --pool-scrolls,
+        --pool-scrolls flip-inline;
       inset: auto;
       margin-block: var(--gap-tight);
     }
 
-    /* A closed popover is not shown; an open one, and the gallery's, lay out their sections. */
-    &[popover]:not(:popover-open) {
-      display: none;
+    /* An open popover, and the gallery's specimen, lay out their sections; a closed one the browser hides. */
+    &:not([popover]),
+    &:popover-open {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-group);
     }
 
     & section {
@@ -130,5 +135,10 @@
       flex-wrap: wrap;
       gap: var(--gap-related);
     }
+  }
+
+  @position-try --pool-scrolls {
+    position-area: block-end span-inline-start;
+    max-block-size: stretch;
   }
 }
