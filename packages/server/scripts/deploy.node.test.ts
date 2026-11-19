@@ -589,6 +589,21 @@ describe("deploy --bootstrap", () => {
   });
 });
 
+// v0.1.1 published as each release is: both versions bumped, committed with the files the test wrote at paths, pushed
+// to main, tagged, and its Check passed.
+async function publishRelease(...paths: string[]): Promise<void> {
+  for (const path of ["packages/server", "packages/cli"]) {
+    await writeFile(join(seed.path, path, "package.json"), `${JSON.stringify({ version: "0.1.1" })}\n`);
+  }
+  await seed.add(...paths, "packages");
+  await seed.commit("chore(release): v0.1.1");
+  const release = await seed.headCommit();
+  await seed.push(origin, "HEAD:refs/heads/main");
+  await seed.tagAnnotated("v0.1.1", release, "prq v0.1.1");
+  await seed.push(origin, "refs/tags/v0.1.1");
+  env["FAKE_GH_ANSWER"] = checkRuns(release);
+}
+
 // The repository's wrangler configuration naming another account, which wrangler would use in place of target.env's.
 async function otherAccount(): Promise<void> {
   const other = join(root, "other-account.jsonc");
@@ -648,7 +663,11 @@ describe("deploy <tag>", () => {
   });
 
   it("deploys a clean clone of the tag with its pinned tools, to exactly the hostname, once the owner confirms", async () => {
-    await bootstrapped();
+    // The first release after secrets put made a version of the bootstrap's Worker: untagged, with no binding but
+    // secrets. The idle check is skipped, however busy the ledger.
+    const secrets = "0000000a-0000-4000-8000-000000000000";
+    await saveState({ deployment: [secrets], versions: { [LIVE]: "prq-bootstrap", [secrets]: null } });
+    ledger = [{ rows: [ledgerRow(3, "cloud", 1, 0)], nextCursor: null }];
 
     const result = await deploy([TAG], { answers: ["y", "y"] });
 
@@ -705,18 +724,6 @@ describe("deploy <tag>", () => {
     expect(await leftInTmp()).toEqual([]);
   });
 
-  it("skips the idle check over a version secrets put made of the bootstrap's Worker", async () => {
-    const secrets = "0000000a-0000-4000-8000-000000000000";
-    await saveState({ deployment: [secrets], versions: { [LIVE]: "prq-bootstrap", [secrets]: null } });
-    ledger = [{ rows: [ledgerRow(3, "cloud", 1, 0)], nextCursor: null }];
-
-    const result = await deploy([TAG], { answers: ["y", "y"] });
-
-    expect(result.code).toBe(0);
-    expect(ledgerRequests).toEqual([]);
-    expect((await onlyRecord()).data.idle).toMatch(/^skipped: the live Worker is the bootstrap's/);
-  });
-
   it("deploys nothing when the owner does not confirm", async () => {
     await bootstrapped();
 
@@ -746,16 +753,7 @@ describe("deploy <tag>", () => {
   it("refuses a tag whose files hold a deployment value, naming the variable and the path alone", async () => {
     await bootstrapped();
     await writeFile(join(seed.path, "notes.md"), `served at ${HOST.toUpperCase()}\naudience ${AUD}\n`);
-    for (const path of ["packages/server", "packages/cli"]) {
-      await writeFile(join(seed.path, path, "package.json"), `${JSON.stringify({ version: "0.1.1" })}\n`);
-    }
-    await seed.add("notes.md", "packages");
-    await seed.commit("chore(release): v0.1.1");
-    const release = await seed.headCommit();
-    await seed.push(origin, "HEAD:refs/heads/main");
-    await seed.tagAnnotated("v0.1.1", release, "prq v0.1.1");
-    await seed.push(origin, "refs/tags/v0.1.1");
-    env["FAKE_GH_ANSWER"] = checkRuns(release);
+    await publishRelease("notes.md");
 
     const result = await deploy(["v0.1.1"], { answers: ["y"] });
 
@@ -781,16 +779,7 @@ describe("deploy <tag>", () => {
   ])("refuses a tag whose Worker configuration %s", async (_what, config, refusal) => {
     await bootstrapped();
     await writeFile(join(seed.path, "packages/server/wrangler.jsonc"), `${JSON.stringify(config)}\n`);
-    for (const path of ["packages/server", "packages/cli"]) {
-      await writeFile(join(seed.path, path, "package.json"), `${JSON.stringify({ version: "0.1.1" })}\n`);
-    }
-    await seed.add("packages");
-    await seed.commit("chore(release): v0.1.1");
-    const release = await seed.headCommit();
-    await seed.push(origin, "HEAD:refs/heads/main");
-    await seed.tagAnnotated("v0.1.1", release, "prq v0.1.1");
-    await seed.push(origin, "refs/tags/v0.1.1");
-    env["FAKE_GH_ANSWER"] = checkRuns(release);
+    await publishRelease();
 
     const result = await deploy(["v0.1.1"], { answers: ["y"] });
 
@@ -931,9 +920,11 @@ describe("deploy <tag>", () => {
     expect(result.code).toBe(2);
     const { dir, data } = await onlyRecord();
     expect(data).toMatchObject({
+      idle: "skipped: the live Worker is the bootstrap's (no binding but secrets), which serves nothing at the hostname",
       application: "created",
       readBack: { state: "incomplete", provisioning: "unverified" },
     });
+    expect(ledgerRequests).toEqual([]);
     expect(result.output).toContain(
       `deploy: resume it with pnpm --dir packages/server run deploy -- --read-back ${dir}`,
     );
