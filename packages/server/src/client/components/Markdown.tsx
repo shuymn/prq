@@ -17,6 +17,18 @@ function textOf(node: Element | ElementContent): string {
   return "children" in node ? node.children.map(textOf).join("") : "";
 }
 
+// A link's text, an image in it given by its alt text: a linked image is one link, not a link holding another.
+function labelOf(node: ElementContent): string {
+  if (node.type === "text") {
+    return node.value;
+  }
+  if (node.type !== "element") {
+    return "";
+  }
+  const alt = node.properties["alt"];
+  return node.tagName === "img" ? (typeof alt === "string" ? alt : "") : node.children.map(labelOf).join("");
+}
+
 // An absolute URL of one of these schemes, or null: a relative URL, mailto: and every other scheme are not followed.
 function absolute(href: string | undefined, schemes: readonly string[]): string | null {
   const url = href === undefined ? null : URL.parse(href);
@@ -44,14 +56,17 @@ const COMPONENTS: Components = {
       </div>
     );
   },
-  // A link opens in a new tab when it is an absolute http(s) URL; any other is its text alone.
-  a({ href, children }) {
+  // A link opens in a new tab when it is an absolute http(s) URL; any other is its text alone. A linked image is the
+  // link alone, named by its text.
+  a({ node, href, children }) {
     const target = absolute(href, ["https:", "http:"]);
+    const linksImage = node?.children.some((child) => child.type === "element" && child.tagName === "img") === true;
+    const label = linksImage ? node?.children.map(labelOf).join("") : children;
     return target === null ? (
-      <span>{children}</span>
+      <span>{label}</span>
     ) : (
       <a href={target} target="_blank" rel="noreferrer">
-        {children}
+        {label}
       </a>
     );
   },
