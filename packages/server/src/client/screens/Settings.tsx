@@ -6,7 +6,7 @@ import { Button } from "../components/Button.tsx";
 import { Dialog } from "../components/Dialog.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
 import { Modal } from "../components/modal.tsx";
-import { Notice } from "../components/Notice.tsx";
+import { ReadFailed } from "../components/Notice.tsx";
 import { PromptEditor } from "../components/PromptEditor.tsx";
 import { Skeleton } from "../components/Skeleton.tsx";
 import { SkillRegisterForm } from "../components/SkillRegisterForm.tsx";
@@ -127,7 +127,6 @@ export function Settings({
   useEffect(() => {
     document.title = "Settings · prq";
   }, []);
-  const tryAgain = <Button variant="secondary" size="sm" label="Try again" onClick={actions.reread} />;
   const loading = state.read === "loading";
   const { dialog, refForm } = state;
 
@@ -138,17 +137,10 @@ export function Settings({
         Settings
       </h1>
       {state.read === "failed" ? (
-        <Notice tone="danger" title="Couldn't load settings" actions={tryAgain} />
+        <ReadFailed subject="settings" onRetry={actions.reread} />
       ) : (
         <>
-          {state.refreshFailed && (
-            <Notice
-              tone="danger"
-              title="Couldn't refresh settings"
-              text="Showing what was loaded before."
-              actions={tryAgain}
-            />
-          )}
+          {state.refreshFailed && <ReadFailed subject="settings" refresh onRetry={actions.reread} />}
           <section className="prompts">
             <h2>Prompts</h2>
             {KINDS.map((kind) => {

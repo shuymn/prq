@@ -3,7 +3,7 @@ import { type ComponentProps, type ReactNode, useEffect, useRef } from "react";
 
 import { Button } from "../components/Button.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
-import { Notice } from "../components/Notice.tsx";
+import { ReadFailed } from "../components/Notice.tsx";
 import { PrRow } from "../components/PrRow.tsx";
 import { PrTableHeader } from "../components/PrTableHeader.tsx";
 import { RepoFilter } from "../components/RepoFilter.tsx";
@@ -119,7 +119,6 @@ export function PrList({
   onRetry?: (() => void) | undefined;
   onLoadMore?: (() => void) | undefined;
 }) {
-  const tryAgain = <Button variant="secondary" size="sm" label="Try again" onClick={onRetry} />;
   const showAttention =
     needsAttention > 0 && body.kind !== "loading" && !(body.kind === "empty" && body.reason === "ledger");
   return (
@@ -154,15 +153,8 @@ export function PrList({
           />
         </div>
       </div>
-      {refreshFailed && (
-        <Notice
-          tone="danger"
-          title="Couldn't refresh pull requests"
-          text="Showing what was loaded before."
-          actions={tryAgain}
-        />
-      )}
-      {body.kind === "load-failed" && <Notice tone="danger" title="Couldn't load pull requests" actions={tryAgain} />}
+      {refreshFailed && <ReadFailed subject="pull requests" refresh onRetry={onRetry} />}
+      {body.kind === "load-failed" && <ReadFailed subject="pull requests" onRetry={onRetry} />}
       {body.kind === "empty" && (
         <EmptyState icon="git-pull-request" title={EMPTY[body.reason].title} text={EMPTY[body.reason].text} />
       )}
