@@ -1,6 +1,6 @@
 // The server's test projects and type checks as they resolve: the Worker's tests never collect the web UI's files, the
 // workerd project stops without the UI's build, the node project runs the scripts' tests, and `pnpm run typecheck`
-// covers the UI, its build configuration and the secrets command.
+// covers the UI, its build configuration and the host's operations commands.
 
 import { execFile } from "node:child_process";
 import { relative } from "node:path";
@@ -73,8 +73,14 @@ describe("the type checks", () => {
     expect(node).toContain("vite.config.ts");
     expect(node).toContain("build/tokens.ts");
     expect(node).toContain("scripts/secrets.ts");
+    expect(node).toContain("scripts/operations.ts");
+    expect(node).toContain("scripts/release-check.ts");
+    expect(node).toContain("scripts/deploy.ts");
     expect(node).toContain("scripts/secrets.node.test.ts");
     expect(worker).not.toContain("scripts/secrets.ts");
+    expect(worker).not.toContain("scripts/operations.ts");
+    expect(worker).not.toContain("scripts/release-check.ts");
+    expect(worker).not.toContain("scripts/deploy.ts");
     expect(worker?.filter((file) => file.startsWith("src/client/"))).toEqual([]);
   });
 

@@ -1,9 +1,11 @@
-// The secrets command (secrets.ts) run as the package script runs it, on a deploy directory in the OS temp directory
-// and with a stand-in for wrangler that records each call's arguments, environment and stdin and answers as wrangler
-// would. Every value below is a sentinel no output may hold, nor any line of a key.
+// The secrets command (secrets.ts) run through the tests' entry (test-entry.ts), whose fixture gives it a deploy
+// directory in the OS temp directory and a stand-in for wrangler that records each call's arguments, environment and
+// stdin and answers as wrangler would (its own FAKE_* settings added to wrangler's environment). Every value below is a
+// sentinel no output may hold, nor any line of a key.
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,8 +15,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { unstable_readConfig } from "wrangler";
 
 import { fixtureRoot } from "../../cli/src/test/git.ts";
+import type { Fixture } from "./fixture.ts";
 
 const SCRIPT = fileURLToPath(new URL("secrets.ts", import.meta.url));
+const TEST_ENTRY = fileURLToPath(new URL("test-entry.ts", import.meta.url));
 const CONFIG = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url));
 
 const KEY = generateKeyPairSync("rsa", {
@@ -127,6 +131,7 @@ let fake: string;
 let root: string;
 let deploy: string;
 let env: Record<string, string>;
+let settings: v.InferOutput<typeof Fixture>;
 
 function envFile(vars: Record<string, string>): string {
   return Object.entries(vars)
@@ -169,11 +174,10 @@ beforeEach(async () => {
   env = {
     PATH: process.env["PATH"] ?? "",
     HOME: root,
-    PRQ_DEPLOY_DIRECTORY: deploy,
-    PRQ_DEPLOY_WRANGLER: fake,
     FAKE_WRANGLER_LOG: join(root, "calls.jsonl"),
     FAKE_WRANGLER_PIDS: join(root, "pids.json"),
   };
+  settings = { directory: deploy, wrangler: fake };
 });
 
 // The scripts a test started, and the stand-in's processes it recorded: a test that failed leaves none running.
@@ -195,9 +199,14 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-// The script with these arguments and this stdin (none: closed at once); its outcome, whose output holds no value.
-function start(args: string[], input: string | null = null) {
-  const child = spawn(process.execPath, [SCRIPT, ...args], { env, stdio: ["pipe", "pipe", "pipe"] });
+// The script with these arguments and this stdin (none: closed at once), through the tests' entry with the settings,
+// or (production) as `pnpm run secrets` runs it, with none; its outcome, whose output holds no value.
+function start(args: string[], input: string | null = null, { production = false } = {}) {
+  const file = join(root, "fixture.json");
+  const childEnv = Object.fromEntries(Object.entries(env).filter(([name]) => name.startsWith("FAKE_")));
+  writeFileSync(file, JSON.stringify({ ...settings, childEnv }));
+  const argv = production ? [SCRIPT, ...args] : [TEST_ENTRY, file, "secrets", ...args];
+  const child = spawn(process.execPath, argv, { env, stdio: ["pipe", "pipe", "pipe"] });
   started.push(child);
   let stdout = "";
   let stderr = "";
@@ -307,7 +316,7 @@ describe("secrets check", () => {
   });
 
   it("refuses a deploy directory that is a symbolic link", async () => {
-    env["PRQ_DEPLOY_DIRECTORY"] = join(root, "linked");
+    settings.directory = join(root, "linked");
     await symlink(deploy, join(root, "linked"));
 
     expect(await secrets(["check"])).toMatchObject({
@@ -465,8 +474,21 @@ describe("secrets status", () => {
     expect(unstable_readConfig({ config: CONFIG }).name).toBe("prq");
     const made = await calls();
     expect(made.map((call) => call.args)).toEqual([
-      ["whoami", "--json", "--config", CONFIG, "--env", ""],
-      ["secret", "list", "--format", "json", "--config", CONFIG, "--env", "", "--name", "prq"],
+      ["whoami", "--json", "--config", CONFIG, "--env", "", "--env-file", "/dev/null"],
+      [
+        "secret",
+        "list",
+        "--format",
+        "json",
+        "--config",
+        CONFIG,
+        "--env",
+        "",
+        "--env-file",
+        "/dev/null",
+        "--name",
+        "prq",
+      ],
     ]);
     for (const call of made) {
       expect(call.env["CLOUDFLARE_ACCOUNT_ID"]).toBe(ACCOUNT);
@@ -484,7 +506,7 @@ describe("secrets status", () => {
 
   it("refuses a wrangler configuration naming another account, before calling wrangler", async () => {
     const other = join(root, "wrangler.jsonc");
-    env["PRQ_DEPLOY_WRANGLER_CONFIG"] = other;
+    settings.wranglerConfig = other;
     // wrangler would put on this account, while whoami shows target.env's.
     await writeFile(other, JSON.stringify({ name: "prq", account_id: "0".repeat(32) }));
 
@@ -499,18 +521,18 @@ describe("secrets status", () => {
     expect(await secrets(["put"], "y\n")).toMatchObject(refusal);
     expect(await calls()).toEqual([]);
 
-    // The top-level environment, whatever CLOUDFLARE_ENV selects.
+    // The top-level environment, whatever another environment names (CLOUDFLARE_ENV, which would select one, is
+    // refused).
     await writeFile(
       other,
       JSON.stringify({ name: "prq", account_id: ACCOUNT, env: { other: { account_id: "0".repeat(32) } } }),
     );
-    env["CLOUDFLARE_ENV"] = "other";
     expect(await secrets(["status"])).toMatchObject({ code: 0, stderr: "" });
   });
 
   it("prints none of the warnings reading the wrangler configuration gives, which can quote what it holds", async () => {
     const other = join(root, "wrangler.jsonc");
-    env["PRQ_DEPLOY_WRANGLER_CONFIG"] = other;
+    settings.wranglerConfig = other;
     // A value pasted as a key, which wrangler warns of as an unexpected field.
     await writeFile(other, JSON.stringify({ name: "prq", "sk-sentinel-pasted-as-a-key": 1 }));
 
@@ -565,14 +587,53 @@ describe("secrets status", () => {
   });
 });
 
+describe("the production entry", () => {
+  // secrets.ts as `pnpm run secrets` runs it, with no fixture. Were an override taken, status and put would still stop
+  // before any call: HOME holds no deploy directory.
+  it.each([
+    [
+      "the tests' own settings",
+      { PRQ_DEPLOY_WRANGLER: "/sentinel/wrangler", PRQ_DEPLOY_DIRECTORY: "/sentinel/deploy" },
+    ],
+    ["the Worker's name", { WRANGLER_CI_OVERRIDE_NAME: "sentinel-other-worker" }],
+    ["the configuration's environment", { CLOUDFLARE_ENV: "sentinel-env" }],
+    ["the account", { CLOUDFLARE_ACCOUNT_ID: "0".repeat(32) }],
+    ["other credentials", { CLOUDFLARE_API_TOKEN: "sentinel-other-token" }],
+    [
+      "the API",
+      {
+        CLOUDFLARE_API_BASE_URL: "https://api.sentinel.example/client/v4",
+        CF_API_BASE_URL: "https://api.sentinel.example/client/v4",
+      },
+    ],
+    [
+      "the OAuth login",
+      {
+        WRANGLER_TOKEN_URL: "https://login.sentinel.example/oauth2/token",
+        WRANGLER_AUTH_DOMAIN: "login.sentinel.example",
+      },
+    ],
+  ] as const)("refuses status and put in a terminal that sets %s, before any call", async (_what, set) => {
+    Object.assign(env, set);
+    const names = Object.keys(set).toSorted();
+
+    for (const args of [["status"], ["put"]]) {
+      expect(await start(args, "y\n", { production: true }).result).toMatchObject({
+        code: 1,
+        stdout: "",
+        stderr: `secrets: the environment sets ${names.join(", ")}, which would send this command elsewhere than target.env's account and the Worker prq, or with other credentials than wrangler's login: unset ${names.length === 1 ? "it" : "them"} (docs/operations.md, The deploy command)\n`,
+      });
+    }
+    expect(await calls()).toEqual([]);
+  });
+});
+
 describe("secrets put", () => {
   it("checks, asks, then sends the ten secrets as one JSON object on wrangler's stdin and nowhere else", async () => {
     env["FAKE_WRANGLER_SECRETS"] = "ACCESS_AUD,OLD_SECRET";
     // Set otherwise in the environment the command starts from: wrangler gets its own.
     env["WRANGLER_LOG_SANITIZE"] = "false";
     env["WRANGLER_WRITE_LOGS"] = "true";
-    env["CLOUDFLARE_API_BASE_URL"] = "https://api.elsewhere.example/client/v4";
-    env["CF_API_BASE_URL"] = "https://api.elsewhere.example/client/v4";
 
     const result = await secrets(["put"], "y\n");
 
@@ -590,9 +651,22 @@ describe("secrets put", () => {
     );
     const made = await calls();
     expect(made.map((call) => call.args)).toEqual([
-      ["whoami", "--json", "--config", CONFIG, "--env", ""],
-      ["secret", "list", "--format", "json", "--config", CONFIG, "--env", "", "--name", "prq"],
-      ["secret", "bulk", "--config", CONFIG, "--env", "", "--name", "prq"],
+      ["whoami", "--json", "--config", CONFIG, "--env", "", "--env-file", "/dev/null"],
+      [
+        "secret",
+        "list",
+        "--format",
+        "json",
+        "--config",
+        CONFIG,
+        "--env",
+        "",
+        "--env-file",
+        "/dev/null",
+        "--name",
+        "prq",
+      ],
+      ["secret", "bulk", "--config", CONFIG, "--env", "", "--env-file", "/dev/null", "--name", "prq"],
     ]);
     const stdin = made[2]?.stdin ?? "";
     expect(stdin).not.toContain("\n");
@@ -606,7 +680,7 @@ describe("secrets put", () => {
       expect(call.env).not.toHaveProperty("CF_API_BASE_URL");
       expect(call.env["WRANGLER_LOG_SANITIZE"]).toBe("true");
       // The call that gets the values writes no log file.
-      expect(call.env["WRANGLER_WRITE_LOGS"]).toBe(call.args[1] === "bulk" ? "false" : "true");
+      expect(call.env["WRANGLER_WRITE_LOGS"]).toBe(call.args[1] === "bulk" ? "false" : undefined);
       // No value in any call's arguments or environment.
       const elsewhere = JSON.stringify([call.args, call.env]);
       for (const secret of SECRETS) {
@@ -625,7 +699,7 @@ describe("secrets put", () => {
   });
 
   it("sends nothing when no answer comes within the wait", async () => {
-    env["PRQ_DEPLOY_WAIT_MS"] = "1000";
+    settings.waitMs = 1000;
     const { result } = start(["put"]);
 
     expect(await result).toMatchObject({ code: 1, stderr: "secrets: nothing sent\n" });
@@ -703,7 +777,7 @@ describe("secrets put", () => {
   });
 
   it("exits 2 when the wait for wrangler ends, even if wrangler then exits 0", async () => {
-    env["PRQ_DEPLOY_WAIT_MS"] = "1000";
+    settings.waitMs = 1000;
     env["FAKE_WRANGLER_HANG"] = "bulk";
     env["FAKE_WRANGLER_TERM_EXIT_0"] = "1";
 
@@ -728,7 +802,7 @@ describe("secrets put", () => {
 
 describe("wrangler's process", () => {
   it("is named when it cannot start", async () => {
-    env["PRQ_DEPLOY_WRANGLER"] = join(root, "no-wrangler-here");
+    settings.wrangler = join(root, "no-wrangler-here");
 
     expect(await secrets(["status"])).toMatchObject({
       code: 1,
@@ -737,7 +811,7 @@ describe("wrangler's process", () => {
   });
 
   it("is stopped with what it started at the end of its wait", async () => {
-    env["PRQ_DEPLOY_WAIT_MS"] = "1000";
+    settings.waitMs = 1000;
     env["FAKE_WRANGLER_HANG"] = "whoami";
 
     expect(await secrets(["status"])).toMatchObject({
@@ -753,7 +827,7 @@ describe("wrangler's process", () => {
     ["whoami", "whoami"],
     ["list", "secret list"],
   ])("fails the call when its wait ends, even if %s then exits 0", async (call, what) => {
-    env["PRQ_DEPLOY_WAIT_MS"] = "1000";
+    settings.waitMs = 1000;
     env["FAKE_WRANGLER_HANG"] = call;
     env["FAKE_WRANGLER_TERM_EXIT_0"] = "1";
 
@@ -764,7 +838,7 @@ describe("wrangler's process", () => {
   });
 
   it("is killed when it ignores SIGTERM", async () => {
-    env["PRQ_DEPLOY_WAIT_MS"] = "1000";
+    settings.waitMs = 1000;
     env["FAKE_WRANGLER_HANG"] = "bulk";
     env["FAKE_WRANGLER_STUBBORN"] = "1";
 

@@ -9,8 +9,9 @@
       "entry": ["design/*.{js,mjs}", "design/inventory.d.mts"],
     },
     "packages/server": {
-      // The component gallery's page, which src/client/gallery/gallery.html loads (`vite build --mode gallery`).
-      "entry": ["src/client/gallery/main.tsx"],
+      // The component gallery's page, which src/client/gallery/gallery.html loads (`vite build --mode gallery`), and
+      // the operations scripts' test entry, which their tests start by path.
+      "entry": ["src/client/gallery/main.tsx", "scripts/test-entry.ts"],
     },
     "packages/cli": {
       // The binary's entry (the default, kept when an entry is listed), and the local stack's worker process, which

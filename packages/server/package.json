@@ -11,7 +11,9 @@
     "check:provider": "node --env-file-if-exists=.dev.vars scripts/provider-check.ts",
     "check:github": "node --env-file-if-exists=.dev.vars scripts/github-check.ts",
     "check:tools": "node --env-file-if-exists=.dev.vars scripts/tools-check.ts",
-    "secrets": "node scripts/secrets.ts"
+    "secrets": "node scripts/secrets.ts",
+    "release-check": "node scripts/release-check.ts",
+    "deploy": "node scripts/deploy.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "catalog:",
@@ -50,6 +52,7 @@
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "@vitest/browser-playwright": "catalog:",
+    "ci-info": "catalog:",
     "fast-check": "catalog:",
     "playwright": "catalog:",
     "style-dictionary": "catalog:",

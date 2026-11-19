@@ -72,9 +72,19 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`; host
   `fileToken` check on `design/prq.pen`, and commitlint on the message.
 - `pnpm run secrets check|status|put` in `packages/server` handles the Worker's production secrets
   (`docs/operations.md`, The secrets command). `status` and `put` reach the Cloudflare account and are the host's to
-  run. Its tests (`packages/server/scripts/secrets.node.test.ts`, in the server's node project) run it against a
-  stand-in for wrangler and a deploy directory in the OS temp directory (`PRQ_DEPLOY_DIRECTORY`,
-  `PRQ_DEPLOY_WRANGLER`, `PRQ_DEPLOY_WRANGLER_CONFIG`), and nothing reaches the network.
+  run. Its tests (`packages/server/scripts/secrets.node.test.ts`, in the server's node project) run it through the
+  scripts' test entry (`scripts/test-entry.ts`), whose fixture (`scripts/fixture.ts`) gives it a stand-in for wrangler
+  and a deploy directory in the OS temp directory, and nothing reaches the network. The production entries read no
+  test setting: they refuse a terminal holding one (`PRQ_DEPLOY_*`) or a wrangler override (`docs/operations.md`, The
+  deploy command).
+- `pnpm run release-check -- <tag> [--pre-tag <sha>]` in `packages/server` checks, reading only, whether a commit may be
+  released as the tag (`docs/design.md`, Versions). `pnpm run deploy -- --bootstrap [--resume] | <tag>
+  [--ignore-running] [--immediate] [--keep-image] | --read-back <record>` there deploys the Worker
+  (`docs/operations.md`) and is the host's to run. Their tests (`packages/server/scripts/release-check.node.test.ts`,
+  `deploy.node.test.ts`) run them against stand-ins for wrangler, mise, pnpm and `gh` on `PATH`, an origin made with
+  `FixtureGit`, a local server for the ledger and Cloudflare's API, and a terminal from python3's `pty` module, with
+  `HOME` and the deploy directory in the OS temp directory; the deploy's run through the same test entry, whose fixture
+  holds its shorter bounds, the ledger's origin and the API's address. Nothing reaches the network.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
   change, and `mise exec -- gh-infra apply .github/infra.yaml` applies it once the owner approves.
 

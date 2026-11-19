@@ -79,6 +79,30 @@ spec:
               app: github-actions
             - context: security / betterleaks
               app: github-actions
+    # Release tags (docs/design.md, Versions): only an admin creates one, and no one moves or deletes it, so a pushed
+    # tag names one commit for good. A ruleset's bypass covers all its rules, hence two rulesets.
+    - name: release-tag-creation
+      target: tag
+      enforcement: active
+      bypass_actors:
+        - role: admin
+          bypass_mode: always
+      conditions:
+        ref_name:
+          include:
+            - refs/tags/v*
+      rules:
+        creation: true
+    - name: release-tag-immutability
+      target: tag
+      enforcement: active
+      conditions:
+        ref_name:
+          include:
+            - refs/tags/v*
+      rules:
+        update: true
+        deletion: true
   actions:
     enabled: true
     allowed_actions: selected
