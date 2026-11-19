@@ -106,8 +106,9 @@ function Job({ job, actions }: { job: JobItem; actions: DetailActions }) {
   );
 }
 
-// The rail's head: the toggle that collapses the rail and expands it again, which, collapsed, carries a danger dot
-// while a job has failed or is possibly stalled.
+// The rail's head: the toggle that hides the rail's versions and jobs and shows them again, named the same either way
+// with aria-expanded saying which; collapsed, while a job has failed or is possibly stalled, it carries a danger dot,
+// which its description says.
 function RailHead({
   collapsed,
   attention,
@@ -125,7 +126,9 @@ function RailHead({
           variant="invisible"
           size="md"
           icon={collapsed ? "sidebar-expand" : "sidebar-collapse"}
-          label={collapsed ? (alert ? "Expand rail, a job needs attention" : "Expand rail") : "Collapse rail"}
+          label="Jobs and versions"
+          expanded={!collapsed}
+          description={alert ? "A job needs attention" : undefined}
           onClick={onToggle}
         />
         {alert && (

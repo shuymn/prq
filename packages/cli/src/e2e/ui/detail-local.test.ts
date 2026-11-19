@@ -453,8 +453,13 @@ describe("jobs and Retry", () => {
     const page = browser.page();
     await page.goto(door(DETAIL));
     await summary(page, "The summary of h2.").waitFor();
-    await page.getByRole("button", { name: "Collapse rail" }).click();
-    const attention = page.getByRole("button", { name: "Expand rail, a job needs attention" });
+    const toggle = page.getByRole("button", { name: "Jobs and versions" });
+    await toggle.click();
+    // Collapsed, and once a job needs attention, the toggle's description says so.
+    const attention = page
+      .getByRole("button", { name: "Jobs and versions", expanded: false })
+      .and(page.locator('[aria-description="A job needs attention"]'));
+    await page.getByRole("button", { name: "Jobs and versions", expanded: false }).waitFor();
     expect(await attention.count()).toBe(0);
 
     const name = sessionName(PR);

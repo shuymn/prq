@@ -1035,8 +1035,8 @@ describe("the summary and the rail", () => {
       .toEqual(["/api/pr/shuymn/prq/42/jobs/a2/retry"]);
   });
 
-  test("done jobs collapse into N done; the collapsed rail stays collapsed across a reload, and the summary's version menu still picks a version (P4.8)", async () => {
-    const { fetch, sockets, show } = await detail();
+  test("done jobs collapse into N done, closed at first; the toggle hides the rail's versions and jobs, its name kept and aria-expanded false (P4.8)", async () => {
+    const { fetch, sockets } = await detail();
     const jobs: JobSpec[] = [
       { id: "a1", analysis: OLDER },
       { id: "a2", analysis: HEAD },
@@ -1053,25 +1053,13 @@ describe("the summary and the rail", () => {
     (await fetch.request(1)).respond(history);
     await expect.element(page.getByText("Latest summary.")).toBeVisible();
     await expect.element(page.getByText("3 done")).toBeVisible();
+    expect(document.querySelector<HTMLDetailsElement>(".rail details")?.open).toBe(false);
     expect(document.querySelectorAll(".rail details [data-component=JobRow]")).toHaveLength(3);
-    await page.getByRole("button", { name: "Collapse rail" }).click();
-    await expect.element(page.getByRole("button", { name: "Expand rail", exact: true })).toBeVisible();
+    const toggle = page.getByRole("button", { name: "Jobs and versions" });
+    await expect.element(toggle).toHaveAttribute("aria-expanded", "true");
+    await toggle.click();
+    await expect.element(toggle).toHaveAttribute("aria-expanded", "false");
     expect(page.getByRole("heading", { name: "Versions" }).elements()).toEqual([]);
-
-    await show(false);
-    await show(true);
-    await connect(sockets, 1, jobs);
-    (await fetch.request(2)).respond(history);
-    (await fetch.request(3)).respond(history);
-    await expect.element(page.getByText("Latest summary.")).toBeVisible();
-    await expect.element(page.getByRole("button", { name: "Expand rail", exact: true })).toBeVisible();
-    expect(page.getByRole("heading", { name: "Versions" }).elements()).toEqual([]);
-    const trigger = document.querySelector("[data-component=VersionMenu] .trigger");
-    expect(trigger).not.toBeNull();
-    if (trigger !== null) {
-      await page.elementLocator(trigger).click();
-    }
-    await page.getByRole("menuitemradio", { name: new RegExp(`^${OLDER.slice(0, 7)}`) }).click();
-    await expect.element(page.getByText("Older summary.")).toBeVisible();
+    expect(page.getByText("3 done").elements()).toEqual([]);
   });
 });

@@ -253,9 +253,10 @@ describe("the PR detail's states", () => {
       ]);
       expect(textOf("[data-component=Summary] .meta")).toBe("deepseek-chat · 12,480 tokens");
       // The rail collapsed to its toggle, no job needing attention.
-      expect(page.getByRole("complementary").getByRole("button").elements()).toEqual([
-        page.getByRole("button", { name: "Expand rail", exact: true }).element(),
-      ]);
+      const toggle = page.getByRole("button", { name: "Jobs and versions" });
+      expect(page.getByRole("complementary").getByRole("button").elements()).toEqual([toggle.element()]);
+      await expect.element(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(toggle.element().getAttribute("aria-description")).toBeNull();
     },
     "detail.empty": async () => {
       expect(textOf("[data-component=Summary] > [data-component=Status]")).toMatch(
@@ -302,7 +303,9 @@ describe("the PR detail's states", () => {
         "Summary of e4f5a6b possibly stalled: no result from mbp-office after 1 hrRetry",
       );
       expect(retries()).toHaveLength(1);
-      await expect.element(page.getByRole("button", { name: "Expand rail, a job needs attention" })).toBeVisible();
+      const toggle = page.getByRole("button", { name: "Jobs and versions" });
+      await expect.element(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect.element(toggle).toHaveAccessibleDescription("A job needs attention");
       expect(document.querySelector(".rail-toggle .alert")).not.toBeNull();
     },
     "detail.failed": async () => {
