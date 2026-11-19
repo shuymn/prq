@@ -1248,12 +1248,16 @@ Browser and edge:
   Hub's view come over the Agents SDK WebSocket, which resyncs the state after each successful reconnect, and an
   answer's streamed text stays until its run's stored row replaces it. The ledger's
   rows come over HTTP in pages, read again when the Hub's view says the ledger or presence changed, and so do the
-  present agents and the repositories, read when the pool or the repository menu opens. There is no
+  present agents and the repositories, read when the pool or the repository menu opens (the agents again when the
+  Hub's view changes while the pool is open; a read of them that has not ended within 45 s, past the route's 30 s, shows
+  the pool as unavailable, as a failed one does). There is no
   service worker and no offline mode. Browser storage holds only view preferences (the rail collapsed, the list
   filters).
 - When the PR detail's WebSocket has not opened again 15 seconds after it closed (an expired Access session fails every
   attempt, and a WebSocket cannot follow the sign-in redirect), the page says it cannot reconnect, keeps what it shows
-  and offers to reload, which lets Access sign in again; it recovers if the connection opens meanwhile.
+  and offers to reload, which lets Access sign in again; it recovers if the connection opens meanwhile. The Hub's
+  WebSocket follows the same 15 seconds, from the page's first connect or a close: the header's pool status, and the
+  panel's pool line, say the pool is unavailable until it opens again.
 - A tab opened before a deploy keeps running the old bundle. The server sends its version on every WebSocket connection
   (see [Versions](#versions)); when it differs from the UI's build version, or a lazily loaded asset fails to load, the
   UI shows a non-blocking notice to reload.

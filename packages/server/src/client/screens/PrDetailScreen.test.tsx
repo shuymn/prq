@@ -35,6 +35,7 @@ const HUB: Hub = {
   } satisfies HubView,
   opens: 1,
   serverVersion: null,
+  unavailable: false,
 };
 
 type JobSpec = {
@@ -103,7 +104,11 @@ const analysis = (jobId: string, headSha: string, text: string, extra: object = 
   metadata: { kind: "analysis", jobId, headSha, run: 1, by: BY, ...extra },
 });
 
-async function detail({ slots = new SendSlots(), layout = "page" }: { slots?: SendSlots; layout?: Layout } = {}) {
+async function detail({
+  slots = new SendSlots(),
+  layout = "page",
+  hub = HUB,
+}: { slots?: SendSlots; layout?: Layout; hub?: Hub } = {}) {
   const fetch = controlledFetch();
   const sockets = controlledSockets();
   const tree = (shown: boolean) => (
@@ -113,7 +118,7 @@ async function detail({ slots = new SendSlots(), layout = "page" }: { slots?: Se
           {shown ? (
             // The app's frame carries the layout the screen's styles follow.
             <div data-layout={layout}>
-              <PrDetailScreen prRef={REF} hub={HUB} layout={layout} notice={() => null} />
+              <PrDetailScreen prRef={REF} hub={hub} layout={layout} notice={() => null} />
             </div>
           ) : (
             <p>Elsewhere</p>
@@ -1220,5 +1225,50 @@ describe("a claim in the panel", () => {
     expect(posts()[0]?.url.pathname).toBe("/api/pr/shuymn/prq/42/jobs/a1/retry");
     expect(JSON.parse(posts()[0]?.body ?? "")).toEqual({ expectedRev: 4 });
     expect(textOf("[data-component=Summary] .body")).toContain("B's summary.");
+  });
+});
+
+// The panel's pool line, right under the compact header.
+const poolLine = () => document.querySelector("[data-component=PrHeader] + [data-component=PoolStatus]")?.textContent;
+
+describe("the pool's line in the panel", () => {
+  afterEach(async () => {
+    await page.viewport(1280, 800);
+  });
+
+  test("shows under the header while a question waits for a local agent, and whenever the pool's status is unavailable; else none (P5.4)", async () => {
+    await page.viewport(360, 800);
+    const absent: HubView = {
+      localAgentPresent: false,
+      presentAgents: 0,
+      jobs: { waiting: 0, running: 0, failed: 0 },
+      needsAttention: 0,
+      owners: 1,
+      ledgerVersion: 1,
+    };
+    const waiting = await detail({ layout: "panel", hub: { ...HUB, view: absent } });
+    const socket = await waiting.sockets.socket(0);
+    socket.open();
+    socket.receive({
+      type: "cf_agent_state",
+      state: sessionView([{ id: "j1", question: "q1", state: "pending" }], "local"),
+    });
+    (await waiting.fetch.request(0)).respond([question("q1", "Why?")]);
+    (await waiting.fetch.request(1)).respond([question("q1", "Why?")]);
+    await expect.element(page.getByText("Why?")).toBeVisible();
+    expect(poolLine()).toBe("Cloud only· No jobs");
+    socket.receive({
+      type: "cf_agent_state",
+      state: sessionView([{ id: "j1", question: "q1", state: "running" }], "local"),
+    });
+    await expect.poll(poolLine).toBeUndefined();
+    await waiting.screen.unmount();
+
+    const unavailable = await detail({ layout: "panel", hub: { ...HUB, unavailable: true } });
+    await connect(unavailable.sockets, 0);
+    (await unavailable.fetch.request(0)).respond([]);
+    (await unavailable.fetch.request(1)).respond([]);
+    await expect.element(page.getByText("No questions yet. Ask about this pull request below.")).toBeVisible();
+    expect(poolLine()).toBe("Pool unavailable");
   });
 });

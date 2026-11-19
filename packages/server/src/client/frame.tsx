@@ -1,4 +1,4 @@
-// The page around every view, as the app and the gallery render it: the header, with the pool's status from the Hub's
+// The page around every view, as the app and the gallery render it: the header, with the agent pool from the Hub's
 // view, then the view in the main region.
 
 import type { HubView } from "@prq/protocol";
@@ -6,23 +6,8 @@ import { type ReactNode, useEffect } from "react";
 
 import { type Line, linesShown, type Politeness, useAnnouncements } from "./announce.ts";
 import { AppHeader } from "./components/AppHeader.tsx";
-import { PoolStatus } from "./components/PoolStatus.tsx";
 import type { Layout } from "./layout.ts";
-
-// The pool's status in the header; it opens nothing yet.
-function Pool({ view }: { view: HubView | null }) {
-  if (view === null) {
-    return <PoolStatus form="button" state="loading" />;
-  }
-  return (
-    <PoolStatus
-      form="button"
-      state={view.localAgentPresent ? "local" : "cloud-only"}
-      agents={view.presentAgents}
-      jobs={view.jobs}
-    />
-  );
-}
+import { Pool } from "./pool.tsx";
 
 // A live region: each announcement is a new line, so the same text is read again.
 function Region({ politeness, lines }: { politeness: Politeness; lines: readonly Line[] }) {
@@ -50,23 +35,28 @@ function Announcer() {
   );
 }
 
-// The panel's PR detail has no header: the panel is the pull request's (docs/ui.md).
+// The panel's PR detail has no header: the panel is the pull request's (docs/ui.md). `unavailable`: the Hub's socket has
+// gone RECONNECT_FAILED_MS without an open. `pool` takes the header pool's place (the gallery's open popover).
 export function Frame({
   view,
+  unavailable = false,
   version,
   layout,
   header = true,
+  pool,
   children,
 }: {
   view: HubView | null;
+  unavailable?: boolean | undefined;
   version: string;
   layout: Layout;
   header?: boolean | undefined;
+  pool?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="app" data-layout={layout}>
-      {header && <AppHeader version={version} pool={<Pool view={view} />} />}
+      {header && <AppHeader version={version} pool={pool ?? <Pool view={view} unavailable={unavailable} />} />}
       <main>{children}</main>
       <Announcer />
     </div>

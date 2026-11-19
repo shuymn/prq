@@ -23,7 +23,7 @@ const view = (change: Partial<HubView> = {}): HubView => ({
   ...change,
 });
 
-const hubOf = (hubView: HubView | null): Hub => ({ view: hubView, opens: 1, serverVersion: null });
+const hubOf = (hubView: HubView | null): Hub => ({ view: hubView, opens: 1, serverVersion: null, unavailable: false });
 
 const row = (fullName: string, number: number, title: string) => {
   const [owner = "", repo = ""] = fullName.split("/");

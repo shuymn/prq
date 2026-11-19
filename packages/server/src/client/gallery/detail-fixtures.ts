@@ -238,13 +238,15 @@ export type DetailFixture = {
   // The new version notice, and whether it warns that reloading loses a question.
   newVersion?: boolean;
   railCollapsed?: boolean;
+  // The Hub's socket gone RECONNECT_FAILED_MS without an open: the pool's status is unavailable.
+  unavailable?: boolean;
 };
 
-const hub = (localAgentPresent: boolean) =>
+const hub = (localAgentPresent: boolean, waiting = 0) =>
   v.parse(HubView, {
     localAgentPresent,
     presentAgents: localAgentPresent ? 1 : 0,
-    jobs: { waiting: 0, running: 0, failed: 0 },
+    jobs: { waiting, running: 0, failed: 0 },
     needsAttention: 0,
     owners: 1,
     ledgerVersion: 3,
@@ -255,7 +257,16 @@ function fixture(
   messages: StoredMessage[],
   change: Partial<Session> & Partial<Omit<DetailFixture, "session">> = {},
 ): DetailFixture {
-  const { slot = null, hub: hubView = hub(true), picked = null, draft, newVersion, railCollapsed, ...session } = change;
+  const {
+    slot = null,
+    hub: hubView = hub(true),
+    picked = null,
+    draft,
+    newVersion,
+    railCollapsed,
+    unavailable,
+    ...session
+  } = change;
   return {
     session: {
       view: v.parse(PrSessionView, { ...(view.pr ?? PR), owner: view.owner, jobs: view.jobs }),
@@ -274,6 +285,7 @@ function fixture(
     ...(draft === undefined ? {} : { draft }),
     ...(newVersion === undefined ? {} : { newVersion }),
     ...(railCollapsed === undefined ? {} : { railCollapsed }),
+    ...(unavailable === undefined ? {} : { unavailable }),
   };
 }
 
@@ -331,11 +343,28 @@ const sendFailed = (now: number, phase: "not-sent" | "unconfirmed") =>
   });
 
 // The panel's default frame: a long title, an answer with a code block and its metadata.
-const panelDefault = (now: number) =>
-  fixture({ pr: LONG_PR, owner: "cloud", jobs: [...versions(now), ...answered(now)] }, [
-    ...SUMMARIES,
-    ...CONVERSATION.slice(0, 2),
-  ]);
+const panelDefault = (now: number, change: Parameters<typeof fixture>[2] = {}) =>
+  fixture(
+    { pr: LONG_PR, owner: "cloud", jobs: [...versions(now), ...answered(now)] },
+    [...SUMMARIES, ...CONVERSATION.slice(0, 2)],
+    change,
+  );
+
+// Panel / Waiting for a local agent: the second question's job waits in a local session with no agent present.
+const panelWaiting = (now: number) =>
+  fixture(
+    {
+      pr: LONG_PR,
+      owner: "local",
+      jobs: [
+        ...versions(now),
+        answered(now)[0],
+        job({ id: "j-q2", target: { kind: "answer", messageId: "q2" }, state: "pending", ago: 4 * MINUTE }, now),
+      ],
+    },
+    [...SUMMARIES, ...CONVERSATION.slice(0, 3)],
+    { hub: hub(false, 1) },
+  );
 
 // The failed frames' pull request: its versions (the latest analysis failed, when `analysisFailed`), a done question and a
 // failed one whose text stopped.
@@ -500,5 +529,7 @@ export const DETAIL_FIXTURES: Record<string, (now: number) => DetailFixture> = {
   "panel-send-failed": (now) => sendFailed(now, "unconfirmed"),
   "panel-default": (now) => panelDefault(now),
   "panel-new-version": (now) => ({ ...panelDefault(now), newVersion: true }),
+  "panel-waiting-agent": panelWaiting,
+  "panel-unavailable": (now) => panelDefault(now, { unavailable: true }),
   "panel-summary-streaming": (now) => summaryStreaming(now, { picked: "a-newer" }),
 };

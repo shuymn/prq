@@ -1,9 +1,11 @@
 // The PR detail as the design draws it (design/screens.md, detail.* and panel.*), from its model: on a page, a main
 // column (header, summary, conversation, composer) and a rail with its toggle, the versions and jobs, which collapses
 // to the toggle; in the panel one column, the header compact and the summary in a disclosure whose row holds the
-// version menu. What is loading, failed or unknown takes the summary's and conversation's place.
+// version menu, and under the header the pool's line where it explains a wait for a local agent, or whenever the pool's
+// status is unavailable. What is loading, failed or unknown takes the summary's and conversation's place.
 
 import "./PrDetail.css";
+import type { JobCounts } from "@prq/protocol";
 import type { ReactNode, Ref } from "react";
 
 import { Button, ButtonLink } from "../components/Button.tsx";
@@ -17,6 +19,7 @@ import { JobRow } from "../components/JobRow.tsx";
 import { Markdown } from "../components/Markdown.tsx";
 import { Message } from "../components/Message.tsx";
 import { Notice } from "../components/Notice.tsx";
+import { type PoolState, PoolStatus } from "../components/PoolStatus.tsx";
 import { PrHeader } from "../components/PrHeader.tsx";
 import { useElapsed } from "../components/RelativeTime.tsx";
 import { RetryButton, RetryError } from "../components/retry.tsx";
@@ -43,6 +46,9 @@ type DetailActions = {
   onRetryJob?: ((jobId: string, rev: number) => void) | undefined;
   onToggleRail?: (() => void) | undefined;
 };
+
+// The pool's status as the Hub's view gives it, for the panel's line.
+export type PoolLine = { state: PoolState; agents?: number | undefined; jobs?: JobCounts | undefined };
 
 const content = (text: string) => (text === "" ? undefined : <Markdown text={text} />);
 
@@ -357,6 +363,7 @@ function Conversation({
 export function PrDetail({
   layout,
   model,
+  pool,
   notice,
   unsent = false,
   draft,
@@ -368,6 +375,7 @@ export function PrDetail({
 }: {
   layout: Layout;
   model: DetailModel;
+  pool?: PoolLine | undefined;
   notice?: ReactNode;
   // A question history has yet to hold: reloading loses it.
   unsent?: boolean | undefined;
@@ -381,12 +389,19 @@ export function PrDetail({
   actions?: DetailActions | undefined;
 }) {
   const { header, body, banner, composer } = model;
+  const poolLine =
+    layout === "panel" &&
+    pool !== undefined &&
+    (pool.state === "unavailable" || (body.kind === "ready" && body.waitsForAgent)) ? (
+      <PoolStatus form="line" state={pool.state} agents={pool.agents} jobs={pool.jobs} />
+    ) : null;
   if (body.kind === "unknown") {
     return (
       <div className="pr-detail" data-layout={layout}>
         <div className="main">
           {banner !== null && <ConnectionBanner state={banner} unsent={unsent} onReload={actions.onReload} />}
           {notice}
+          {poolLine}
           <EmptyState
             icon="git-pull-request"
             title="Unknown pull request"
@@ -416,6 +431,7 @@ export function PrDetail({
             onBack={actions.onBack}
           />
         )}
+        {poolLine}
         {body.kind === "load-failed" ? (
           <Notice tone="danger" title="Couldn't load the summary and conversation" actions={tryAgain} />
         ) : (

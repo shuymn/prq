@@ -21,7 +21,8 @@ import { JobRow, type JobRowState } from "../components/JobRow.tsx";
 import { Markdown } from "../components/Markdown.tsx";
 import { Message } from "../components/Message.tsx";
 import { Notice, type NoticeTone } from "../components/Notice.tsx";
-import { PoolStatus } from "../components/PoolStatus.tsx";
+import { PoolPopover } from "../components/PoolPopover.tsx";
+import { type PoolState, PoolStatus } from "../components/PoolStatus.tsx";
 import { PrHeader } from "../components/PrHeader.tsx";
 import { PrRow } from "../components/PrRow.tsx";
 import { type PrState, PrStateLabel } from "../components/PrStateLabel.tsx";
@@ -42,12 +43,23 @@ import { type Version, VersionMenu } from "../components/VersionMenu.tsx";
 import { Frame } from "../frame.tsx";
 import type { Layout } from "../layout.ts";
 import { BuildNotice } from "../notices.tsx";
+import { AgentPool, poolState } from "../pool.tsx";
 import { detailModel } from "../screens/detail-model.ts";
 import { listBody } from "../screens/list-model.ts";
 import { PrDetail } from "../screens/PrDetail.tsx";
 import { PrList } from "../screens/PrList.tsx";
 import { DETAIL_FIXTURES, type DetailFixture, HEADS, SUMMARY } from "./detail-fixtures.ts";
-import { allRows, CLOUD_ONLY, defaultRows, EMPTY_LOCAL, menuRepos } from "./fixtures.ts";
+import {
+  allRows,
+  CLOUD_ONLY,
+  defaultRows,
+  EMPTY_LOCAL,
+  menuRepos,
+  POOL_CLOUD_ONLY,
+  POOL_LOCAL,
+  poolAgents,
+  poolRows,
+} from "./fixtures.ts";
 
 export type Entry = { name: string; render: () => ReactNode };
 
@@ -107,17 +119,20 @@ function ListState({
   state = "open",
   notice,
   repoMenu,
+  pool,
 }: {
   view: HubView;
   rows: LedgerRow[] | null;
   state?: "open" | "all";
   notice?: ReactNode;
   repoMenu?: RepoItems;
+  // The header's pool in place of the closed one the view gives.
+  pool?: ReactNode;
 }) {
   const filter = { attention: false, state, repo: null } as const;
   const body = listBody({ rows, filter, more: false, loadingMore: false, failure: null }, view.owners);
   return (
-    <Frame view={view} version={VERSION} layout="page">
+    <Frame view={view} version={VERSION} layout="page" pool={pool}>
       <PrList
         notice={notice}
         body={body}
@@ -136,14 +151,41 @@ function ListState({
 
 const listDefault = () => <ListState view={CLOUD_ONLY} rows={defaultRows(Date.now())} />;
 
+// The PR list with the agent pool's popover open on these agents (null: still read), or with the pool's status alone.
+function poolEntry(view: HubView, status: PoolState, agents: "ready" | "reading" | null = "ready") {
+  return () => {
+    const now = Date.now();
+    return (
+      <ListState
+        view={view}
+        rows={poolRows(now, view.localAgentPresent)}
+        pool={
+          <AgentPool
+            view={status === "loading" ? null : view}
+            status={status}
+            agents={
+              agents === "ready"
+                ? { state: "ready", rows: view.localAgentPresent ? poolAgents(now) : [] }
+                : { state: "loading" }
+            }
+            open={agents !== null}
+          />
+        }
+      />
+    );
+  };
+}
+
 // The PR detail from a session as the store holds it, through the same model the screen uses.
 function DetailState({ data, layout, menuOpen = false }: { data: DetailFixture; layout: Layout; menuOpen?: boolean }) {
   const unsent = data.slot !== null;
+  const unavailable = data.unavailable === true;
   return (
-    <Frame view={data.hub} version={VERSION} layout={layout} header={layout === "page"}>
+    <Frame view={data.hub} unavailable={unavailable} version={VERSION} layout={layout} header={layout === "page"}>
       <PrDetail
         layout={layout}
         model={detailModel(data)}
+        pool={{ state: poolState(data.hub, unavailable), agents: data.hub.presentAgents, jobs: data.hub.jobs }}
         notice={
           data.newVersion === true ? (
             <BuildNotice serverVersions={["v0.5.0"]} assetFailed={false} unsent={unsent} />
@@ -362,6 +404,23 @@ export const REGISTRY: Entry[] = [
       />
     ),
   },
+  ...(["button", "line"] as const).flatMap((form) =>
+    variants(`PoolStatus/${form}`, ["local", "cloud-only", "unavailable", "loading"] as PoolState[], (state) => (
+      <PoolStatus
+        form={form}
+        state={state}
+        agents={1}
+        jobs={state === "local" ? { running: 1, waiting: 2, failed: 0 } : { running: 1, waiting: 0, failed: 0 }}
+      />
+    )),
+  ),
+  ...variants("PoolPopover", ["local", "cloud-only", "unavailable"] as const, (state) => (
+    <PoolPopover
+      state={state}
+      agents={poolAgents(Date.now(), ["agent-7f3a", "agent-2c9e"])}
+      jobs={{ waiting: 2, running: 1, failed: 1 }}
+    />
+  )),
   // PR list
   {
     name: "PrTableHeader",
@@ -444,7 +503,14 @@ export const REGISTRY: Entry[] = [
   { name: "detail.reconnect-failed", render: detail("reconnect-failed") },
   { name: "detail.earlier-version", render: detail("earlier-version") },
   { name: "detail.send-failed", render: detail("send-failed") },
-  // 3. Panel
+  // 3. Agent pool
+  { name: "pool.local", render: poolEntry(POOL_LOCAL, "local") },
+  { name: "pool.cloud-only", render: poolEntry(POOL_CLOUD_ONLY, "cloud-only") },
+  { name: "pool.unavailable", render: poolEntry(CLOUD_ONLY, "unavailable") },
+  { name: "pool.loading", render: poolEntry(CLOUD_ONLY, "loading", null) },
+  // The popover while its read is under way, which the design has no frame for (design/components.md, PoolPopover).
+  { name: "pool.local-reading", render: poolEntry(POOL_LOCAL, "local", "reading") },
+  // 5. Panel
   { name: "panel.default", render: panel("panel-default") },
   { name: "panel.version-menu", render: panel("panel-default", true) },
   { name: "panel.streaming", render: panel("streaming") },
@@ -454,4 +520,6 @@ export const REGISTRY: Entry[] = [
   { name: "panel.reconnect-failed", render: panel("reconnect-failed") },
   { name: "panel.new-version", render: panel("panel-new-version") },
   { name: "panel.send-failed", render: panel("panel-send-failed") },
+  { name: "panel.waiting-agent", render: panel("panel-waiting-agent") },
+  { name: "panel.unavailable", render: panel("panel-unavailable") },
 ];

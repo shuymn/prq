@@ -1,5 +1,6 @@
 import "./PoolStatus.css";
 import type { JobCounts } from "@prq/protocol";
+import type { ComponentProps } from "react";
 
 import { Icon } from "./Icon.tsx";
 import { Spinner } from "./Spinner.tsx";
@@ -7,18 +8,25 @@ import { Spinner } from "./Spinner.tsx";
 export type PoolState = "local" | "cloud-only" | "unavailable" | "loading";
 
 // Who can take work now, from the Hub's view (design/components.md, Layout and navigation): the local agents present,
-// or the cloud alone, with the jobs in flight. `button` is the header's form, `line` the panel's.
+// or the cloud alone, with the jobs in flight. `button` is the header's form, the button of the agent pool's popover,
+// which gives it the popover's attributes; `line` is the panel's.
 export function PoolStatus({
   form,
   state,
   agents = 0,
   jobs,
+  ref,
+  commandfor,
+  command,
+  expanded,
 }: {
   form: "button" | "line";
   state: PoolState;
   agents?: number | undefined;
   jobs?: JobCounts | undefined;
-}) {
+  // The popover's state, which the button reports.
+  expanded?: boolean | undefined;
+} & Pick<ComponentProps<"button">, "ref" | "commandfor" | "command">) {
   const label = {
     local: `${agents} local ${agents === 1 ? "agent" : "agents"}`,
     "cloud-only": "Cloud only",
@@ -26,12 +34,33 @@ export function PoolStatus({
     loading: "Loading pool",
   }[state];
   const counts = jobs === undefined || state === "unavailable" || state === "loading" ? null : jobsText(jobs);
-  return (
-    <div data-component="PoolStatus" data-form={form} data-state={state}>
+  const content = (
+    <>
       {state === "loading" ? <Spinner /> : <Icon name="dot-fill" />}
       <span className="label">{label}</span>
       {counts !== null && <span className="jobs">{form === "line" ? `· ${counts}` : counts}</span>}
+    </>
+  );
+  return form === "line" ? (
+    <div data-component="PoolStatus" data-form={form} data-state={state}>
+      {content}
     </div>
+  ) : (
+    <button
+      ref={ref}
+      type="button"
+      data-component="PoolStatus"
+      data-form={form}
+      data-state={state}
+      aria-expanded={expanded}
+      commandfor={commandfor}
+      command={command}
+    >
+      {content}
+      <span className="chevron">
+        <Icon name="chevron-down" />
+      </span>
+    </button>
   );
 }
 
