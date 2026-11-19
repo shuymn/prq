@@ -102,8 +102,23 @@ const pollMs = setting("PRQ_DEPLOY_POLL_MS", 10_000);
 // The rollout is read every poll interval until it is complete or this long has passed since the poll began.
 const rolloutMs = setting("PRQ_DEPLOY_ROLLOUT_MS", 30 * 60_000);
 const originOverride = process.env["PRQ_DEPLOY_ORIGIN"];
-// Only for tests: the API the deploy's own reads go to (wrangler's calls stay pinned to the production one).
+// Only for tests: the API the deploy's own reads go to, a stand-in on this machine beside the stand-in for wrangler
+// (wrangler's calls stay pinned to the production one). apiChecked refuses any other before anything runs.
 const api = process.env["PRQ_DEPLOY_API"] ?? API;
+
+function apiChecked(): void {
+  if (api === API) {
+    return;
+  }
+  const url = URL.canParse(api) ? new URL(api) : null;
+  const loopback =
+    url !== null && url.protocol === "http:" && ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname);
+  if (!loopback || (process.env["PRQ_DEPLOY_WRANGLER"] ?? "") === "") {
+    throw new Refusal(
+      "PRQ_DEPLOY_API is set, which only the deploy's tests use (a loopback address beside their stand-in for wrangler): unset it, and the deploy reads Cloudflare's API",
+    );
+  }
+}
 
 // What wrangler answers: `deployments status --json`, `versions view --json`, `auth token --json` (wrangler's
 // credentials: an OAuth or API token, or a global API key with its email), `containers info --json` and a page of `containers instances --json --per-page` (a Durable Object with no instance
@@ -1316,6 +1331,7 @@ function notInCi(): void {
 }
 
 async function main(args: readonly string[]): Promise<number> {
+  apiChecked();
   const [first = "", ...rest] = args;
   if (first === "--bootstrap" && (rest.length === 0 || (rest.length === 1 && rest[0] === "--resume"))) {
     notInCi();

@@ -318,7 +318,9 @@ The deploy refuses, before any wrangler call, when `packages/server/wrangler.jso
 `target.env`'s, and a release also refuses, before its upload, a tag whose `wrangler.jsonc` sets one at all: wrangler
 would use it in place of `target.env`'s. As for the secrets command, each wrangler call uses its configuration's top
 level, whatever `CLOUDFLARE_ENV` says, and Cloudflare's production API, whatever `CLOUDFLARE_API_BASE_URL` or
-`CF_API_BASE_URL` says, as the deploy's own reads of that API do.
+`CF_API_BASE_URL` says, as the deploy's own reads of that API do. Its tests point those reads at a stand-in with
+`PRQ_DEPLOY_API`, which the deploy refuses before anything else unless it is a loopback address beside the tests'
+stand-in for wrangler.
 
 A signal or a bound stops wrangler with the processes it started, found by their parent links when it acts: a process
 that left that tree and ignores SIGTERM can outlive the deploy (`ps` shows it).

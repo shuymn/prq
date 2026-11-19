@@ -1,7 +1,8 @@
 // The deploy (deploy.ts) run as the package script runs it, from a host's clone whose origin is a GitHub URL that the
 // fixture's git config rewrites to a bare repository, all in the OS temp directory: stand-ins for wrangler (its answers
 // kept in a state file each call reads and changes), mise, pnpm and gh record every call, and a local server answers
-// the ledger for the idle check. A release deploy needs a terminal: those runs get one from the system's script(1).
+// the ledger for the idle check and Cloudflare's API for the deploy's own reads. A release deploy needs a terminal:
+// those runs get one from python3's pty module.
 // Nothing reaches the network or an account.
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
@@ -783,6 +784,37 @@ describe("the account", () => {
     expect(result.output).toContain(REFUSAL);
     expect(await wranglerCalls()).toHaveLength(calls);
   });
+});
+
+describe("the API override", () => {
+  const REFUSAL =
+    "deploy: PRQ_DEPLOY_API is set, which only the deploy's tests use (a loopback address beside their stand-in for wrangler): unset it, and the deploy reads Cloudflare's API\n";
+
+  // Each run would stop before wrangler runs were the override taken: a release out of a terminal, and a read-back of
+  // a path that is no record.
+  it.each([
+    ["a release with wrangler itself", [TAG], false, null],
+    ["a read-back with wrangler itself", ["--read-back", "no-record"], false, null],
+    ["an address off this machine", [TAG], true, "https://api.sentinel-zone.example/client/v4"],
+  ] as const)(
+    "is refused for %s, before any call or read of the credentials",
+    async (_what, args, standIn, address) => {
+      await released();
+      if (!standIn) {
+        delete env["PRQ_DEPLOY_WRANGLER"];
+      }
+      if (address !== null) {
+        env["PRQ_DEPLOY_API"] = address;
+      }
+
+      const result = await deploy([...args], { terminal: false });
+
+      expect(result).toMatchObject({ code: 1, output: REFUSAL });
+      expect(await wranglerCalls()).toEqual([]);
+      expect(await toolCalls()).toEqual([]);
+      expect(apiRequests).toEqual([]);
+    },
+  );
 });
 
 describe("deploy <tag>", () => {
