@@ -5,7 +5,6 @@
 // status is unavailable. What is loading, failed or unknown takes the summary's and conversation's place.
 
 import "./PrDetail.css";
-import type { JobCounts } from "@prq/protocol";
 import type { ReactNode, Ref } from "react";
 
 import { Button, ButtonLink } from "../components/Button.tsx";
@@ -19,7 +18,7 @@ import { JobRow } from "../components/JobRow.tsx";
 import { Markdown } from "../components/Markdown.tsx";
 import { Message } from "../components/Message.tsx";
 import { Notice } from "../components/Notice.tsx";
-import { type PoolState, PoolStatus } from "../components/PoolStatus.tsx";
+import { PoolStatus, type PoolSummary } from "../components/PoolStatus.tsx";
 import { PrHeader } from "../components/PrHeader.tsx";
 import { useElapsed } from "../components/RelativeTime.tsx";
 import { RetryButton, RetryError } from "../components/retry.tsx";
@@ -46,9 +45,6 @@ type DetailActions = {
   onRetryJob?: ((jobId: string, rev: number) => void) | undefined;
   onToggleRail?: (() => void) | undefined;
 };
-
-// The pool's status as the Hub's view gives it, for the panel's line.
-export type PoolLine = { state: PoolState; agents?: number | undefined; jobs?: JobCounts | undefined };
 
 const content = (text: string) => (text === "" ? undefined : <Markdown text={text} />);
 
@@ -375,7 +371,7 @@ export function PrDetail({
 }: {
   layout: Layout;
   model: DetailModel;
-  pool?: PoolLine | undefined;
+  pool?: PoolSummary | undefined;
   notice?: ReactNode;
   // A question history has yet to hold: reloading loses it.
   unsent?: boolean | undefined;
@@ -393,7 +389,7 @@ export function PrDetail({
     layout === "panel" &&
     pool !== undefined &&
     (pool.state === "unavailable" || (body.kind === "ready" && body.waitsForAgent)) ? (
-      <PoolStatus form="line" state={pool.state} agents={pool.agents} jobs={pool.jobs} />
+      <PoolStatus form="line" {...pool} />
     ) : null;
   if (body.kind === "unknown") {
     return (

@@ -43,7 +43,7 @@ import { type Version, VersionMenu } from "../components/VersionMenu.tsx";
 import { Frame } from "../frame.tsx";
 import type { Layout } from "../layout.ts";
 import { BuildNotice } from "../notices.tsx";
-import { AgentPool, poolState } from "../pool.tsx";
+import { AgentPool, poolStatus } from "../pool.tsx";
 import { detailModel } from "../screens/detail-model.ts";
 import { listBody } from "../screens/list-model.ts";
 import { PrDetail } from "../screens/PrDetail.tsx";
@@ -151,8 +151,13 @@ function ListState({
 
 const listDefault = () => <ListState view={CLOUD_ONLY} rows={defaultRows(Date.now())} />;
 
-// The PR list with the agent pool's popover open on these agents (null: still read), or with the pool's status alone.
-function poolEntry(view: HubView, status: PoolState, agents: "ready" | "reading" | null = "ready") {
+// The PR list with the agent pool's popover open on the agents read, or while they are read, or closed (null); its
+// status from the view, or loading before it, or unavailable.
+function poolEntry(
+  view: HubView,
+  agents: "ready" | "reading" | null = "ready",
+  status: "loading" | "unavailable" | null = null,
+) {
   return () => {
     const now = Date.now();
     return (
@@ -162,7 +167,7 @@ function poolEntry(view: HubView, status: PoolState, agents: "ready" | "reading"
         pool={
           <AgentPool
             view={status === "loading" ? null : view}
-            status={status}
+            unavailable={status === "unavailable"}
             agents={
               agents === "ready"
                 ? { state: "ready", rows: view.localAgentPresent ? poolAgents(now) : [] }
@@ -179,13 +184,12 @@ function poolEntry(view: HubView, status: PoolState, agents: "ready" | "reading"
 // The PR detail from a session as the store holds it, through the same model the screen uses.
 function DetailState({ data, layout, menuOpen = false }: { data: DetailFixture; layout: Layout; menuOpen?: boolean }) {
   const unsent = data.slot !== null;
-  const unavailable = data.unavailable === true;
   return (
-    <Frame view={data.hub} unavailable={unavailable} version={VERSION} layout={layout} header={layout === "page"}>
+    <Frame view={data.hub} version={VERSION} layout={layout} header={layout === "page"}>
       <PrDetail
         layout={layout}
         model={detailModel(data)}
-        pool={{ state: poolState(data.hub, unavailable), agents: data.hub.presentAgents, jobs: data.hub.jobs }}
+        pool={poolStatus(data.hub, data.unavailable === true)}
         notice={
           data.newVersion === true ? (
             <BuildNotice serverVersions={["v0.5.0"]} assetFailed={false} unsent={unsent} />
@@ -504,12 +508,12 @@ export const REGISTRY: Entry[] = [
   { name: "detail.earlier-version", render: detail("earlier-version") },
   { name: "detail.send-failed", render: detail("send-failed") },
   // 3. Agent pool
-  { name: "pool.local", render: poolEntry(POOL_LOCAL, "local") },
-  { name: "pool.cloud-only", render: poolEntry(POOL_CLOUD_ONLY, "cloud-only") },
-  { name: "pool.unavailable", render: poolEntry(CLOUD_ONLY, "unavailable") },
-  { name: "pool.loading", render: poolEntry(CLOUD_ONLY, "loading", null) },
+  { name: "pool.local", render: poolEntry(POOL_LOCAL) },
+  { name: "pool.cloud-only", render: poolEntry(POOL_CLOUD_ONLY) },
+  { name: "pool.unavailable", render: poolEntry(CLOUD_ONLY, "ready", "unavailable") },
+  { name: "pool.loading", render: poolEntry(CLOUD_ONLY, null, "loading") },
   // The popover while its read is under way, which the design has no frame for (design/components.md, PoolPopover).
-  { name: "pool.local-reading", render: poolEntry(POOL_LOCAL, "local", "reading") },
+  { name: "pool.local-reading", render: poolEntry(POOL_LOCAL, "reading") },
   // 5. Panel
   { name: "panel.default", render: panel("panel-default") },
   { name: "panel.version-menu", render: panel("panel-default", true) },

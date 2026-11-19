@@ -36,10 +36,12 @@ function Announcer() {
 }
 
 // The panel's PR detail has no header: the panel is the pull request's (docs/ui.md). `unavailable`: the Hub's socket has
-// gone RECONNECT_FAILED_MS without an open. `pool` takes the header pool's place (the gallery's open popover).
+// gone RECONNECT_FAILED_MS without an open. `route` names the view shown, whose change closes the pool's popover. `pool`
+// takes the header pool's place (the gallery's open popover).
 export function Frame({
   view,
   unavailable = false,
+  route,
   version,
   layout,
   header = true,
@@ -48,6 +50,7 @@ export function Frame({
 }: {
   view: HubView | null;
   unavailable?: boolean | undefined;
+  route?: string | undefined;
   version: string;
   layout: Layout;
   header?: boolean | undefined;
@@ -56,7 +59,9 @@ export function Frame({
 }) {
   return (
     <div className="app" data-layout={layout}>
-      {header && <AppHeader version={version} pool={pool ?? <Pool view={view} unavailable={unavailable} />} />}
+      {header && (
+        <AppHeader version={version} pool={pool ?? <Pool view={view} unavailable={unavailable} route={route} />} />
+      )}
       <main>{children}</main>
       <Announcer />
     </div>

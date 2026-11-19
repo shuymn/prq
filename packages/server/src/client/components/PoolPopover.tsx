@@ -57,15 +57,22 @@ export function PoolPopover({
   ref,
   id,
   popover,
-  onToggle,
+  onBeforeToggle,
 }: {
   state: PoolPopoverState;
-  agents?: readonly AgentRow[] | null | undefined;
-  jobs?: JobCounts | null | undefined;
-} & Pick<ComponentProps<"div">, "ref" | "id" | "popover" | "onToggle">) {
-  const counts = jobs === null || jobs === undefined ? [] : JOBS.filter(([kind]) => jobs[kind] > 0);
+  agents: readonly AgentRow[] | null;
+  jobs: JobCounts | null;
+} & Pick<ComponentProps<"div">, "ref" | "id" | "popover" | "onBeforeToggle">) {
+  const counts = jobs === null ? [] : JOBS.filter(([kind]) => jobs[kind] > 0);
   return (
-    <div ref={ref} id={id} popover={popover} data-component="PoolPopover" data-state={state} onToggle={onToggle}>
+    <div
+      ref={ref}
+      id={id}
+      popover={popover}
+      data-component="PoolPopover"
+      data-state={state}
+      onBeforeToggle={onBeforeToggle}
+    >
       {state === "unavailable" ? (
         <Notice
           tone="attention"
@@ -79,7 +86,7 @@ export function PoolPopover({
             <p className="none">
               No local agent present. New PRs go to cloud; existing local sessions wait until their agent returns.
             </p>
-          ) : agents === null || agents === undefined ? (
+          ) : agents === null ? (
             <div className="skeleton" aria-busy="true">
               <Skeleton shape="line" />
               <Skeleton shape="line" />
@@ -101,7 +108,7 @@ export function PoolPopover({
           <span className="cloud-status">Available</span>
         </p>
       </section>
-      {state !== "unavailable" && jobs !== null && jobs !== undefined && (
+      {state !== "unavailable" && jobs !== null && (
         <section className="jobs">
           <h2>Jobs in flight</h2>
           {counts.length === 0 ? (

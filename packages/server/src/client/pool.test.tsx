@@ -1,12 +1,13 @@
 // The header's agent pool over the Hub's socket and a fetch the test answers, with PartySocket unmodified (plan P5.1,
-// P5.3): PoolStatus from the Hub's view and its connection, and the popover's read of the agents on opening, to the
-// last page, within its bound, and only while the popover is open and the read the latest.
+// P5.3): PoolStatus from the Hub's view and its connection, and the popover's reads of the agents while it is open (on
+// opening, on a new view, on a timer and on resume), to the last page, within one bound, and only while the popover is
+// open and the read the latest.
 
 import type { HubView } from "@prq/protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-import { AGENTS_READ_MS } from "./agents.ts";
+import { AGENTS_READ_MS, AGENTS_REFRESH_MS } from "./agents.ts";
 import { Frame } from "./frame.tsx";
 import { useHub } from "./hub.ts";
 import { FetchContext } from "./reads.ts";
@@ -32,10 +33,10 @@ const agent = (agentId: string, change: object = {}) => ({
   ...change,
 });
 
-function Header() {
+function Header({ route }: { route: string }) {
   const hub = useHub();
   return (
-    <Frame view={hub.view} unavailable={hub.unavailable} version="v0.4.0" layout="page">
+    <Frame view={hub.view} unavailable={hub.unavailable} route={route} version="v0.4.0" layout="page">
       <p>Page</p>
     </Frame>
   );
@@ -44,13 +45,20 @@ function Header() {
 async function header() {
   const fetch = controlledFetch();
   const sockets = controlledSockets();
-  const tree = (shown: boolean) => (
+  const tree = (shown: boolean, route = "list") => (
     <FetchContext value={fetch.fetch}>
-      <SocketContext value={{ WebSocket: sockets.WebSocket }}>{shown ? <Header /> : <p>Elsewhere</p>}</SocketContext>
+      <SocketContext value={{ WebSocket: sockets.WebSocket }}>
+        {shown ? <Header route={route} /> : <p>Elsewhere</p>}
+      </SocketContext>
     </FetchContext>
   );
   const screen = await render(tree(true));
-  return { fetch, sockets, leave: () => screen.rerender(tree(false)) };
+  return {
+    fetch,
+    sockets,
+    leave: () => screen.rerender(tree(false)),
+    navigate: (route: string) => screen.rerender(tree(true, route)),
+  };
 }
 
 // The Hub's socket opens and sends its view, as the server does on connect.
@@ -98,6 +106,7 @@ const button = () => document.querySelector<HTMLButtonElement>("button[data-comp
 const popover = () => document.querySelector<HTMLElement>("[data-component=PoolPopover]");
 const agentLines = () => [...document.querySelectorAll(".agent-text")].map((line) => line.textContent);
 const reading = () => popover()?.querySelector(".skeleton")?.getAttribute("aria-busy") === "true";
+const cloudOnly = () => popover()?.querySelector(".none") !== null;
 const path = (request: Pending) => `${request.url.pathname}${request.url.search}`;
 
 // Opens or closes the popover from its button, and waits for its toggle.
@@ -108,6 +117,7 @@ async function toggle(open: boolean) {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("the pool's status", () => {
@@ -141,7 +151,7 @@ describe("the pool's status", () => {
     vi.useRealTimers();
     await toggle(true);
     (await fetch.request(0)).respond({ rows: [], nextCursor: null });
-    await until(() => popover()?.querySelector(".none") !== null);
+    await until(cloudOnly);
     expect(textOf("[data-component=PoolPopover] .none")).toBe(
       "No local agent present. New PRs go to cloud; existing local sessions wait until their agent returns.",
     );
@@ -246,5 +256,123 @@ describe("the popover's read", () => {
     const left = await fetch.request(4);
     await leave();
     expect(left.signal.aborted).toBe(true);
+  });
+
+  test("each opening shows the skeleton until its first read lands, whatever the view says; only an empty read says cloud only", async () => {
+    const { fetch, sockets } = await header();
+    await connect(sockets, 0, view({ localAgentPresent: false, presentAgents: 0 }));
+    await until(() => status().startsWith("Cloud only"));
+
+    await toggle(true);
+    const first = await fetch.request(0);
+    expect(reading()).toBe(true);
+    expect(cloudOnly()).toBe(false);
+    first.respond({ rows: [agent("laptop")], nextCursor: null });
+    await until(() => agentLines().length === 1);
+
+    await toggle(false);
+    await toggle(true);
+    const second = await fetch.request(1);
+    expect(reading()).toBe(true);
+    expect(agentLines()).toEqual([]);
+    second.respond({ rows: [], nextCursor: null });
+    await until(cloudOnly);
+  });
+
+  test("while open, reads again AGENTS_REFRESH_MS after the last read ended, not a tick sooner, and when the page resumes; closed, on neither", async () => {
+    const { fetch, sockets } = await header();
+    await connect(sockets, 0, view());
+    await until(() => status().startsWith("2 local agents"));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await toggle(true);
+    (await fetch.request(0)).respond({ rows: [agent("laptop", { waiting: true })], nextCursor: null });
+    await until(() => agentLines().length === 1);
+    expect(agentLines()).toEqual(["laptopWaiting for work · seen 3 hr ago"]);
+
+    // The same view: what the agent does and when it was seen changed without one.
+    await vi.advanceTimersByTimeAsync(AGENTS_REFRESH_MS - 1);
+    expect(fetch.requests).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    (await fetch.request(1)).respond({
+      rows: [agent("laptop", { holdsJob: true, lastSeenAt: Date.now() - 2.5 * 60 * 60_000 })],
+      nextCursor: null,
+    });
+    await until(() => agentLines()[0] === "laptopHolding a job · seen 2 hr ago");
+
+    document.dispatchEvent(new Event("resume"));
+    (await fetch.request(2)).respond({ rows: [agent("laptop")], nextCursor: null });
+    await until(() => agentLines()[0] === "laptopNot waiting · seen 3 hr ago");
+
+    await toggle(false);
+    await vi.advanceTimersByTimeAsync(2 * AGENTS_REFRESH_MS);
+    document.dispatchEvent(new Event("resume"));
+    await nextTask();
+    expect(fetch.requests).toHaveLength(3);
+  });
+
+  test("from the opening, one AGENTS_READ_MS bound runs across the reads newer views start, not a tick less", async () => {
+    const { fetch, sockets } = await header();
+    const socket = await connect(sockets, 0, view());
+    await until(() => status().startsWith("2 local agents"));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await toggle(true);
+    await fetch.request(0);
+    for (const ledgerVersion of [2, 3]) {
+      await vi.advanceTimersByTimeAsync(16_000);
+      socket.receive({ type: "cf_agent_state", state: view({ ledgerVersion }) });
+      await fetch.request(ledgerVersion - 1);
+    }
+    await vi.advanceTimersByTimeAsync(AGENTS_READ_MS - 2 * 16_000 - 1);
+    expect(reading()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    await until(() => popover()?.dataset["state"] === "unavailable");
+    expect(fetch.requests.map((request) => request.signal.aborted)).toEqual([true, true, true]);
+  });
+
+  test("a page frozen past the bound fails the read in flight on resume, then reads under a bound of its own", async () => {
+    const { fetch, sockets } = await header();
+    await connect(sockets, 0, view());
+    await until(() => status().startsWith("2 local agents"));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await toggle(true);
+    const opening = await fetch.request(0);
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    // Frozen: the clock passes the opening's bound while no timer runs; the resume event comes before the late timers.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + AGENTS_READ_MS);
+    document.dispatchEvent(new Event("resume"));
+    await until(() => popover()?.dataset["state"] === "unavailable");
+    expect(opening.signal.aborted).toBe(true);
+    const resumed = await fetch.request(1);
+
+    // The opening's timer, due now, ends nothing; the resume read has its own AGENTS_READ_MS.
+    await vi.advanceTimersByTimeAsync(AGENTS_READ_MS - 20_000);
+    expect(resumed.signal.aborted).toBe(false);
+    resumed.respond({ rows: [agent("laptop")], nextCursor: null });
+    await until(() => agentLines().length === 1);
+  });
+
+  test("the read ends as the popover starts to close: a page answered in that task asks for no next one", async () => {
+    const { fetch, sockets } = await header();
+    await connect(sockets, 0, view());
+    await until(() => status().startsWith("2 local agents"));
+    await toggle(true);
+    const first = await fetch.request(0);
+    popover()?.hidePopover();
+    first.respond({ rows: [agent("laptop")], nextCursor: "laptop" });
+    await settled();
+    expect(first.signal.aborted).toBe(true);
+    expect(fetch.requests).toHaveLength(1);
+  });
+
+  test("a route change closes the popover and ends its read", async () => {
+    const { fetch, sockets, navigate } = await header();
+    await connect(sockets, 0, view());
+    await until(() => status().startsWith("2 local agents"));
+    await toggle(true);
+    const held = await fetch.request(0);
+    await navigate("detail");
+    await until(() => popover()?.matches(":popover-open") === false && button()?.ariaExpanded === "false");
+    expect(held.signal.aborted).toBe(true);
   });
 });

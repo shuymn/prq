@@ -45,7 +45,8 @@ export async function readJson<S extends v.GenericSchema>(
   return parsed.output;
 }
 
-// Every page of a paged read, in order, the first without a cursor and each next with the one the last page gave.
+// Every page of a paged read, in order, the first without a cursor and each next with the one the last page gave. No
+// page is asked for once the signal is aborted.
 export async function readPages<Row>(
   fetcher: Fetch,
   path: string,
@@ -55,6 +56,7 @@ export async function readPages<Row>(
   const rows: Row[] = [];
   let cursor: string | null = null;
   do {
+    signal.throwIfAborted();
     const query: string = cursor === null ? "" : `?${new URLSearchParams({ cursor }).toString()}`;
     const page = await readJson(fetcher, `${path}${query}`, schema, signal);
     rows.push(...page.rows);

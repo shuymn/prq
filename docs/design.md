@@ -635,13 +635,13 @@ UI, webhook and CLI input all enter through PrSession.
   then ends 10 minutes later, and a claim retried after 60 minutes does not make its agent present again.
 - When any one agent ID is present, "a local agent is present" is true.
 - The Hub's view carries whether a local agent is present and how many agent IDs are, which the header's status shows.
-  The pool's details come from `GET /api/agents`, read when the pool opens: every present agent ID by ID, at most 100
-  and 64 KiB a page, with its last contact (none when the Hub has had none from it), whether it is in a `wait` and
-  whether it holds a claim. They are not in the view, so a contact sends the UI nothing. A contact and a pool page read
-  only what can make an agent present: the contacts and the claims recent enough, each a range of an index on its time,
-  and the waits in memory, then for each present agent its last contact and its latest claim, one row each however many
-  claims it has held. An agent's row stays after its presence ends (one row an agent ID, which is the host name by
-  default), and is read again only once the agent is present again.
+  The pool's details come from `GET /api/agents` (when the UI reads it: [Caching](#caching), Browser and edge): every
+  present agent ID by ID, at most 100 and 64 KiB a page, with its last contact (none when the Hub has had none from it),
+  whether it is in a `wait` and whether it holds a claim. They are not in the view, so a contact sends the UI nothing. A
+  contact and a pool page read only what can make an agent present: the contacts and the claims recent enough, each a
+  range of an index on its time, and the waits in memory, then for each present agent its last contact and its latest
+  claim, one row each however many claims it has held. An agent's row stays after its presence ends (one row an agent
+  ID, which is the host name by default), and is read again only once the agent is present again.
 - The Hub runs `presenceEnded` at the first whole second at or after the next time a present agent's presence ends
   (re-checked when it runs, since the scheduler stores whole seconds), so the list and "Waiting for a local agent"
   follow presence without any other event. Every change to the pool or the ledger, and the Hub's start, arms it when
@@ -1248,11 +1248,14 @@ Browser and edge:
   Hub's view come over the Agents SDK WebSocket, which resyncs the state after each successful reconnect, and an
   answer's streamed text stays until its run's stored row replaces it. The ledger's
   rows come over HTTP in pages, read again when the Hub's view says the ledger or presence changed, and so do the
-  present agents and the repositories, read when the pool or the repository menu opens (the agents again when the
-  Hub's view changes while the pool is open; a read of them that has not ended within 45 s, past the route's 30 s, shows
-  the pool as unavailable, as a failed one does). There is no
-  service worker and no offline mode. Browser storage holds only view preferences (the rail collapsed, the list
-  filters).
+  present agents and the repositories, read when the pool or the repository menu opens. The agents are read again while
+  the pool is open, and only then: when the Hub's view changes, 30 s after the last read ended (what an agent does and
+  when it was last seen change with no new view; the pool shows that time in whole minutes on the page's 30 s clock),
+  and when the page resumes from frozen. Each opening shows the agents' rows loading until its first read lands, and
+  from an opening or the last read's end a read must land within 45 s, past the route's 30 s, however many newer ones
+  replace it meanwhile, or the pool shows as unavailable, as a failed read does; a page frozen past that bound counts
+  the read as failed when it resumes, and its resume read has 45 s of its own. There is no service worker and no
+  offline mode. Browser storage holds only view preferences (the rail collapsed, the list filters).
 - When the PR detail's WebSocket has not opened again 15 seconds after it closed (an expired Access session fails every
   attempt, and a WebSocket cannot follow the sign-in redirect), the page says it cannot reconnect, keeps what it shows
   and offers to reload, which lets Access sign in again; it recovers if the connection opens meanwhile. The Hub's
