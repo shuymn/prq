@@ -5,7 +5,7 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { buildOldBundle, OLD_VERSION } from "./old-bundle.ts";
 
@@ -79,5 +79,28 @@ describe("the old bundle", () => {
     scratch.push(bundle.dir);
     expect(existsSync(bundle.dir)).toBe(true);
     await bundle.close();
+  });
+
+  test("a build its caller cancels is killed and its directory removed", async () => {
+    const slow = await standIn("setTimeout(() => {}, 60_000)");
+    const cancel = new AbortController();
+    const built = buildOldBundle({ command: slow.command, signal: cancel.signal });
+    const pid = await vi.waitFor(slow.pid);
+    cancel.abort();
+    await expect(built).rejects.toThrow("the old bundle's build was cancelled");
+    expect(alive(pid)).toBe(false);
+    expect(existsSync(slow.seen.dir)).toBe(false);
+  });
+
+  test("a command that cannot be made removes its directory", async () => {
+    let seen = "";
+    const command = (outDir: string): never => {
+      seen = outDir;
+      scratch.push(outDir);
+      throw new Error("no Vite");
+    };
+    await expect(buildOldBundle({ command })).rejects.toThrow("no Vite");
+    expect(seen).not.toBe("");
+    expect(existsSync(seen)).toBe(false);
   });
 });

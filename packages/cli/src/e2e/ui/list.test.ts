@@ -247,8 +247,8 @@ describe("the repository menu", () => {
 });
 
 describe("an earlier deploy's bundle", () => {
-  test("shows one version notice; its filter works; Reload loads the current shell without it", async () => {
-    const bundle = await buildOldBundle();
+  test("shows one version notice; its filter works; Reload loads the current shell without it", async ({ signal }) => {
+    const bundle = await buildOldBundle({ signal });
     try {
       await push(stack.worker(), pr("prq", 1), sha("a"));
       stack.access().doorServe(bundle.dir);

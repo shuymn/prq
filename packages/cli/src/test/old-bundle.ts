@@ -3,8 +3,9 @@
 // temp directory, so that none of its files exist among the Worker's assets. The door serves it (door.ts serve()) until
 // the test switches it off.
 //
-// The build is bounded: past OLD_BUNDLE_MS it is killed. A build that fails or is killed removes its directory before
-// the error is thrown; close() removes a built one.
+// The build is bounded: past OLD_BUNDLE_MS, or once the caller's signal aborts, it is killed. A build that fails, is
+// killed or cannot start removes its directory, once its process has ended, before the error is thrown; close() removes
+// a built one.
 
 import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -32,13 +33,14 @@ const viteBuild: Command = (outDir) => {
 export async function buildOldBundle({
   timeoutMs = OLD_BUNDLE_MS,
   command = viteBuild,
-}: { timeoutMs?: number; command?: Command } = {}): Promise<OldBundle> {
+  signal,
+}: { timeoutMs?: number; command?: Command; signal?: AbortSignal | undefined } = {}): Promise<OldBundle> {
   const dir = await mkdtemp(join(tmpdir(), "prq-old-bundle-"));
   const remove = () => rm(dir, { recursive: true, force: true });
-  const { file, args } = command(dir);
   try {
+    const { file, args } = command(dir);
     await new Promise<void>((resolve, reject) => {
-      execFile(
+      const child = execFile(
         file,
         args,
         {
@@ -46,13 +48,24 @@ export async function buildOldBundle({
           env: { ...process.env, PRQ_BUILD_VERSION: OLD_VERSION, PRQ_BUILD_PREFIX: OLD_PREFIX },
           timeout: timeoutMs,
           killSignal: "SIGKILL",
+          signal,
         },
         (error, _stdout, stderr) => {
           if (error === null) {
             resolve();
           } else {
-            const ending = error.killed ? `was killed after ${timeoutMs} ms` : `failed (${error.code ?? error.signal})`;
-            reject(new Error(`the old bundle's build ${ending}: ${stderr.trim()}`));
+            const ending = signal?.aborted
+              ? "was cancelled"
+              : error.killed
+                ? `was killed after ${timeoutMs} ms`
+                : `failed (${error.code ?? error.signal})`;
+            const failure = new Error(`the old bundle's build ${ending}: ${stderr.trim()}`);
+            // A cancel calls back as it kills the build: the error waits for the process to end.
+            if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+              child.once("exit", () => reject(failure));
+            } else {
+              reject(failure);
+            }
           }
         },
       );
