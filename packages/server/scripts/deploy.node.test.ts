@@ -792,6 +792,21 @@ describe("deploy <tag>", () => {
       "deploy: the tag's packages/server/wrangler.jsonc does not name the Worker prq with workers_dev and preview_urls false",
     ],
     [
+      "configures a route besides the hostname",
+      {
+        name: "prq",
+        workers_dev: false,
+        preview_urls: false,
+        routes: [{ pattern: "extra.sentinel-zone.example", custom_domain: true }],
+      },
+      "deploy: the tag's packages/server/wrangler.jsonc configures a route, which wrangler would publish beside the hostname: the deploy takes the hostname from target.env alone",
+    ],
+    [
+      "configures a route of a zone",
+      { name: "prq", workers_dev: false, preview_urls: false, route: "sentinel-zone.example/*" },
+      "deploy: the tag's packages/server/wrangler.jsonc configures a route, which wrangler would publish beside the hostname",
+    ],
+    [
       "names an account",
       { name: "prq", workers_dev: false, preview_urls: false, account_id: OTHER_ACCOUNT },
       "deploy: the tag's packages/server/wrangler.jsonc sets an account_id, which wrangler would deploy to in place of target.env's",

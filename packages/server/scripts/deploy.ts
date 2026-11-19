@@ -532,8 +532,9 @@ async function publicationCheck(clone: string, values: Readonly<Record<string, s
 }
 
 // The tag's Worker configuration as wrangler reads it for the upload (its top level, its warnings not printed): the
-// Worker prq, with workers.dev and preview URLs off, which wrangler sets on every deploy, and no account_id, which
-// wrangler would deploy to in place of target.env's.
+// Worker prq, with workers.dev and preview URLs off, which wrangler sets on every deploy; no route, which wrangler would
+// publish beside the hostname the owner confirmed; and no account_id, which wrangler would deploy to in place of
+// target.env's.
 function configCheck(clone: string): void {
   const config = unstable_readConfig(
     { config: join(clone, "packages", "server", "wrangler.jsonc"), env: "" },
@@ -544,12 +545,17 @@ function configCheck(clone: string): void {
       `the tag's packages/server/wrangler.jsonc does not name the Worker ${WORKER} with workers_dev and preview_urls false`,
     );
   }
+  if (config.route !== undefined || (config.routes?.length ?? 0) > 0) {
+    throw new Refusal(
+      `the tag's packages/server/wrangler.jsonc configures a route, which wrangler would publish beside the hostname: the deploy takes the hostname from ${TARGET_ENV} alone`,
+    );
+  }
   if (config.account_id !== undefined) {
     throw new Refusal(
       `the tag's packages/server/wrangler.jsonc sets an account_id, which wrangler would deploy to in place of ${TARGET_ENV}'s`,
     );
   }
-  print(`configuration: the Worker ${WORKER}, with workers.dev and preview URLs off`);
+  print(`configuration: the Worker ${WORKER}, with workers.dev and preview URLs off and no route`);
 }
 
 // The clone's own wrangler, as its frozen install put it, run by the clone's Node (mise exec).
