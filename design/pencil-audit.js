@@ -11,7 +11,9 @@
 //   (`context: "tokens width=size.icon height=size.icon"`), or at most its value when the size fits the content up to a
 //   maximum (`width<=size.column.repo`), because Pencil drops variable bindings on sizes; an asset drawn on a pixel grid
 //   (the BrandMark) records the grid instead (`context: "asset grid=16"`, or `asset grid=12x8` for a width and a height)
-//   and may take any whole multiple of it, the same multiple for width and height; the
+//   and may take any whole multiple of it, the same multiple for width and height; the Markdown measure records
+//   `context: "measure width=80ch"` and is as wide as 80 zeros in `text.body`, measured on a text the audit inserts and
+//   deletes again; the
 //   exceptions are the screen frames themselves, whose sizes are canvas sizes rather than tokens: a desktop frame is
 //   1440 wide and at least 900 tall, a panel frame `size.panel` wide (recorded in its context) and at least 800 tall,
 //   and every screen frame clips its content;
@@ -28,6 +30,21 @@
 // values but not for being inventory components; and overridden text is not checked against the component's meaning.
 
 const VARS = GetVariables().variables ?? {};
+const MEASURE = (() => {
+  const id = Insert(document, {
+    type: "text",
+    name: "audit 80ch",
+    content: "0".repeat(80),
+    fill: "$color-fg-default",
+    fontFamily: "$text-body-font-family",
+    fontSize: "$text-body-font-size",
+    fontWeight: "$text-body-font-weight",
+    lineHeight: "$text-body-line-height",
+  });
+  const [width] = Get(id, (_, c) => c.bounds.width);
+  Delete(id);
+  return Math.round(width);
+})();
 const inventory = new Set(INVENTORY);
 const frames = new Set(FRAMES);
 const sections = new Set(SECTIONS);
@@ -72,6 +89,10 @@ function size(at, n, prop) {
     if (prop === "width" && typeof n.height === "number" && v / w !== n.height / h) {
       violations.push(`${v}x${n.height} does not scale the asset grid ${w}x${h} evenly: ${at}`);
     }
+    return;
+  }
+  if (prop === "width" && /^measure width=80ch(?=[\s;]|$)/.test(String(n.context ?? ""))) {
+    if (v !== MEASURE) violations.push(`width ${v} != 80ch of text.body (${MEASURE}): ${at}`);
     return;
   }
   const [, max, token] = String(n.context ?? "").match(new RegExp(`^tokens\\b.*\\b${prop}(<?)=([\\w.-]+)`)) ?? [];
