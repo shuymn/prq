@@ -363,6 +363,8 @@ describe("the PR detail's states", () => {
     },
     "panel.send-failed": async () => {
       await visible("Couldn't confirm it was sent");
+      await expect.element(page.getByRole("button", { name: "Try again" })).toBeVisible();
+      await expect.element(page.getByRole("button", { name: "Discard" })).toBeVisible();
       expect(textOf("[data-component=Notice] .text")).toMatch(/Reloading loses your unsent question\.$/);
     },
   };
