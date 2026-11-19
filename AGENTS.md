@@ -16,6 +16,13 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`.
   serves as its static assets with the generated `_headers`. Whatever runs the Worker (the tests, `pnpm run stack`, the
   owner's checks) needs that build; the tests stop without it, saying so, and the stack and the checks build it first.
   `pnpm run icons` there writes the favicon set into `src/client/public` from the BrandMark, rendered in Chrome.
+- The component gallery (`packages/server/src/client/gallery`) renders every component and PR list state the UI has,
+  by the names `design/components.md` and `design/screens.md` give them: `vite` in `packages/server` serves it at
+  `/gallery/gallery.html` (`?entry=<name>` for one entry, at its frame's size), and `vite build --mode gallery` builds it
+  into `dist/gallery`; the production build holds none of it. The server's `client` test project runs the UI's tests
+  (`src/client/**/*.test.tsx`) in the machine's Chrome (Vitest's browser mode through playwright, the `chrome` channel),
+  their reads against a fetch the test answers; its registry test holds the gallery to the two design files, less a
+  list of what the UI has yet to build. A failed client test leaves a screenshot in `packages/server/test-output/client`.
 - `pnpm run build` in `packages/cli` compiles `prq` with Bun into the single file `packages/cli/dist/prq`; put it on
   `PATH` or run it by path. Node 24 runs the source as well (`node packages/cli/src/main.ts`), so it uses no Bun-only
   API. The CLI's tests run in Node within `pnpm run test`: they compile the binary first, then run it as a child process
