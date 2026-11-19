@@ -2,7 +2,7 @@ import * as v from "valibot";
 
 import { ContextInstructions, ContextSkill, SKILL_PATH_BYTES } from "./instructions.ts";
 import { MessageMetadata } from "./messages.ts";
-import { AgentId, MessageId, PrDetails, PrRef, Sha } from "./pr.ts";
+import { AgentId, MessageId, PrDetails, PrRef, Run, Sha } from "./pr.ts";
 
 // The longest answer a submit carries, in UTF-16 code units. Stored as JSON, each unit takes at most 6 bytes (a
 // `\u00XX` escape), so an answer stays under the Durable Object SQLite value limit (8 MB); it also bounds the history
@@ -31,11 +31,6 @@ export const JobTarget = v.variant("kind", [
   v.object({ kind: v.literal("answer"), messageId: MessageId }),
 ]);
 export type JobTarget = v.InferOutput<typeof JobTarget>;
-
-// The job's run: 1 at first, advanced each time the job goes back to waiting (the host retries it, or a push returns to
-// its superseded head). A submit names the run its answer was produced under, and is accepted only while the job is
-// still in that run.
-const Run = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
 
 // A job as a local agent receives it. workspaceSha is the commit to work at, fixed when the job was claimed: an
 // analysis's head; for an answer the head of the latest completed analysis, else the current head, else null (no push

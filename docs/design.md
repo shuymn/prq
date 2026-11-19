@@ -329,7 +329,9 @@ UI, webhook and CLI input all enter through PrSession.
   history and appends one answer through its own insert, which runs no turn and still reaches connected clients.
 - History keeps the order in which messages were saved: a question sent during a turn comes before that turn's answer,
   and a local answer comes last. Each answer carries the message ID of its question in `metadata`, and the UI uses it to
-  pair them.
+  pair them. Every result's metadata, like the start of its stream, also names its job and the job's run (rows stored
+  before the run was recorded have none): the UI keeps a run's streamed text until a stored row of that run, its
+  result or its incomplete text, replaces it.
 
 ### Notification and wait (`prq wait`)
 

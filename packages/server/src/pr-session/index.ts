@@ -1706,11 +1706,12 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
     return (await projection(this.sessions.session().history())).filter(isUIMessage).map(withSkillMarkers);
   }
 
+  // The metadata of a job's result, of its stream's start and of its incomplete text, each naming the run.
   #resultMetadata(row: JobRow, by: MessageMetadata["by"], usage?: JobUsage): MessageMetadata {
     const used = usage === undefined ? {} : { usage: usageMetadata(usage) };
     return row.kind === "answer"
-      ? { kind: "answer", jobId: row.job_id, questionId: row.target, sha: row.workspace_sha, by, ...used }
-      : { kind: "analysis", jobId: row.job_id, headSha: row.target, by, ...used };
+      ? { kind: "answer", jobId: row.job_id, questionId: row.target, sha: row.workspace_sha, run: row.run, by, ...used }
+      : { kind: "analysis", jobId: row.job_id, headSha: row.target, run: row.run, by, ...used };
   }
 
   // Inside the history queue, once the SDK's turn has ended. A turn whose job has moved on (another turn, a retry)
