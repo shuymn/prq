@@ -1,0 +1,48 @@
+@layer components {
+  [data-component="PrHeader"] {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--gap-group);
+
+    & .heading {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-related);
+      min-inline-size: 0;
+    }
+
+    & .meta {
+      display: flex;
+      align-items: center;
+      gap: var(--gap-related);
+      margin: 0;
+      font: var(--text-small);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+
+    & .repository {
+      min-inline-size: 0;
+      overflow-wrap: anywhere;
+    }
+
+    & .title {
+      margin: 0;
+      font: var(--text-title);
+      font-size-adjust: from-font;
+      color: var(--color-fg-default);
+      overflow-wrap: anywhere;
+
+      &:focus {
+        outline: none;
+      }
+    }
+
+    &[data-density="compact"] .title {
+      font: var(--text-heading);
+      font-size-adjust: from-font;
+    }
+  }
+}

@@ -856,6 +856,53 @@
                 },
                 {
                   "type": "frame",
+                  "id": "k39HG",
+                  "name": "cell chevron-left",
+                  "layout": "vertical",
+                  "gap": "$gap-tight",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "aTT9P",
+                      "name": "Icon/chevron-left",
+                      "context": "tokens width=size.icon height=size.icon",
+                      "reusable": true,
+                      "width": 16,
+                      "height": 16,
+                      "children": [
+                        {
+                          "type": "path",
+                          "id": "X4n2SS",
+                          "name": "glyph",
+                          "geometry": "M9.78 12.78a0.75 0.75 0 0 1-1.06 0l-4.25-4.25a0.75 0.75 0 0 1 0-1.06l4.25-4.25a0.751 0.751 0 0 1 1.042 0.018 0.751 0.751 0 0 1 0.018 1.042l-3.72 3.72 3.72 3.72a0.75 0.75 0 0 1 0 1.06z",
+                          "viewBox": [
+                            0,
+                            0,
+                            16,
+                            16
+                          ],
+                          "fill": "$color-fg-default",
+                          "width": "fill_container",
+                          "height": "fill_container"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "PBbfq",
+                      "name": "caption",
+                      "fill": "$color-fg-muted",
+                      "content": "chevron-left",
+                      "lineHeight": "$text-small-line-height",
+                      "fontFamily": "$text-small-font-family",
+                      "fontSize": "$text-small-font-size",
+                      "fontWeight": "$text-small-font-weight"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
                   "id": "ADhXO",
                   "name": "cell chevron-right",
                   "layout": "vertical",
@@ -7898,6 +7945,25 @@
                   "gap": "$gap-group",
                   "children": [
                     {
+                      "id": "YlTpO",
+                      "type": "ref",
+                      "ref": "Zg2Mq",
+                      "name": "back",
+                      "descendants": {
+                        "kDnaD": {
+                          "id": "C7dT9d",
+                          "type": "ref",
+                          "ref": "aTT9P",
+                          "name": "icon",
+                          "descendants": {
+                            "X4n2SS": {
+                              "fill": "$color-fg-muted"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
                       "type": "frame",
                       "id": "p7U8oU",
                       "name": "heading",
@@ -8722,7 +8788,8 @@
                       "type": "ref",
                       "ref": "x1ZTh",
                       "name": "body",
-                      "width": "fill_container"
+                      "width": 707,
+                      "context": "measure width=80ch"
                     },
                     {
                       "type": "text",
@@ -8920,7 +8987,8 @@
                       "type": "frame",
                       "id": "HtLQl",
                       "name": "body",
-                      "width": "fill_container",
+                      "context": "measure width=80ch",
+                      "width": 707,
                       "layout": "vertical",
                       "gap": "$gap-group",
                       "children": [
@@ -17753,6 +17821,10 @@
                     "rgCuK": {
                       "enabled": false
                     },
+                    "G5aTKs": {
+                      "width": 707,
+                      "context": "measure width=80ch"
+                    },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
                     },
@@ -17844,6 +17916,10 @@
                       "name": "Answer 1",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "A new claim ID lets the session drop a late result from the old claim. If the first agent submits after the retry, its claim ID no longer matches and the result is discarded."
                         },
@@ -17880,6 +17956,10 @@
                       "name": "Answer 2",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "Yes. Retry is available on any claimed or failed job at any time. The stalled mark only tells you that a claimed job has had no result for 60 minutes."
                         },
@@ -18542,6 +18622,10 @@
                     "rgCuK": {
                       "enabled": false
                     },
+                    "G5aTKs": {
+                      "width": 707,
+                      "context": "measure width=80ch"
+                    },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
                     },
@@ -18645,6 +18729,10 @@
                       "name": "Answer 1",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "A new claim ID lets the session drop a late result from the old claim. If the first agent submits after the retry, its claim ID no longer matches and the result is discarded."
                         },
@@ -18681,6 +18769,10 @@
                       "name": "Answer 2",
                       "width": "fill_container",
                       "descendants": {
+                        "W2L5HY": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "W2L5HY/J91by": {
                           "content": "Yes. Retry is available on any claimed or failed job at any time."
                         },
@@ -19048,6 +19140,10 @@
                     "rgCuK": {
                       "enabled": false
                     },
+                    "G5aTKs": {
+                      "width": 707,
+                      "context": "measure width=80ch"
+                    },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
                     },
@@ -19151,6 +19247,10 @@
                       "name": "Answer 1",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "A new claim ID lets the session drop a late result from the old claim. If the first agent submits after the retry, its claim ID no longer matches and the result is discarded."
                         },
@@ -19441,6 +19541,10 @@
                     "rgCuK": {
                       "enabled": false
                     },
+                    "G5aTKs": {
+                      "width": 707,
+                      "context": "measure width=80ch"
+                    },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
                     },
@@ -19544,6 +19648,10 @@
                       "name": "Answer 1",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "A new claim ID lets the session drop a late result from the old claim. If the first agent submits after the retry, its claim ID no longer matches and the result is discarded."
                         },
@@ -19854,6 +19962,10 @@
                     "rgCuK": {
                       "enabled": false
                     },
+                    "G5aTKs": {
+                      "width": 707,
+                      "context": "measure width=80ch"
+                    },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
                     },
@@ -19957,6 +20069,10 @@
                       "name": "Answer 1",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "A new claim ID lets the session drop a late result from the old claim. If the first agent submits after the retry, its claim ID no longer matches and the result is discarded."
                         },
@@ -20279,6 +20395,10 @@
                     "rgCuK": {
                       "enabled": false
                     },
+                    "G5aTKs": {
+                      "width": 707,
+                      "context": "measure width=80ch"
+                    },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
                     },
@@ -20382,6 +20502,10 @@
                       "name": "Answer 1",
                       "width": "fill_container",
                       "descendants": {
+                        "W2L5HY": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "W2L5HY/J91by": {
                           "content": "A new claim ID lets the session drop a late result from the old claim."
                         },
@@ -20769,6 +20893,10 @@
                     "rgCuK": {
                       "enabled": false
                     },
+                    "G5aTKs": {
+                      "width": 707,
+                      "context": "measure width=80ch"
+                    },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
                     },
@@ -20872,6 +21000,10 @@
                       "name": "Answer 1",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "A new claim ID lets the session drop a late result from the old claim. If the first agent submits after the retry, its claim ID no longer matches and the result is discarded."
                         },
@@ -21065,6 +21197,10 @@
                     "rgCuK": {
                       "enabled": false
                     },
+                    "G5aTKs": {
+                      "width": 707,
+                      "context": "measure width=80ch"
+                    },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
                     },
@@ -21168,6 +21304,10 @@
                       "name": "Answer 1",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "GitHub redelivers an event whose delivery got an error response. Acknowledging unknown events keeps those redeliveries from piling up."
                         },
@@ -21204,6 +21344,10 @@
                       "name": "Answer 2",
                       "width": "fill_container",
                       "descendants": {
+                        "ypxK3": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "ypxK3/J91by": {
                           "content": "The installation token is read in installation.ts when the app is installed, and in pull_request.ts before the checkout. The comment handler then"
                         },
@@ -21604,6 +21748,10 @@
                     "rgCuK": {
                       "enabled": false
                     },
+                    "G5aTKs": {
+                      "width": 707,
+                      "context": "measure width=80ch"
+                    },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
                     },
@@ -21707,6 +21855,10 @@
                       "name": "Answer 1",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "A new claim ID lets the session drop a late result from the old claim. If the first agent submits after the retry, its claim ID no longer matches and the result is discarded."
                         },
@@ -21968,6 +22120,10 @@
                     "rgCuK": {
                       "enabled": false
                     },
+                    "G5aTKs": {
+                      "width": 707,
+                      "context": "measure width=80ch"
+                    },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
                     },
@@ -22074,6 +22230,10 @@
                       "name": "Answer 1",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "A new claim ID lets the session drop a late result from the old claim. If the first agent submits after the retry, its claim ID no longer matches and the result is discarded."
                         },
@@ -22110,6 +22270,10 @@
                       "name": "Answer 2",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "Yes. I read a1b2c3d: there the retry route only set the job back to pending and kept its claim ID, so a late result from the first agent was still accepted. At e4f5a6b a retry issues a new claim ID."
                         },
@@ -28998,6 +29162,10 @@
                     "rgCuK": {
                       "enabled": false
                     },
+                    "G5aTKs": {
+                      "width": 707,
+                      "context": "measure width=80ch"
+                    },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
                     },
@@ -29101,6 +29269,10 @@
                       "name": "Answer 1",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "A new claim ID lets the session drop a late result from the old claim. If the first agent submits after the retry, its claim ID no longer matches and the result is discarded."
                         },
@@ -30403,6 +30575,10 @@
                     "rgCuK": {
                       "enabled": false
                     },
+                    "G5aTKs": {
+                      "width": 707,
+                      "context": "measure width=80ch"
+                    },
                     "G5aTKs/y5inXt": {
                       "content": "What changed"
                     },
@@ -30506,6 +30682,10 @@
                       "name": "Answer 1",
                       "width": "fill_container",
                       "descendants": {
+                        "cinzx": {
+                          "width": 707,
+                          "context": "measure width=80ch"
+                        },
                         "cinzx/J91by": {
                           "content": "A new claim ID lets the session drop a late result from the old claim. If the first agent submits after the retry, its claim ID no longer matches and the result is discarded."
                         },

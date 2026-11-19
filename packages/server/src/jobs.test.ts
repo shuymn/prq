@@ -258,6 +258,7 @@ describe("submit", () => {
           jobId: claim.jobId,
           questionId: "q1",
           sha: null,
+          run: 1,
           by: { kind: "local", agentId: "agent-a" },
         },
         parts: [{ type: "text", text: "the answer" }],

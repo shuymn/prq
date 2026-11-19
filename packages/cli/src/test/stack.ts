@@ -1,7 +1,7 @@
-// What an end-to-end test file runs against: one Worker for the file, reset before each test, behind the stand-in
-// Access, and the CLI runs of the test, each with a fresh HOME and state root in the test's fixture root (outside every
-// repository), and git isolated in it as the fixtures' git is. A run still going when its test ends is killed, and its
-// exit awaited, before the next test starts.
+// What an end-to-end test file runs against: one Worker for the file (with the model given), reset before each test,
+// behind the stand-in Access, and the CLI runs of the test, each with a fresh HOME and state root in the test's fixture
+// root (outside every repository), and git isolated in it as the fixtures' git is. A run still going when its test ends
+// is killed, and its exit awaited, before the next test starts.
 
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -12,7 +12,7 @@ import { type Access, startAccess } from "./access.ts";
 import { type Exit, type Running, startCli } from "./cli.ts";
 import { fixtureRoot, gitEnv } from "./git.ts";
 import { agents } from "./pr.ts";
-import { startWorker, type Worker } from "./worker.ts";
+import { type ModelSettings, startWorker, type Worker } from "./worker.ts";
 
 type EnvOverrides = Readonly<Record<string, string | undefined>>;
 
@@ -36,14 +36,14 @@ function required<T>(value: T | undefined, what: string): T {
   return value;
 }
 
-export function useStack(): Stack {
+export function useStack({ model }: { model?: ModelSettings } = {}): Stack {
   let worker: Worker | undefined;
   let access: Access | undefined;
   let dir: string | undefined;
   const running = new Set<Running>();
 
   beforeAll(async () => {
-    worker = await startWorker();
+    worker = await startWorker(model === undefined ? {} : { model });
     access = await startAccess(worker);
   });
   beforeEach(async () => {

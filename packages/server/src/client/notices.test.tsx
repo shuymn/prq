@@ -13,12 +13,12 @@ const notices = () => document.querySelectorAll("[data-component=Notice]");
 
 describe("the build's notice", () => {
   test("none while the server runs this build and every asset loaded", async () => {
-    await render(<BuildNotice serverVersion={__PRQ_VERSION__} assetFailed={false} />);
+    await render(<BuildNotice serverVersions={[__PRQ_VERSION__]} assetFailed={false} />);
     expect(notices()).toHaveLength(0);
   });
 
   test("the asset notice for a failed asset alone", async () => {
-    await render(<BuildNotice serverVersion={__PRQ_VERSION__} assetFailed />);
+    await render(<BuildNotice serverVersions={[__PRQ_VERSION__]} assetFailed />);
     await expect.element(page.getByText(ASSET_TITLE)).toBeVisible();
     await expect.element(page.getByRole("button", { name: "Reload" })).toBeVisible();
     expect(notices()).toHaveLength(1);
@@ -26,7 +26,7 @@ describe("the build's notice", () => {
 
   test("only the version notice for another server version, with or without a failed asset", async () => {
     for (const assetFailed of [false, true]) {
-      const screen = await render(<BuildNotice serverVersion="v999.0.0" assetFailed={assetFailed} />);
+      const screen = await render(<BuildNotice serverVersions={["v999.0.0"]} assetFailed={assetFailed} />);
       await expect.element(page.getByText(VERSION_TITLE)).toBeVisible();
       expect(page.getByText(ASSET_TITLE).elements()).toEqual([]);
       expect(notices()).toHaveLength(1);

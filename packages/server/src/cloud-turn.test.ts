@@ -138,6 +138,7 @@ describe("commit", () => {
       jobId: job.job_id,
       questionId: "q1",
       sha: null,
+      run: 1,
       by: { kind: "cloud", model: "model-x" },
       usage: { inputTokens: 120, outputTokens: 30, cachedInputTokens: 100 },
     });
@@ -283,6 +284,44 @@ describe("failure", () => {
       `answer-${job.job_id}`,
     ]);
     expect(events(logs, "prq.job.failed")).toMatchObject([{ from: "running", to: "failed", reason: "lost" }]);
+  });
+
+  it("names the run in each run's stream start, in its incomplete text and in the retried run's result", async () => {
+    captureLogs();
+    const session = await cloudSession("turn", sockets);
+    const { stub, client } = session;
+    const model = new ScriptedModel().add(
+      [{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "partial" }, { fail: new Error("lost") }],
+      answerScript("answer one"),
+    );
+    useCloudModel(model);
+
+    await client.chat([Q1]);
+    await untilState(stub, "q1", "failed");
+    const job = await jobOf(stub, "q1");
+    expect(await retryIn(stub, job.job_id)).toEqual({ status: "retried" });
+    await untilState(stub, "q1", "done");
+
+    const metadataOf = async (id: string) => v.parse(MessageMetadata, (await stored(session, id))?.metadata);
+    expect(await metadataOf(`answer-${job.job_id}-r1-incomplete`)).toMatchObject({ jobId: job.job_id, run: 1 });
+    expect(await metadataOf(`answer-${job.job_id}`)).toMatchObject({ jobId: job.job_id, run: 2 });
+    // Each run's stream starts with the same message ID, its start metadata naming the run.
+    const starts = client.frames.flatMap((frame) => {
+      const body = frame["type"] === "cf_agent_use_chat_response" ? frame["body"] : undefined;
+      const start = v.safeParse(
+        v.pipe(
+          v.string(),
+          v.parseJson(),
+          v.object({ type: v.literal("start"), messageId: v.string(), messageMetadata: MessageMetadata }),
+        ),
+        body,
+      );
+      return start.success ? [{ messageId: start.output.messageId, run: start.output.messageMetadata.run }] : [];
+    });
+    expect(starts).toEqual([
+      { messageId: `answer-${job.job_id}`, run: 1 },
+      { messageId: `answer-${job.job_id}`, run: 2 },
+    ]);
   });
 
   it("fails a turn a client cancels, keeping its text as incomplete", async () => {

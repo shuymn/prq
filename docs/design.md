@@ -329,7 +329,9 @@ UI, webhook and CLI input all enter through PrSession.
   history and appends one answer through its own insert, which runs no turn and still reaches connected clients.
 - History keeps the order in which messages were saved: a question sent during a turn comes before that turn's answer,
   and a local answer comes last. Each answer carries the message ID of its question in `metadata`, and the UI uses it to
-  pair them.
+  pair them. Every result's metadata, like the start of its stream, also names its job and the job's run (rows stored
+  before the run was recorded have none): the UI keeps a run's streamed text until a stored row of that run, its
+  result or its incomplete text, replaces it.
 
 ### Notification and wait (`prq wait`)
 
@@ -1215,14 +1217,19 @@ Browser and edge:
 - Every response the Worker generates is `Cache-Control: no-store`, errors included: `/api/*`, `/cli/*` and the Agents
   SDK's HTTP endpoints under `/agents/*` (the conversation history the UI fetches when it opens a PR). The Cloudflare
   cache and the Cache API are not used for them: every response is private and behind Access.
-- The UI keeps no data cache. It loads a PR's history over HTTP when it opens it; after that, conversation, jobs and the
-  Hub's view come over the Agents SDK WebSocket, which resyncs the state after each successful reconnect. The ledger's
+- The UI keeps no data cache. It reads a PR's history over HTTP (`get-messages`) when it opens it, each time the
+  session's WebSocket opens again, when the session says its history changed (`prq:history-changed`), and when a
+  question's send settles without the history holding it yet. A read whose list lacks a message the page shows, or that
+  fails, changes nothing shown; a failed refresh says so beside what was loaded. Otherwise conversation, jobs and the
+  Hub's view come over the Agents SDK WebSocket, which resyncs the state after each successful reconnect, and an
+  answer's streamed text stays until its run's stored row replaces it. The ledger's
   rows come over HTTP in pages, read again when the Hub's view says the ledger or presence changed, and so do the
   present agents and the repositories, read when the pool or the repository menu opens. There is no
   service worker and no offline mode. Browser storage holds only view preferences (the rail collapsed, the list
   filters).
-- When reconnecting keeps failing (an expired Access session fails every attempt, and a WebSocket cannot follow the
-  sign-in redirect), the UI offers to reload the page, which lets Access sign in again.
+- When the PR detail's WebSocket has not opened again 15 seconds after it closed (an expired Access session fails every
+  attempt, and a WebSocket cannot follow the sign-in redirect), the page says it cannot reconnect, keeps what it shows
+  and offers to reload, which lets Access sign in again; it recovers if the connection opens meanwhile.
 - A tab opened before a deploy keeps running the old bundle. The server sends its version on every WebSocket connection
   (see [Versions](#versions)); when it differs from the UI's build version, or a lazily loaded asset fails to load, the
   UI shows a non-blocking notice to reload.

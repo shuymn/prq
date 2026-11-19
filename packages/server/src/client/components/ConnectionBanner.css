@@ -1,0 +1,36 @@
+@layer components {
+  [data-component="ConnectionBanner"] {
+    display: flex;
+    align-items: center;
+    gap: var(--gap-related);
+    padding: var(--inset-card);
+    color: var(--color-fg-default);
+    background: var(--color-attention-bg);
+
+    & .message {
+      display: flex;
+      align-items: flex-start;
+      flex: 1;
+      gap: var(--gap-tight);
+      margin: 0;
+      font: var(--text-body);
+      font-size-adjust: from-font;
+    }
+
+    /* One line of the text high, so the plug centres on its first line. */
+    & .lead {
+      display: flex;
+      align-items: center;
+      block-size: 1lh;
+      color: var(--color-attention-fg);
+    }
+
+    &[data-state="failed"] {
+      background: var(--color-danger-bg);
+
+      & .lead {
+        color: var(--color-danger-fg);
+      }
+    }
+  }
+}

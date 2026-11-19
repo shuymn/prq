@@ -247,6 +247,21 @@ describe("a WebSocket upgrade through the door", () => {
     await reset;
   });
 
+  test("cut() ends the open sockets of the paths it names, both sides, and leaves the others carrying bytes", async () => {
+    const worker = await upstream(() => {}, echoUpgrade);
+    const front = await door(worker.url);
+    const session = switched(await upgrade(`${front.url}/agents/pr-session/a~b~1`));
+    const hub = switched(await upgrade(`${front.url}/agents/hub/hub`));
+    const closed = once(session, "close");
+    expect(front.cut((path) => path.startsWith("/agents/pr-session/"))).toBe(1);
+    await closed;
+    await expect.poll(() => worker.connections.filter((connection) => connection.closed)).toHaveLength(1);
+    const echoed = once(hub, "data");
+    hub.write("still open");
+    expect(String((await echoed)[0])).toBe("still open");
+    expect(front.cut((path) => path.startsWith("/agents/pr-session/"))).toBe(0);
+  });
+
   test.each([
     ["a fixed length", 'Content-Length: 24\r\n\r\n{"error":"unauthorized"}'],
     ["chunks", 'Transfer-Encoding: chunked\r\n\r\n18\r\n{"error":"unauthorized"}\r\n0\r\n\r\n'],

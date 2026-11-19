@@ -64,6 +64,19 @@ function subscribe(listener: () => void): () => void {
 
 const currentUrl = () => navigation.currentEntry?.url ?? location.href;
 
+// Back to the PR list (the compact PrHeader's back control): back through history when the entry before this one is the
+// list, else to the list as a new entry, so that the browser's Back still returns here (a link that opened the
+// detail directly, or another detail before it).
+export function backToList(): void {
+  const index = navigation.currentEntry?.index ?? -1;
+  const previous = index > 0 ? navigation.entries()[index - 1]?.url : undefined;
+  if (previous !== undefined && previous !== null && routeOf(previous).name === "list") {
+    navigation.back();
+  } else {
+    navigation.navigate("/");
+  }
+}
+
 // The route of the current entry. One subscriber (the app) intercepts navigations.
 export function useRoute(): Route {
   const href = useSyncExternalStore(subscribe, currentUrl);

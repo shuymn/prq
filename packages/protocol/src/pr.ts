@@ -60,6 +60,11 @@ export const PrDetails = v.object({
 });
 export type PrDetails = v.InferOutput<typeof PrDetails>;
 
+// A job's run: 1 at first, advanced each time the job goes back to waiting (the host retries it, or a push returns to
+// its superseded head). A submit names the run its answer was produced under, and is accepted only while the job is
+// still in that run; a result's metadata names the run it was produced under.
+export const Run = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
+
 // A conversation message's ID.
 export const MessageId = v.pipe(v.string(), v.minLength(1), v.maxLength(256));
 

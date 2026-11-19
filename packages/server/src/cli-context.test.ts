@@ -141,6 +141,7 @@ describe("context", () => {
           kind: "analysis",
           jobId: analysis.job.jobId,
           headSha: sha("A"),
+          run: 1,
           by: { kind: "local", agentId: "desk" },
         },
       },

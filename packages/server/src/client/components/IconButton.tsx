@@ -33,3 +33,21 @@ export function IconButton({
     </button>
   );
 }
+
+// An icon button that is a link to another site, opened in a new tab ("Open on GitHub" in the compact PrHeader).
+export function IconButtonLink({ icon, label, href }: { icon: IconName; label: string; href: string }) {
+  return (
+    <a
+      data-component="IconButton"
+      data-variant="invisible"
+      data-size="md"
+      data-state="rest"
+      aria-label={label}
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+    >
+      <Icon name={icon} />
+    </a>
+  );
+}

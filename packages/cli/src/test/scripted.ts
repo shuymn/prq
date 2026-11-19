@@ -1,10 +1,12 @@
-// A scripted model for the manual checks that need a deterministic turn (check:skills's context step): the Worker's
-// model settings name a provider under .example, which never resolves, and the harness hands the Worker's request to
-// this process's globalThis.fetch, which a wrapper answers here as an OpenAI-compatible provider streams: a tool call
-// or a text, then the finish and the usage. What it answers is the check's script, given each request's body.
+// A scripted model for the checks that need a deterministic turn (check:skills's context step, the PR detail's cloud
+// scenarios): the Worker's model settings name a provider under .example, which never resolves, and the harness hands
+// the Worker's request to this process's globalThis.fetch, which a wrapper answers here as an OpenAI-compatible provider
+// streams: a tool call or a text, then the finish and the usage. What it answers is the check's script, given each
+// request's body.
 
 import * as v from "valibot";
 
+import type { Latch } from "./latch.ts";
 import type { ModelSettings } from "./worker.ts";
 
 const ROOT = "https://scripted.prq.example/v1";
@@ -43,12 +45,36 @@ export function chatRequest(body: string): ChatRequest {
   return v.parse(ChatRequest, JSON.parse(body));
 }
 
-// What the script answers a request with: one tool call, or a final text.
-export type Scripted = { tool: string; input: Record<string, unknown> } | { text: string };
+// A stream that stops after its first `after` text chunks, opening reached, until release opens or the Worker cancels it.
+export type Hold = { after: number; reached: Latch; release: Latch };
 
-function stream(chunks: unknown[]): Response {
-  const text = `${chunks.map((entry) => `data: ${JSON.stringify(entry)}\n\n`).join("")}data: [DONE]\n\n`;
-  return new Response(text, { headers: { "content-type": "text/event-stream" } });
+// What the script answers a request with: one tool call, or a final text, streamed as one chunk or as the chunks given.
+export type Scripted = { tool: string; input: Record<string, unknown> } | { text: string | string[]; hold?: Hold };
+
+function stream(chunks: unknown[], hold?: Hold): Response {
+  const events = [...chunks.map((entry) => `data: ${JSON.stringify(entry)}\n\n`), "data: [DONE]\n\n"];
+  const encoder = new TextEncoder();
+  const cancelled = Promise.withResolvers<void>();
+  let next = 0;
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (hold !== undefined && next === hold.after) {
+        hold.reached.open();
+        await Promise.race([hold.release.promise, cancelled.promise]);
+      }
+      const event = events[next];
+      next += 1;
+      if (event === undefined) {
+        controller.close();
+      } else {
+        controller.enqueue(encoder.encode(event));
+      }
+    },
+    cancel() {
+      cancelled.resolve();
+    },
+  });
+  return new Response(body, { headers: { "content-type": "text/event-stream" } });
 }
 
 function chunk(choice: Record<string, unknown>): Record<string, unknown> {
@@ -95,11 +121,17 @@ export function serveScripted(): { play: (script: Script) => void; stop: () => v
         usage,
       ]);
     }
-    return stream([
-      chunk({ delta: { role: "assistant", content: reply.text } }),
-      chunk({ delta: {}, finish_reason: "stop" }),
-      usage,
-    ]);
+    const texts = typeof reply.text === "string" ? [reply.text] : reply.text;
+    return stream(
+      [
+        ...texts.map((text, index) =>
+          chunk({ delta: index === 0 ? { role: "assistant", content: text } : { content: text } }),
+        ),
+        chunk({ delta: {}, finish_reason: "stop" }),
+        usage,
+      ],
+      reply.hold,
+    );
   };
   return {
     play: (next) => {

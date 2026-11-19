@@ -127,6 +127,10 @@ like everywhere else. It is also placed on whole pixels: next to a name it centr
 x-height when the name is lowercase only ("prq"), rounded to the nearest whole pixel; a layout frame around it records
 the offset in its `context`.
 
+The Markdown measure is not a token either: code caps rendered Markdown at `80ch`, which follows the font. In Pencil a
+Markdown body wider than that is as wide as 80 zeros in `text.body` and records `measure width=80ch` in its `context`;
+the audit measures that width in the document and compares.
+
 ### Checking the document
 
 `pencil-audit.js` reports every fill, stroke, radius, padding, gap, text property or shadow that is not bound to a

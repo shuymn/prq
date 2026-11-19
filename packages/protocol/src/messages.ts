@@ -1,6 +1,6 @@
 import * as v from "valibot";
 
-import { AgentId, MessageId, Sha } from "./pr.ts";
+import { AgentId, MessageId, Run, Sha } from "./pr.ts";
 
 // Who added a server message: a local agent by its ID, or the cloud agent by the model it ran.
 const Author = v.variant("kind", [
@@ -18,14 +18,16 @@ const Incomplete = v.object({ reason: v.pipe(v.string(), v.maxLength(1000)) });
 
 // The metadata of a message the server appends; questions from the UI carry none. An answer names its job, the
 // question it answers (the UI pairs them by it) and the commit it was written at (the job's workspaceSha). An analysis
-// names its job and the head it summarizes. A cloud result also carries its usage, and a cloud turn's text kept after
-// a failure is marked incomplete.
+// names its job and the head it summarizes. Both name the job's run (rows stored before it was recorded have none), as
+// a stream's start does: the UI keeps a run's streamed text until a stored row of that run replaces it. A cloud result also carries its usage, and a cloud turn's
+// text kept after a failure is marked incomplete.
 export const MessageMetadata = v.variant("kind", [
   v.object({
     kind: v.literal("answer"),
     jobId: v.string(),
     questionId: MessageId,
     sha: v.nullable(Sha),
+    run: v.optional(Run),
     by: Author,
     usage: v.optional(Usage),
     incomplete: v.optional(Incomplete),
@@ -34,6 +36,7 @@ export const MessageMetadata = v.variant("kind", [
     kind: v.literal("analysis"),
     jobId: v.string(),
     headSha: Sha,
+    run: v.optional(Run),
     by: Author,
     usage: v.optional(Usage),
     incomplete: v.optional(Incomplete),

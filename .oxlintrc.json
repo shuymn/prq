@@ -19,8 +19,9 @@
       "rules": {
         // The automatic JSX runtime (tsconfig.client.json) needs no React in scope.
         "react/react-in-jsx-scope": "off",
-        // A stylesheet is imported for its effect.
-        "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
+        // A stylesheet is imported for its effect, and so is zod's setting, which must precede every schema
+        // (src/client/zod.ts).
+        "import/no-unassigned-import": ["error", { "allow": ["**/*.css", "./zod.ts"] }],
         // The build's define (src/client/env.d.ts) follows Vite's naming.
         "no-underscore-dangle": ["error", { "allow": ["__PRQ_VERSION__"] }],
         "react/forbid-dom-props": ["error", { "forbid": ["style", "fill", "stroke", "width", "height"] }],

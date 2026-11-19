@@ -8,6 +8,7 @@ import * as v from "valibot";
 import { describe, expect, test, vi } from "vitest";
 
 import { useBrowser } from "../../test/browser.ts";
+import { gateUpgrades } from "../../test/door.ts";
 import { latch } from "../../test/latch.ts";
 import { buildOldBundle, OLD_VERSION } from "../../test/old-bundle.ts";
 import { push, sha } from "../../test/pr.ts";
@@ -52,18 +53,7 @@ async function freshRead(): Promise<{ rows: string[]; pages: number[] }> {
 }
 
 // Gates the Hub's upgrades, a retry's too, until released.
-function gateHub() {
-  const arrived = latch();
-  const release = latch();
-  for (let i = 0; i < 5; i += 1) {
-    stack.access().door.plan((path) => path.startsWith("/agents/hub/"), {
-      kind: "gate",
-      arrived: i === 0 ? arrived : latch(),
-      release,
-    });
-  }
-  return { arrived, release };
-}
+const gateHub = () => gateUpgrades(stack.access().door, (path) => path.startsWith("/agents/hub/"), 5);
 
 // A local agent's wait, with no work to wait for: it times out, its start and end contacts with the Hub.
 async function agentWait(agentId: string): Promise<void> {

@@ -1,0 +1,89 @@
+@layer components {
+  /* Blocks a group gap apart, list items a related gap, the measure at most 80 characters. */
+  [data-component="Markdown"] {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-group);
+    min-inline-size: 0;
+    max-inline-size: 80ch;
+    font: var(--text-body);
+    font-size-adjust: from-font;
+    color: var(--color-fg-default);
+    overflow-wrap: anywhere;
+
+    & :where(p, ul, ol, h1, h2, h3, h4, h5, h6, blockquote, table) {
+      margin: 0;
+    }
+
+    & :where(h1, h2) {
+      font: var(--text-heading);
+      font-size-adjust: from-font;
+    }
+
+    & :where(h3, h4, h5, h6) {
+      font: var(--text-body-strong);
+      font-size-adjust: from-font;
+    }
+
+    & :where(ul, ol) {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-related);
+      padding-inline-start: var(--gap-group);
+
+      & ::marker {
+        color: var(--color-fg-muted);
+      }
+    }
+
+    & a {
+      color: var(--color-accent-fg);
+      text-decoration: underline;
+    }
+
+    & :not(pre) > code {
+      padding-inline: var(--inset-inline);
+      border-radius: var(--radius-sm);
+      font: var(--text-code-small);
+      font-size-adjust: from-font;
+      background: var(--color-bg-muted);
+    }
+
+    & blockquote {
+      padding-inline-start: calc(var(--inset-card) - var(--border-width-thick));
+      border-inline-start: var(--border-width-thick) solid var(--color-border-default);
+      color: var(--color-fg-muted);
+    }
+
+    /* A table wider than the content scrolls within its own box, so the page keeps its width. */
+    & .table {
+      overflow-x: auto;
+    }
+
+    & table {
+      inline-size: 100%;
+      border: var(--border-width-thin) solid var(--color-border-default);
+      border-radius: var(--radius-md);
+      border-spacing: 0;
+    }
+
+    & :where(th, td) {
+      block-size: var(--size-row);
+      padding-block: 0;
+      padding-inline: var(--inset-control-md);
+      text-align: start;
+    }
+
+    & th {
+      font: var(--text-small-strong);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+      background: var(--color-bg-subtle);
+    }
+
+    & tr + tr > td,
+    & tbody tr:first-child > td {
+      border-block-start: var(--border-width-thin) solid var(--color-border-default);
+    }
+  }
+}
