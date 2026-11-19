@@ -8,6 +8,7 @@
     "stack": "pnpm --filter @prq/server run build && node src/test/local-stack.ts",
     "check:cloud": "pnpm --filter @prq/server run build && node src/test/cloud-check.ts",
     "check:compaction": "pnpm --filter @prq/server run build && node src/test/compaction-check.ts",
+    "check:deployed": "node src/test/deployed-check.ts",
     "check:reconcile": "pnpm --filter @prq/server run build && node src/test/reconcile-check.ts",
     "check:skills": "pnpm --filter @prq/server run build && node src/test/skills-check.ts",
     "check:workspace": "pnpm --filter @prq/server run build && node src/test/workspace-check.ts",
