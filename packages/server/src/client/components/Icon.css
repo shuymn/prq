@@ -1,0 +1,9 @@
+@layer components {
+  /* The Octicon's own size attributes give way to the token. */
+  [data-component="Icon"] {
+    display: block;
+    flex: none;
+    inline-size: var(--size-icon);
+    block-size: var(--size-icon);
+  }
+}

@@ -1,0 +1,29 @@
+@layer screens {
+  .gallery {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-section);
+    padding: var(--inset-page);
+
+    & h2 {
+      margin: 0;
+      font: var(--text-small-strong);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+
+    & a {
+      color: inherit;
+    }
+
+    & .entry {
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap-related);
+    }
+
+    & .specimen {
+      display: flex;
+    }
+  }
+}

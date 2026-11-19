@@ -1,0 +1,12 @@
+@layer components {
+  [data-component="Sha"] {
+    display: inline-flex;
+    align-items: center;
+    padding-inline: var(--inset-inline);
+    border-radius: var(--radius-sm);
+    font: var(--text-code-small);
+    font-size-adjust: from-font;
+    color: var(--color-fg-default);
+    background: var(--color-bg-muted);
+  }
+}

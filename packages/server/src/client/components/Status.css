@@ -1,0 +1,33 @@
+@layer components {
+  /* The icon sits in a lead one line of the label high, so it centres on the first line when the label wraps. */
+  [data-component="Status"] {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: var(--gap-tight);
+    font: var(--text-small-strong);
+    font-size-adjust: from-font;
+    color: var(--color-fg-muted);
+
+    & .lead {
+      display: flex;
+      align-items: center;
+      block-size: 1lh;
+    }
+
+    &[data-state="done"] {
+      color: var(--color-success-fg);
+    }
+
+    &[data-state="running"] {
+      color: var(--color-accent-fg);
+    }
+
+    &[data-state="stalled"] {
+      color: var(--color-attention-fg);
+    }
+
+    &[data-state="failed"] {
+      color: var(--color-danger-fg);
+    }
+  }
+}

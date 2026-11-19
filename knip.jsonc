@@ -5,8 +5,12 @@
   "workspaces": {
     ".": {
       // The design scripts, run by hand (`node design/*.mjs`) or through the Pencil MCP `execute` tool
-      // (design/README.md).
-      "entry": ["design/*.{js,mjs}"],
+      // (design/README.md), and the types the web UI's gallery check reads inventory.mjs with.
+      "entry": ["design/*.{js,mjs}", "design/inventory.d.mts"],
+    },
+    "packages/server": {
+      // The component gallery's page, which src/client/gallery/gallery.html loads (`vite build --mode gallery`).
+      "entry": ["src/client/gallery/main.tsx"],
     },
     "packages/cli": {
       // The binary's entry (the default, kept when an entry is listed), and the local stack's worker process, which

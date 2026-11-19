@@ -330,7 +330,7 @@ async function start(): Promise<void> {
   process.stdout.write(
     [
       `prq local stack: the Worker behind the Access stand-in at ${access.url}; nothing reaches the network.`,
-      `The web UI, through the stand-in's browser door: ${access.door}`,
+      `The web UI, through the stand-in's browser door: ${access.door.url}`,
       `The session's environment (also in ${join(root, "session.env")}):`,
       ...exports.map((line) => `  export ${line}`),
       `Control: curl -s -X POST ${controlUrl}/<command>, one of ${Object.keys(commands).join(", ")}, stop;`,

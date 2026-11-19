@@ -14,8 +14,8 @@ const INLINE_SIZES = ["inline-size", "min-inline-size", "max-inline-size", "widt
 // string would let `WIDTH` or `FONT-FAMILY` pass.
 const property = (name) => `/^${name}$/i`;
 
-// The values a size may take: a token, or one of a few intrinsic values (a line count for block sizes, the measure for
-// running text).
+// The values a size may take: a token, or one of a few intrinsic values (the room a containing block leaves, a line
+// count for block sizes, the measure for running text).
 const sizes = (names, values) => Object.fromEntries(names.map((name) => [property(name), [TOKEN, ...values]]));
 
 // Properties that take a color: a token, or a keyword that names no color of its own (system colors such as
@@ -25,7 +25,7 @@ const COLORS =
   "border(-(top|right|bottom|left|block|inline)(-(start|end))?)?-color)$/i";
 
 const VALUES = {
-  ...sizes(BLOCK_SIZES, ["auto", "0", "100%", "1lh", "3lh", "10lh"]),
+  ...sizes(BLOCK_SIZES, ["auto", "0", "100%", "stretch", "1lh", "3lh", "10lh"]),
   ...sizes(INLINE_SIZES, ["auto", "0", "100%", "none"]),
   [property("max-inline-size")]: [TOKEN, "auto", "0", "100%", "none", "80ch"],
   [COLORS]: [TOKENS, "inherit", /^currentcolor$/i, "transparent", "none"],

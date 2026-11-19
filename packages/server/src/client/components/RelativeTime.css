@@ -1,0 +1,8 @@
+@layer components {
+  [data-component="RelativeTime"] {
+    font: var(--text-small);
+    font-size-adjust: from-font;
+    color: var(--color-fg-muted);
+    white-space: nowrap;
+  }
+}

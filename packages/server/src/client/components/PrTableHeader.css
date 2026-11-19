@@ -1,0 +1,27 @@
+@layer components {
+  /* The muted headings over a rule stronger than the rows', on the table's columns (screens/PrList.css). It stays in
+     view while the rows scroll, on the page's own background. */
+  [data-component="PrTableHeader"] {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 1;
+    block-size: var(--size-row);
+    border-block-end: var(--border-width-thin) solid var(--color-border-default);
+    background: var(--color-bg-canvas);
+
+    & th {
+      display: flex;
+      align-items: center;
+      padding: 0;
+      font: var(--text-small-strong);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+      text-align: start;
+      white-space: nowrap;
+    }
+
+    & .event-cell {
+      justify-content: flex-end;
+    }
+  }
+}

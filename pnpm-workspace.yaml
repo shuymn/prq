@@ -44,6 +44,8 @@ catalog:
   # into CSS custom properties by Style Dictionary at build; Inter and JetBrains Mono self-hosted.
   "@fontsource/inter": 5.3.0
   "@fontsource/jetbrains-mono": 5.3.0
+  # The icons the components show: GitHub's Octicons as React components.
+  "@primer/octicons-react": 19.42.0
   "@types/react": 19.3.0
   "@types/react-dom": 19.3.0
   "@vitejs/plugin-react": 6.3.0
@@ -59,6 +61,10 @@ catalog:
   fast-check: 4.10.2
   typescript: 7.0.2
   vitest: 5.1.0
+  # The web UI's client tests: Vitest's browser mode in the machine's Chrome through playwright, and React rendered
+  # into it.
+  "@vitest/browser-playwright": 5.1.0
+  vitest-browser-react: 2.3.0
 
   # The CLI: Node's types on the runtime's major line (mise.toml), so an API newer than Node 24 does not type-check;
   # and wrangler for its tests, which run the Worker through its test harness (the version the vitest plugin resolves).

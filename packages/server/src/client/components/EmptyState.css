@@ -1,0 +1,32 @@
+@layer components {
+  [data-component="EmptyState"] {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--gap-related);
+    /* The inset counts from the outer edge and the border lies inside it, as Pencil draws a stroke. */
+    padding: calc(var(--inset-card) - var(--border-width-thin));
+    border: var(--border-width-thin) solid var(--color-border-muted);
+    border-radius: var(--radius-md);
+    text-align: center;
+    color: var(--color-fg-muted);
+
+    & .title {
+      margin: 0;
+      font: var(--text-heading);
+      font-size-adjust: from-font;
+      color: var(--color-fg-default);
+    }
+
+    & .text {
+      margin: 0;
+      font: var(--text-body);
+      font-size-adjust: from-font;
+    }
+
+    & .actions {
+      display: flex;
+      gap: var(--gap-related);
+    }
+  }
+}

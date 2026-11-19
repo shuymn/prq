@@ -1,0 +1,64 @@
+@layer components {
+  [data-component="Notice"] {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--gap-tight);
+    padding: var(--inset-card);
+    border-radius: var(--radius-md);
+    color: var(--color-fg-default);
+    background: var(--color-accent-bg);
+
+    /* One line of the title high, so the icon centres on its first line. */
+    & .lead {
+      display: flex;
+      align-items: center;
+      block-size: 1lh;
+      font: var(--text-body-strong);
+      font-size-adjust: from-font;
+      color: var(--color-accent-fg);
+    }
+
+    & .body {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      gap: var(--gap-related);
+      min-inline-size: 0;
+    }
+
+    & p {
+      margin: 0;
+    }
+
+    & .title {
+      font: var(--text-body-strong);
+      font-size-adjust: from-font;
+    }
+
+    & .text {
+      font: var(--text-body);
+      font-size-adjust: from-font;
+    }
+
+    & .actions {
+      display: flex;
+      gap: var(--gap-related);
+    }
+
+    &[data-tone="attention"] {
+      background: var(--color-attention-bg);
+
+      & .lead {
+        color: var(--color-attention-fg);
+      }
+    }
+
+    &[data-tone="danger"] {
+      background: var(--color-danger-bg);
+
+      & .lead {
+        color: var(--color-danger-fg);
+      }
+    }
+  }
+}

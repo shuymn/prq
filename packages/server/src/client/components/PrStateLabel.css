@@ -1,0 +1,23 @@
+@layer components {
+  [data-component="PrStateLabel"] {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--gap-tight);
+    block-size: var(--size-control-sm);
+    padding-inline: var(--inset-control-sm);
+    box-sizing: border-box;
+    border-radius: var(--radius-full);
+    font: var(--text-small-strong);
+    font-size-adjust: from-font;
+    color: var(--color-fg-on-emphasis);
+    background: var(--color-success-emphasis);
+
+    &[data-state="merged"] {
+      background: var(--color-done-emphasis);
+    }
+
+    &[data-state="closed"] {
+      background: var(--color-danger-emphasis);
+    }
+  }
+}

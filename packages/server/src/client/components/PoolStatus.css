@@ -1,0 +1,39 @@
+@layer components {
+  [data-component="PoolStatus"] {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--gap-tight);
+    white-space: nowrap;
+    color: var(--color-fg-muted);
+
+    & .label {
+      font: var(--text-small);
+      font-size-adjust: from-font;
+    }
+
+    & .jobs {
+      font: var(--text-small);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+
+    &[data-state="local"] [data-component="Icon"] {
+      color: var(--color-success-fg);
+    }
+
+    /* The header's form has a medium control's frame. */
+    &[data-form="button"] {
+      box-sizing: border-box;
+      block-size: var(--size-control-md);
+      padding-inline: calc(var(--inset-control-md) - var(--border-width-thin));
+      border: var(--border-width-thin) solid var(--color-border-default);
+      border-radius: var(--radius-md);
+
+      & .label {
+        font: var(--text-body-strong);
+        font-size-adjust: from-font;
+        color: var(--color-fg-default);
+      }
+    }
+  }
+}

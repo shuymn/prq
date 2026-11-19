@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { text } from "node:stream/consumers";
 
-import { type Door, type DoorEntry, startDoor } from "./door.ts";
+import { type Door, startDoor } from "./door.ts";
 import type { Latch } from "./latch.ts";
 import type { Worker } from "./worker.ts";
 
@@ -47,9 +47,8 @@ type LogEntry = {
 
 export type Access = {
   url: string;
-  // The browser's door to the Worker (door.ts), and the requests it forwarded.
-  door: string;
-  doorLog(): DoorEntry[];
+  // The browser's door to the Worker (door.ts): the requests it forwarded, its plans and the directory it serves.
+  readonly door: Door;
   clientId: string;
   clientSecret: string;
   mode: Mode;
@@ -74,8 +73,9 @@ export async function startAccess(worker: Worker): Promise<Access> {
 
   const access: Access = {
     url: "",
-    door: "",
-    doorLog: () => door?.log ?? [],
+    get door() {
+      return required(door);
+    },
     clientId,
     clientSecret,
     mode: "forward",
@@ -89,6 +89,7 @@ export async function startAccess(worker: Worker): Promise<Access> {
     log: [],
     clear() {
       door?.log.splice(0);
+      door?.clear();
       queued.clear();
       persistent.clear();
       access.log.length = 0;
@@ -250,8 +251,14 @@ export async function startAccess(worker: Worker): Promise<Access> {
     server.close();
     throw error;
   }
-  access.door = door.url;
   return access;
+}
+
+function required(door: Door | undefined): Door {
+  if (door === undefined) {
+    throw new Error("the door is not open");
+  }
+  return door;
 }
 
 function agentIdOf(body: string): string | null {

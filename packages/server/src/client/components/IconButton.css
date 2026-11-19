@@ -1,0 +1,32 @@
+@layer components {
+  [data-component="IconButton"] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    inline-size: var(--size-control-md);
+    block-size: var(--size-control-md);
+    padding: 0;
+    border: var(--border-width-thin) solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    background: transparent;
+    cursor: pointer;
+
+    &[data-size="sm"] {
+      inline-size: var(--size-control-sm);
+      block-size: var(--size-control-sm);
+    }
+
+    &[data-variant="secondary"] {
+      border-color: var(--color-border-default);
+      background: var(--color-bg-subtle);
+    }
+
+    &:hover,
+    &[data-state="hover"] {
+      color: var(--color-fg-default);
+      background: var(--color-bg-muted);
+    }
+  }
+}

@@ -1,0 +1,98 @@
+@layer components {
+  /* One line of a fixed height on the table's columns (the list's grid, screens/PrList.css); the whole row opens the
+     pull request through its title's link. */
+  [data-component="PrRow"] {
+    position: relative;
+    block-size: var(--size-row);
+    border-block-end: var(--border-width-thin) solid var(--color-border-muted);
+    font: var(--text-body);
+    font-size-adjust: from-font;
+    color: var(--color-fg-default);
+
+    & td {
+      display: flex;
+      align-items: center;
+      min-inline-size: 0;
+      padding: 0;
+    }
+
+    & .repo {
+      display: flex;
+      min-inline-size: 0;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    & .owner {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    & .pr-cell {
+      gap: var(--gap-tight);
+    }
+
+    & .state-icon {
+      display: flex;
+      color: var(--color-success-fg);
+
+      &[data-state="merged"] {
+        color: var(--color-done-fg);
+      }
+
+      &[data-state="closed"] {
+        color: var(--color-danger-fg);
+      }
+    }
+
+    & .title {
+      min-inline-size: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font: var(--text-body-strong);
+      font-size-adjust: from-font;
+      color: var(--color-fg-default);
+      text-decoration: none;
+
+      /* The link covers the row. */
+      &::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+      }
+
+      &:hover {
+        text-decoration: underline;
+      }
+
+      &:focus-visible {
+        outline: none;
+
+        &::after {
+          outline: var(--border-width-thick) solid var(--color-border-focus);
+          outline-offset: calc(-1 * var(--border-width-thick));
+          border-radius: var(--radius-md);
+        }
+      }
+    }
+
+    & .number {
+      flex: none;
+      white-space: nowrap;
+      color: var(--color-fg-muted);
+    }
+
+    & .event-cell {
+      justify-content: flex-end;
+      gap: var(--gap-tight);
+      white-space: nowrap;
+    }
+
+    & .event {
+      font: var(--text-small);
+      font-size-adjust: from-font;
+      color: var(--color-fg-muted);
+    }
+  }
+}

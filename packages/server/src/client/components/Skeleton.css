@@ -1,0 +1,16 @@
+@layer components {
+  /* The default size is the Pencil component's (size.popover by size.icon, a block size.header high); screens set
+     their own. */
+  [data-component="Skeleton"] {
+    display: block;
+    inline-size: var(--size-popover);
+    block-size: var(--size-icon);
+    border-radius: var(--radius-sm);
+    background: var(--color-skeleton);
+
+    &[data-shape="block"] {
+      block-size: var(--size-header);
+      border-radius: var(--radius-md);
+    }
+  }
+}
