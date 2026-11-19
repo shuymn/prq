@@ -1,16 +1,13 @@
 import "./VersionMenu.css";
-import { type KeyboardEvent, type MouseEvent, useEffect, useId, useRef, useState } from "react";
+import { type KeyboardEvent, type MouseEvent, useEffect, useId, useState } from "react";
 
 import { Icon } from "./Icon.tsx";
+import { menuItems, useMenuFocus } from "./menu.ts";
 import { RelativeTime } from "./RelativeTime.tsx";
 import { Sha } from "./Sha.tsx";
 import { VersionItem, type VersionStatus } from "./VersionItem.tsx";
 
 export type Version = { jobId: string; status: VersionStatus; sha: string; at: number };
-
-const itemsOf = (menu: HTMLElement | null) => [
-  ...(menu?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? []),
-];
 
 // The summary's version picker (design/components.md, PR detail): a button with the shown version's SHA and time that
 // opens a menu of the versions, newest first, the shown one checked. The menu is a popover the button toggles; a
@@ -30,55 +27,41 @@ export function VersionMenu({
 }) {
   const menuId = useId();
   const triggerId = useId();
-  const trigger = useRef<HTMLButtonElement>(null);
-  const menu = useRef<HTMLDivElement>(null);
-  const enter = useRef(false);
-  const fromPointer = useRef(false);
+  const {
+    trigger,
+    menu,
+    close,
+    openByKeyboard,
+    onTriggerPointerDown,
+    onTriggerClick,
+    focusOnToggle,
+    onMenuKey,
+    onMenuBlur,
+  } = useMenuFocus();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
     if (initiallyOpen) {
       menu.current?.showPopover();
     }
-  }, [initiallyOpen]);
+  }, [initiallyOpen, menu]);
 
-  const close = (pointer: boolean) => {
-    trigger.current?.focus({ focusVisible: !pointer });
-    menu.current?.hidePopover();
-  };
+  // ArrowDown on the button opens the menu as Enter does, or enters it while open.
   const onTriggerKey = (event: KeyboardEvent) => {
     if (event.key !== "ArrowDown") {
       return;
     }
     event.preventDefault();
     if (open) {
-      itemsOf(menu.current)[0]?.focus();
+      menuItems(menu.current)[0]?.focus();
     } else {
-      enter.current = true;
-      menu.current?.showPopover();
+      openByKeyboard();
     }
   };
   const onToggle = (event: { newState: string }) => {
     const opened = event.newState === "open";
     setOpen(opened);
-    if (opened && enter.current) {
-      itemsOf(menu.current)[0]?.focus();
-    } else if (opened && fromPointer.current) {
-      trigger.current?.focus({ focusVisible: false });
-    }
-    enter.current = false;
-    fromPointer.current = false;
-  };
-  const onMenuKey = (event: KeyboardEvent) => {
-    const all = itemsOf(menu.current);
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      close(false);
-    } else if ((event.key === "Home" || event.key === "End") && all.length > 0) {
-      event.preventDefault();
-      all.at(event.key === "Home" ? 0 : -1)?.focus();
-    }
+    focusOnToggle(opened);
   };
   const choose = (event: MouseEvent, jobId: string) => {
     onSelect?.(jobId);
@@ -96,16 +79,8 @@ export function VersionMenu({
         aria-expanded={open}
         commandfor={menuId}
         command="toggle-popover"
-        onPointerDown={(event) => {
-          event.preventDefault();
-          fromPointer.current = true;
-        }}
-        onClick={(event) => {
-          // A click with no pointer behind it came from Enter or Space.
-          if (event.detail === 0) {
-            enter.current = true;
-          }
-        }}
+        onPointerDown={onTriggerPointerDown}
+        onClick={onTriggerClick}
         onKeyDown={onTriggerKey}
       >
         <Sha sha={shown.sha} />
@@ -119,12 +94,7 @@ export function VersionMenu({
         popover="auto"
         onToggle={onToggle}
         onKeyDown={onMenuKey}
-        onBlur={(event) => {
-          const next = event.relatedTarget;
-          if (next instanceof Node && !menu.current?.contains(next) && next !== trigger.current) {
-            menu.current?.hidePopover();
-          }
-        }}
+        onBlur={onMenuBlur}
       >
         <div focusgroup="menu nomemory" aria-labelledby={triggerId}>
           <div role="group" aria-label="Versions">
