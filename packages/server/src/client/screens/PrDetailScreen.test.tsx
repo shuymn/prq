@@ -1161,4 +1161,37 @@ describe("a claim in the panel", () => {
     expect(running()).toMatch(/^Possibly stalledlaptop · no result after .+Retry$/);
     expect(retryButtons()).toHaveLength(2);
   });
+
+  test("after a push back to a head whose analysis is older than the summary shown, offers that analysis's Retry on the summary's line before the stall mark, past it, and once the claim resumes at a new rev; the shown summary stays (M1)", async () => {
+    await page.viewport(360, 800);
+    const { fetch, sockets } = await detail({ layout: "panel" });
+    const later = "c0d1e2f3a4b5c6d7e8f90a1b2c3d4e5f6a7b8c9d";
+    // A's job, revived by the push back to A, was created before B's, whose summary is shown.
+    const jobs = (rev: number, stalled: boolean): JobSpec[] => [
+      { id: "a1", analysis: HEAD, state: "claimed", agentId: "laptop", rev, run: 2, stalled },
+      { id: "b1", analysis: later, state: "done" },
+    ];
+    const socket = await sockets.socket(0);
+    socket.open();
+    socket.receive({ type: "cf_agent_state", state: sessionView(jobs(3, false), "local") });
+    const history = [analysis("b1", later, "B's summary.")];
+    (await fetch.request(0)).respond(history);
+    (await fetch.request(1)).respond(history);
+    await expect.element(page.getByText("B's summary.")).toBeVisible();
+    const progress = () => textOf("[data-component=Summary] .progress");
+    expect(progress()).toBe("Summarizing e4f5a6bRetry");
+
+    socket.receive({ type: "cf_agent_state", state: sessionView(jobs(3, true), "local") });
+    await expect.poll(progress).toMatch(/^Summary of e4f5a6b possibly stalled: no result from laptop after .+Retry$/);
+
+    socket.receive({ type: "cf_agent_state", state: sessionView(jobs(4, false), "local") });
+    await expect.poll(progress).toBe("Summarizing e4f5a6bRetry");
+    expect(retryButtons()).toHaveLength(1);
+    retryButtons()[0]?.click();
+    const posts = () => fetch.requests.filter((request) => request.method === "POST");
+    await until(() => posts().length === 1);
+    expect(posts()[0]?.url.pathname).toBe("/api/pr/shuymn/prq/42/jobs/a1/retry");
+    expect(JSON.parse(posts()[0]?.body ?? "")).toEqual({ expectedRev: 4 });
+    expect(textOf("[data-component=Summary] .body")).toContain("B's summary.");
+  });
 });

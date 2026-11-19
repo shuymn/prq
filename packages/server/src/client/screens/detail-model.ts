@@ -494,9 +494,12 @@ export function detailModel({ session, slot, hub, picked }: DetailInput): Detail
           retry: retryOf(current.job, session),
         }
       : null;
-  const newer = newest.find(
-    ({ job }) => RUNNING.has(job.state) && shown !== undefined && job.createdAt > shown.job.createdAt,
-  );
+  // The analysis under way while another version is shown: the current head's whatever its creation order (a push back
+  // to an earlier head revives that head's job, older than the summary shown), else one created after the shown one.
+  const newer =
+    current !== undefined && current !== shown && RUNNING.has(current.job.state)
+      ? current
+      : newest.find(({ job }) => RUNNING.has(job.state) && shown !== undefined && job.createdAt > shown.job.createdAt);
   const claimed =
     stalled === null ? (newer ?? (shown !== undefined && RUNNING.has(shown.job.state) ? shown : undefined)) : current;
   return {
