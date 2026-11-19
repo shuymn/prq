@@ -5,10 +5,10 @@
 
 import { HUB_NAME, HubView, ServerVersionMessage } from "@prq/protocol";
 import { useAgent } from "agents/react";
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import * as v from "valibot";
 
-import { RECONNECT_FAILED_MS, SocketContext } from "./session.ts";
+import { reconnectBound, SocketContext } from "./session.ts";
 
 export type Hub = { view: HubView | null; opens: number; serverVersion: string | null; unavailable: boolean };
 
@@ -20,27 +20,18 @@ export function useHub(): Hub {
   const open = useRef(false);
   // While the app shows the Hub: a close that its ending makes arms nothing.
   const active = useRef(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Without an open since the first connect or a close, the pool's status becomes unavailable after the bound.
-  const arm = useCallback(() => {
-    if (timer.current === undefined && active.current) {
-      timer.current = setTimeout(() => {
-        timer.current = undefined;
-        setHub((current) => ({ ...current, unavailable: true }));
-      }, RECONNECT_FAILED_MS);
-    }
-  }, []);
+  const [bound] = useState(() => reconnectBound(() => setHub((current) => ({ ...current, unavailable: true }))));
   useEffect(() => {
     active.current = true;
     if (!open.current) {
-      arm();
+      bound.arm();
     }
     return () => {
       active.current = false;
-      clearTimeout(timer.current);
-      timer.current = undefined;
+      bound.cancel();
     };
-  }, [arm]);
+  }, [bound]);
   const socket = useContext(SocketContext);
   useAgent<HubView>({
     agent: "hub",
@@ -48,13 +39,14 @@ export function useHub(): Hub {
     ...socket,
     onOpen: () => {
       open.current = true;
-      clearTimeout(timer.current);
-      timer.current = undefined;
+      bound.cancel();
       setHub((current) => ({ ...current, opens: current.opens + 1, unavailable: false }));
     },
     onClose: () => {
       open.current = false;
-      arm();
+      if (active.current) {
+        bound.arm();
+      }
     },
     // A view the protocol refuses is not shown.
     onStateUpdate: (state) => {

@@ -44,3 +44,21 @@ export async function readJson<S extends v.GenericSchema>(
   }
   return parsed.output;
 }
+
+// Every page of a paged read, in order, the first without a cursor and each next with the one the last page gave.
+export async function readPages<Row>(
+  fetcher: Fetch,
+  path: string,
+  schema: v.GenericSchema<unknown, { rows: Row[]; nextCursor: string | null }>,
+  signal: AbortSignal,
+): Promise<Row[]> {
+  const rows: Row[] = [];
+  let cursor: string | null = null;
+  do {
+    const query: string = cursor === null ? "" : `?${new URLSearchParams({ cursor }).toString()}`;
+    const page = await readJson(fetcher, `${path}${query}`, schema, signal);
+    rows.push(...page.rows);
+    cursor = page.nextCursor;
+  } while (cursor !== null);
+  return rows;
+}
