@@ -1,5 +1,5 @@
 import "./RepoFilter.css";
-import { type KeyboardEvent, type MouseEvent, useId, useRef, useState } from "react";
+import { type KeyboardEvent, type MouseEvent, useEffect, useId, useRef, useState } from "react";
 
 import { Button } from "./Button.tsx";
 import { Icon } from "./Icon.tsx";
@@ -14,10 +14,16 @@ export type RepoItems =
 
 export const ALL_REPOSITORIES = "All repositories";
 
+const itemsOf = (menu: HTMLElement | null) => [
+  ...(menu?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? []),
+];
+
 // The repository filter (design/components.md, PR list): a button that opens a menu of the followed repositories,
 // "All repositories" first, the chosen one checked. The menu is a popover the button toggles; a keyboard open moves
-// focus to the first item and a pointer open leaves it on the button; the arrow keys move between items (focusgroup),
-// Home and End go to the ends; Escape and a choice close it and return focus to the button.
+// focus to the first item and a pointer open leaves it on the button; while a read a keyboard started (an open or Try
+// again) changes what the menu holds, focus goes to the first item once the options render, or to Try again once the
+// read failed. The arrow keys move between items (focusgroup), Home and End go to the ends; Escape and a choice close
+// it and return focus to the button.
 export function RepoFilter({
   label,
   selected,
@@ -40,9 +46,22 @@ export function RepoFilter({
   // Set by a keyboard open, read when the menu has opened: only a keyboard open enters the menu.
   const enter = useRef(false);
   const fromPointer = useRef(false);
+  // Set while a read a keyboard started has yet to end.
+  const keyboardRead = useRef(false);
   const [expanded, setExpanded] = useState(false);
 
-  const menuItems = () => [...(menu.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [])];
+  useEffect(() => {
+    if (!keyboardRead.current) {
+      return;
+    }
+    if (items.state === "failed") {
+      menu.current?.querySelector<HTMLElement>('[data-component="Button"]')?.focus();
+    } else {
+      itemsOf(menu.current)[0]?.focus();
+    }
+    keyboardRead.current = items.state === "loading";
+  }, [items.state]);
+
   const close = (pointer: boolean) => {
     trigger.current?.focus({ focusVisible: !pointer });
     menu.current?.hidePopover();
@@ -54,7 +73,7 @@ export function RepoFilter({
     }
     event.preventDefault();
     if (expanded) {
-      menuItems()[0]?.focus();
+      itemsOf(menu.current)[0]?.focus();
     } else {
       enter.current = true;
       trigger.current?.click();
@@ -69,10 +88,11 @@ export function RepoFilter({
   const onToggle = (event: { newState: string }) => {
     const open = event.newState === "open";
     setExpanded(open);
+    keyboardRead.current = open && enter.current;
     if (open) {
       onOpen?.();
       if (enter.current) {
-        menuItems()[0]?.focus();
+        itemsOf(menu.current)[0]?.focus();
       } else if (fromPointer.current) {
         trigger.current?.focus({ focusVisible: false });
       }
@@ -81,7 +101,7 @@ export function RepoFilter({
     fromPointer.current = false;
   };
   const onMenuKey = (event: KeyboardEvent) => {
-    const all = menuItems();
+    const all = itemsOf(menu.current);
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -137,7 +157,17 @@ export function RepoFilter({
           <Notice
             tone="danger"
             title="Couldn't load repositories"
-            actions={<Button variant="secondary" size="sm" label="Try again" onClick={onRetry} />}
+            actions={
+              <Button
+                variant="secondary"
+                size="sm"
+                label="Try again"
+                onClick={(event) => {
+                  keyboardRead.current = event.detail === 0;
+                  onRetry?.();
+                }}
+              />
+            }
           />
         ) : (
           <div focusgroup="menu nomemory" aria-labelledby={triggerId}>

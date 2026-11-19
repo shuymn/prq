@@ -1,12 +1,12 @@
 // The PR list over a fetch the test answers (plan P2.5–P2.7): its failures and Try again, its empty states, the next
-// page after a refresh, Needs attention as the Hub's view counts it, and how it names repositories and reads them for
-// the menu.
+// page after a refresh, Needs attention as the Hub's view counts it, and how it names repositories, reads them for the
+// menu and where the menu puts focus while it reads.
 
 import { type HubView, LedgerRow } from "@prq/protocol";
 import * as v from "valibot";
 import { beforeEach, describe, expect, test } from "vitest";
 import { render } from "vitest-browser-react";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 
 import type { Hub } from "../hub.ts";
 import { FetchContext } from "../reads.ts";
@@ -276,5 +276,42 @@ describe("the PR list's repositories", () => {
     await expect.element(page.getByRole("menuitemradio", { name: "All repositories" })).toBeVisible();
     expect(page.getByRole("menuitemradio").elements()).toHaveLength(1);
     expect(page.getByText("Couldn't load repositories").elements()).toEqual([]);
+  });
+});
+
+describe("the repository menu's focus while it reads", () => {
+  test("opened by keyboard, Try again once the read failed; reopened by keyboard, the first item once the options render", async () => {
+    const { fetch } = await list(hubOf(view()));
+    (await fetch.request(0)).respond({ rows: ROWS, nextCursor: null });
+    repoTrigger().element().focus();
+    await userEvent.keyboard("{Enter}");
+    (await fetch.request(1)).respond({ error: "unavailable" }, 503);
+    await expect.element(page.getByRole("button", { name: "Try again" })).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    await expect.element(repoTrigger()).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    (await fetch.request(2)).respond({ rows: [{ fullName: "shuymn/prq" }], nextCursor: null });
+    await expect.element(page.getByRole("menuitemradio", { name: "prq" })).toBeVisible();
+    await expect.element(page.getByRole("menuitemradio", { name: "All repositories" })).toHaveFocus();
+  });
+
+  test("Try again by keyboard, the first item once the options render; opened by pointer, the button through a failure", async () => {
+    const { fetch } = await list(hubOf(view()));
+    (await fetch.request(0)).respond({ rows: ROWS, nextCursor: null });
+    repoTrigger().element().focus();
+    await userEvent.keyboard("{Enter}");
+    (await fetch.request(1)).fail();
+    await expect.element(page.getByRole("button", { name: "Try again" })).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    (await fetch.request(2)).respond({ rows: [{ fullName: "shuymn/prq" }], nextCursor: null });
+    await expect.element(page.getByRole("menuitemradio", { name: "prq" })).toBeVisible();
+    await expect.element(page.getByRole("menuitemradio", { name: "All repositories" })).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    await repoTrigger().click();
+    (await fetch.request(3)).fail();
+    await expect.element(page.getByText("Couldn't load repositories")).toBeVisible();
+    await expect.element(repoTrigger()).toHaveFocus();
   });
 });

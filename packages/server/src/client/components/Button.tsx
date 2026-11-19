@@ -1,4 +1,6 @@
 import "./Button.css";
+import type { MouseEvent } from "react";
+
 import { Spinner } from "./Spinner.tsx";
 
 export type ButtonVariant = "primary" | "secondary" | "danger" | "invisible";
@@ -15,7 +17,7 @@ type Props = {
   busy?: boolean | undefined;
   // A toggle button's state (aria-pressed), as the "Needs attention" filter has.
   pressed?: boolean | undefined;
-  onClick?: (() => void) | undefined;
+  onClick?: ((event: MouseEvent<HTMLButtonElement>) => void) | undefined;
   preview?: PreviewState | undefined;
 };
 
