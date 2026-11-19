@@ -1,8 +1,8 @@
 # Operations
 
 How to host prq: what it needs, how to set up the accounts and the private files its deployment reads, how to release,
-deploy and check it and recover from a deploy that stopped part-way, and how to rotate each credential. Publishing
-`prq`'s binaries is not described here yet.
+deploy and check it, how to install `prq` from a release, how to recover from a deploy that stopped part-way, and how
+to rotate each credential.
 
 Every command runs from the root of a clone of this repository. `<host>` is the hostname prq is served at,
 `<team>` the Zero Trust team name, `<account-id>` the Cloudflare account's ID, and `vX.Y.Z` a release's version.
@@ -256,12 +256,34 @@ Every deploy is a release, `vX.Y.Z`; what a release is and what the release chec
    pnpm --dir packages/server run release-check -- vX.Y.Z --pre-tag <sha>
    ```
 
-3. Tag it, annotated, and push the tag. A pushed tag is there for good, so a mistaken one costs its version, and the
-   release takes the next:
+3. Check that release immutability is still on, with `gh` logged in as the repository's admin, since GitHub fixes only
+   the releases published while it is on. It must print `true`; anything else stops here until the
+   repository's release settings are applied again ([First deploy](#first-deploy), step 1):
+
+   ```sh
+   gh api repos/{owner}/{repo}/immutable-releases --jq .enabled
+   ```
+
+   Then tag the commit, annotated, and push the tag. A pushed tag is there for good, so a mistaken one costs its
+   version, and the release takes the next:
 
    ```sh
    git tag -a vX.Y.Z -m vX.Y.Z <sha>
    git push origin vX.Y.Z
+   ```
+
+4. The tag runs the release workflow (`.github/workflows/release.yml`, Actions → Release), which publishes `prq` for
+   each platform as [design.md](design.md#local-cli-prq) describes; follow it through its Publish job. It needs the
+   repository's release settings ([First deploy](#first-deploy), step 1). Its Verify job prints the draft release's ID
+   (`Created the draft release <id>`).
+
+   A failed job is rerun with "Re-run failed jobs" on the same run, which keeps its draft; a Publish job that failed
+   after publishing finds the release published on its rerun and finishes without publishing again. To start over
+   instead, delete the draft by its ID, then "Re-run all jobs": Verify refuses a tag that already has a release, a
+   draft included.
+
+   ```sh
+   gh api --method DELETE repos/{owner}/{repo}/releases/<id>
    ```
 
 ## The deploy command
@@ -462,12 +484,42 @@ the hostname, the team domain, the application's AUD, the workers.dev subdomain 
 
 Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `secrets check` passes:
 
-1. **Protect the release tags.** Apply the repository settings, which hold the two tag rulesets, with
-   `mise exec -- gh-infra plan .github/infra.yaml` and then `mise exec -- gh-infra apply .github/infra.yaml`, and read
-   them back in the repository's Settings → Rules → Rulesets: `release-tag-creation` and `release-tag-immutability`
-   active on `refs/tags/v*`, the first with the admin role as its only bypass, the second with none.
+1. **Protect the release tags and set up releases.** From a checkout of the current `main` (`git switch main` and
+   `git pull`), so that `.github/infra.yaml` holds both, apply the repository settings, the two tag rulesets and the
+   release settings, with `mise exec -- gh-infra plan .github/infra.yaml` and then
+   `mise exec -- gh-infra apply .github/infra.yaml`, and read them back: in the repository's Settings → Rules →
+   Rulesets, `release-tag-creation` and `release-tag-immutability` active on `refs/tags/v*`, the first with the admin
+   role as its only bypass, the second with none; and, with `gh` logged in as the repository's admin,
+
+   ```sh
+   gh api repos/{owner}/{repo}/actions/permissions/selected-actions --jq .patterns_allowed
+   gh api repos/{owner}/{repo}/immutable-releases --jq .enabled
+   ```
+
+   list `actions/attest@*` among the allowed actions and print `true`. Then rehearse the release workflow on `main`. It
+   builds and checks all three platforms' archives as a release does, under the tag name `rehearsal-<run-id>`, which
+   is never pushed, publishes nothing, and deletes its draft at the end:
+
+   ```sh
+   gh workflow run release.yml --ref main
+   ```
+
+   Follow it in Actions → Release (or `gh run list --workflow release.yml --limit 1`, then `gh run watch <run-id>`). It
+   passes once each Smoke job has verified, extracted and run its archive, read from the draft by its ID, and Discard
+   has deleted the draft. Its Read probe job notes whether `contents: read` alone reads the draft; Smoke keeps
+   `contents: write` until a rehearsal shows that it does. A rehearsal that failed is run again as a new dispatch, not
+   with "Re-run failed jobs": its draft is already deleted. Before dispatching again, make sure the failed run's draft is
+   gone: if Discard did not run, had no ID (Verify stopped after creating the draft) or failed, find the draft whose
+   tag names the failed run's ID and delete it by its ID:
+
+   ```sh
+   gh api --paginate 'repos/{owner}/{repo}/releases?per_page=100' \
+     --jq '.[] | select(.draft and (.tag_name | startswith("rehearsal-"))) | "\(.id) \(.tag_name)"'
+   gh api --method DELETE repos/{owner}/{repo}/releases/<id>
+   ```
+
 2. **The first release**, `v0.1.0`, as in [Releases](#releases): the release pull request, the check with `--pre-tag`,
-   the tag.
+   the tag, and the release workflow it runs, which publishes `prq` `v0.1.0`.
 3. **The bootstrap**: `pnpm --dir packages/server run deploy -- --bootstrap`. Then, in the dashboard's Domains & Routes
    for `prq`: workers.dev and Preview URLs disabled, no custom domain. It prints, on a line of its own, the check that
    the two addresses answer nothing of prq, `check:deployed endpoints <subdomain> --version <id>` with the subdomain you
@@ -512,14 +564,66 @@ Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `secrets 
 
 ## Each release
 
-1. The release pull request, the check with `--pre-tag` and the tag, as in [Releases](#releases).
+1. The release pull request, the check with `--pre-tag`, the tag and its release workflow, as in
+   [Releases](#releases).
 2. Pick a quiet interval: no cloud job waiting or running, and no pushes or questions until the deploy's read-back is
    complete.
 3. In a terminal with Docker running, with `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET` set as for `prq`:
    `pnpm --dir packages/server run deploy -- vX.Y.Z`. It exits 0 once the read-back is complete.
 4. Sign in at `https://<host>`: the web UI shows the new version. Then run the two checks the deploy printed, as in
    [First deploy](#first-deploy) step 6.
-5. Remove the clone the deploy printed once you no longer need it.
+5. Once the release workflow has published it, install the new `prq` wherever a local agent runs
+   ([Installing prq](#installing-prq)). Until then a `prq` of the previous release prints the version notice
+   ([design.md](design.md#versions)) and works as before.
+6. Remove the clone the deploy printed once you no longer need it.
+
+## Installing prq
+
+Each release publishes `prq` for three platforms, as `prq-vX.Y.Z-<target>.tar.gz` holding the one file `prq`:
+`darwin-arm64` (macOS on Apple silicon), `linux-x64` and `linux-arm64`. Download it with `gh` (`gh auth login` first),
+and verify its provenance before extracting or running anything. `gh attestation verify` checks that the archive was
+built by this repository's release workflow from the tag, whose commit the release check found on `main` with its
+`Check` passed; run nothing from an archive it refuses.
+
+macOS on Apple silicon:
+
+```sh
+gh release download vX.Y.Z -R shuymn/prq -p prq-vX.Y.Z-darwin-arm64.tar.gz &&
+  gh attestation verify prq-vX.Y.Z-darwin-arm64.tar.gz -R shuymn/prq \
+    --signer-workflow shuymn/prq/.github/workflows/release.yml --source-ref refs/tags/vX.Y.Z &&
+  tar -xzf prq-vX.Y.Z-darwin-arm64.tar.gz prq
+```
+
+Linux on x86-64:
+
+```sh
+gh release download vX.Y.Z -R shuymn/prq -p prq-vX.Y.Z-linux-x64.tar.gz &&
+  gh attestation verify prq-vX.Y.Z-linux-x64.tar.gz -R shuymn/prq \
+    --signer-workflow shuymn/prq/.github/workflows/release.yml --source-ref refs/tags/vX.Y.Z &&
+  tar -xzf prq-vX.Y.Z-linux-x64.tar.gz prq
+```
+
+Linux on ARM64:
+
+```sh
+gh release download vX.Y.Z -R shuymn/prq -p prq-vX.Y.Z-linux-arm64.tar.gz &&
+  gh attestation verify prq-vX.Y.Z-linux-arm64.tar.gz -R shuymn/prq \
+    --signer-workflow shuymn/prq/.github/workflows/release.yml --source-ref refs/tags/vX.Y.Z &&
+  tar -xzf prq-vX.Y.Z-linux-arm64.tar.gz prq
+```
+
+Each block extracts `prq` only once its verification passed. Then put `prq` on the `PATH` of the shell the AI session
+runs in (for example `install -m 0755 prq ~/.local/bin/prq`), check that `prq --version` prints `vX.Y.Z`, and give that
+shell its environment as [README's Running a local agent](../README.md#running-a-local-agent) says.
+
+Download with `gh` rather than a browser: macOS marks a browser's download as coming from the internet and may then
+refuse to run a binary that is not notarized. The Linux archives hold Bun's glibc build, so they need a glibc-based
+distribution (not a musl one such as Alpine). Each release's runners have run its archives on their own platform;
+whether your machine runs them shows on the first install.
+
+mise can install the same archive as a convenience, `mise use -g github:shuymn/prq@X.Y.Z`, but it is not the provenance
+check: it verifies an attestation when the release has one and installs an archive that has none. The commands above
+are the provenance check.
 
 ## Recovery
 
@@ -604,6 +708,11 @@ image. Otherwise release a fix.
 - **Skill scripts refused** because an earlier run's processes could not be confirmed ended: the workspace runs no
   script until its container stops, 30 minutes after its last request.
 - **An Access session that ended in the browser**: reload the page; Access asks for a one-time PIN again.
+- **A release workflow that failed**: rerun its failed jobs once the cause is fixed, as in [Releases](#releases). A
+  cause that needs a change to the repository cannot be fixed under the same tag, which never moves: delete the run's
+  draft by its ID and release the fix as the next version. When Publish failed because the release is not immutable,
+  the release is published with its assets still replaceable: turn release immutability on
+  ([First deploy](#first-deploy), step 1) before the next tag.
 
 ## Rotation
 

@@ -99,6 +99,10 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`; host
   `FixtureGit`, a local server for the ledger and Cloudflare's API, and a terminal from python3's `pty` module, with
   `HOME` and the deploy directory in the OS temp directory; the deploy's run through the same test entry, whose fixture
   holds its shorter bounds, the ledger's origin and the API's address. Nothing reaches the network.
+- A pushed `v*` tag runs `.github/workflows/release.yml`, which publishes `prq` for darwin-arm64, linux-x64 and
+  linux-arm64 with build provenance (`docs/operations.md`, Releases); run by hand on `main`, it rehearses that and
+  publishes nothing. It runs only on GitHub, so the hooks and `gha.yml` check it with actionlint and ghalint alone. Its
+  linux-arm64 runner installs the tools `mise.lock` pins for that platform, which `lockfile_platforms` keeps there.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
   change, and `mise exec -- gh-infra apply .github/infra.yaml` applies it once the owner approves.
 
