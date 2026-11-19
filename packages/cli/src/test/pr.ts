@@ -1,12 +1,13 @@
 // Work for the CLI, made against the Worker directly (not through the stand-in Access): a pull request's webhook,
 // which gives a local session an analysis job, a question asked in the UI, which gives it an answer job, the host's
 // retry of a job, a skill stored as a confirm stores one, and what the UI reads (the stored conversation, the present
-// agents).
+// agents). What goes over HTTP and WebSocket is origin.ts's, with the token Access adds, as the deployed checks make
+// the same calls with the service token; what goes over the Worker's RPC (a session's settle and view, a job's
+// revision in storage, the Hub's skill store) is the harness's alone.
 
 import { createHmac, randomUUID } from "node:crypto";
 
 import {
-  AgentPage,
   type AgentRow,
   Prompt,
   type PromptKind,
@@ -18,8 +19,14 @@ import {
 } from "@prq/protocol";
 import * as v from "valibot";
 
+import { agentRows, jsonOf, type Origin, postRetry, readMessages, send, sendQuestion } from "./origin.ts";
 import { sha1Blob } from "./skill-github.ts";
 import { HOST_ID, WEBHOOK_SECRET, type Worker } from "./worker.ts";
+
+// The local Worker as an origin: its URL now (a reset changes it), with the token Access adds.
+function workerOrigin(worker: Worker): Origin {
+  return { url: worker.url(), headers: async () => ({ "Cf-Access-Jwt-Assertion": await worker.token() }) };
+}
 
 // A head SHA named by a label: the label's bytes in hex, padded to 40 digits.
 export function sha(label: string): string {
@@ -99,41 +106,14 @@ export async function push(
   await session["settle"]?.();
 }
 
-// How long a test waits for the session to answer a chat request.
+// How long a test waits for the session to answer a chat request, from the handshake to its acknowledgement.
 const CHAT_MS = 30_000;
 
-const ChatFrame = v.object({ type: v.string(), id: v.optional(v.string()), done: v.optional(v.boolean()) });
-
 // A question as the host asks it in the UI: a chat request over the session's WebSocket, with the token Access adds
-// (Node's WebSocket takes headers; a browser carries Access's cookie instead). The session makes it an answer job,
+// (ws takes headers; a browser carries Access's cookie instead). The session makes it an answer job,
 // which is then taken in as push's delivery is.
 export async function ask(worker: Worker, pr: PrRef, id: string, text: string): Promise<void> {
-  const url = new URL(`/agents/pr-session/${sessionName(pr)}`, worker.url());
-  url.protocol = "ws:";
-  const socket = new WebSocket(url, { headers: { "Cf-Access-Jwt-Assertion": await worker.token() } });
-  const request = randomUUID();
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
-  const timer = setTimeout(() => reject(new Error(`no answer to the chat request within ${CHAT_MS} ms`)), CHAT_MS);
-  socket.addEventListener("open", () => {
-    const messages = [{ id, role: "user", parts: [{ type: "text", text }] }];
-    const body = JSON.stringify({ messages, trigger: "submit-message" });
-    socket.send(JSON.stringify({ type: "cf_agent_use_chat_request", id: request, init: { method: "POST", body } }));
-  });
-  socket.addEventListener("message", (event) => {
-    const frame = v.safeParse(ChatFrame, typeof event.data === "string" ? parseJson(event.data) : undefined);
-    const answer = frame.success ? frame.output : null;
-    if (answer?.type === "cf_agent_use_chat_response" && answer.id === request && answer.done === true) {
-      resolve();
-    }
-  });
-  socket.addEventListener("error", () => reject(new Error("the chat socket failed")));
-  socket.addEventListener("close", (event) => reject(new Error(`the chat socket closed (${event.code})`)));
-  try {
-    await promise;
-  } finally {
-    clearTimeout(timer);
-    socket.close();
-  }
+  await sendQuestion(workerOrigin(worker), pr, { id, text }, { timeoutMs: CHAT_MS });
   const session = await worker.durableObject("PrSession", sessionName(pr));
   await session["settle"]?.();
 }
@@ -147,15 +127,8 @@ const StoredMessages = v.array(
 );
 
 // The conversation as the UI loads it (get-messages), as the Worker sent it.
-export async function getMessages(worker: Worker, pr: PrRef): Promise<unknown> {
-  const res = await fetch(new URL(`/agents/pr-session/${sessionName(pr)}/get-messages`, worker.url()), {
-    headers: { "Cf-Access-Jwt-Assertion": await worker.token() },
-  });
-  if (res.status !== 200) {
-    throw new Error(`get-messages answered ${res.status}`);
-  }
-  const body: unknown = await res.json();
-  return body;
+export function getMessages(worker: Worker, pr: PrRef): Promise<unknown> {
+  return readMessages(workerOrigin(worker), pr);
 }
 
 // The session's view, as its Durable Object gives it.
@@ -173,24 +146,11 @@ export async function storedMessages(worker: Worker, pr: PrRef): Promise<{ id: s
   }));
 }
 
-function parseJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-}
-
 // The host's retry of a job, from the job's revision as the session stores it.
 export async function retry(worker: Worker, pr: PrRef, jobId: string): Promise<void> {
   const [row] = await worker.sql("PrSession", sessionName(pr), "SELECT rev FROM prq_jobs WHERE job_id = ?", jobId);
   const rev = v.parse(v.object({ rev: v.number() }), row).rev;
-  const res = await fetch(new URL(`/api/pr/${pr.owner}/${pr.repo}/${pr.number}/jobs/${jobId}/retry`, worker.url()), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": await worker.token() },
-    body: JSON.stringify({ expectedRev: rev }),
-  });
-  const answer = v.parse(RetryResponse, await res.json());
+  const answer = v.parse(RetryResponse, jsonOf(await postRetry(workerOrigin(worker), pr, jobId, rev)));
   if (answer.status !== "retried") {
     throw new Error(`the retry answered ${answer.status}`);
   }
@@ -198,23 +158,20 @@ export async function retry(worker: Worker, pr: PrRef, jobId: string): Promise<v
 
 // A prompt as the host saves it in the UI.
 export async function savePrompt(worker: Worker, kind: PromptKind, text: string): Promise<void> {
-  const res = await fetch(new URL(`/api/prompts/${kind}`, worker.url()), {
+  const answer = await send(workerOrigin(worker), `/api/prompts/${kind}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": await worker.token() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
   });
-  if (res.status !== 200) {
-    throw new Error(`the prompt save answered ${res.status}`);
+  if (answer.status !== 200) {
+    throw new Error(`the prompt save answered ${answer.status}`);
   }
-  v.parse(Prompt, await res.json());
+  v.parse(Prompt, jsonOf(answer));
 }
 
 // The present agents, as the UI reads them.
-export async function agents(worker: Worker): Promise<AgentRow[]> {
-  const res = await fetch(new URL("/api/agents", worker.url()), {
-    headers: { "Cf-Access-Jwt-Assertion": await worker.token() },
-  });
-  return v.parse(AgentPage, await res.json()).rows;
+export function agents(worker: Worker): Promise<AgentRow[]> {
+  return agentRows(workerOrigin(worker));
 }
 
 // A skill's files: a path in the skill, its text and its git mode (100644 unless given).

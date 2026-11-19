@@ -21,11 +21,13 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/ws": "catalog:",
     "jose": "catalog:",
     "playwright": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:",
+    "ws": "catalog:",
     "yaml": "catalog:"
   },
   "engines": {
