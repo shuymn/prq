@@ -5,5 +5,5 @@
   },
   "include": ["src", "scripts", "vitest.config.ts"],
   // Run in Node, checked by tsconfig.node.json; the web UI runs in the browser, checked by tsconfig.client.json.
-  "exclude": ["src/**/*.node.test.ts", "src/client"]
+  "exclude": ["src/**/*.node.test.ts", "scripts/secrets.ts", "scripts/**/*.node.test.ts", "src/client"]
 }

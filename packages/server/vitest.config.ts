@@ -53,11 +53,12 @@ export default defineConfig(async () => {
         },
         {
           // The cloud workspace's git procedure with the machine's git, against file:// repositories in the OS temp
-          // directory, through the CLI's git fixture; the CLI's canary fails the run if the repository changed. And the
-          // web UI's build: its tokens, its output, the style check and the favicon.
+          // directory, through the CLI's git fixture; the CLI's canary fails the run if the repository changed. The web
+          // UI's build: its tokens, its output, the style check and the favicon. And the scripts' own tests: the
+          // secrets command against a stand-in for wrangler.
           test: {
             name: "node",
-            include: ["src/**/*.node.test.ts", "build/**/*.node.test.ts"],
+            include: ["src/**/*.node.test.ts", "build/**/*.node.test.ts", "scripts/**/*.node.test.ts"],
             environment: "node",
             globalSetup: ["../cli/src/test/canary.ts"],
             // Real git processes: room for a slow CI runner, as the CLI's git tests have.

@@ -10,7 +10,8 @@
     "icons": "node build/icons.ts",
     "check:provider": "node --env-file-if-exists=.dev.vars scripts/provider-check.ts",
     "check:github": "node --env-file-if-exists=.dev.vars scripts/github-check.ts",
-    "check:tools": "node --env-file-if-exists=.dev.vars scripts/tools-check.ts"
+    "check:tools": "node --env-file-if-exists=.dev.vars scripts/tools-check.ts",
+    "secrets": "node scripts/secrets.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "catalog:",
@@ -51,6 +52,7 @@
     "typescript": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:",
-    "vitest-browser-react": "catalog:"
+    "vitest-browser-react": "catalog:",
+    "wrangler": "catalog:"
   }
 }
