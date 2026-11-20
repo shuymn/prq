@@ -57,11 +57,11 @@ hostname, a GitHub App and a model key, and deploys a published release from a p
 pnpm --dir packages/server run setup
 ```
 
-runs the host's steps in order: `directory` (step 2), `model` (step 7) and `check` (step 8); `setup <step>` runs one.
-Steps 3 to 6 are still done by hand, between `directory` and `model`. Each step first reads what is already done, then
-prints what it did, `skipped (<reason>)`, or `done`, so running `setup` again after a stop or a change redoes only what
-is missing. A step that stops stops the steps that need it, which print `skipped (it needs <step>, which stopped)`; the
-others still run. The publisher's steps, `setup repository` and `setup rehearsal`, run only when named. `setup` asks on
+runs the host's steps in order: `directory` (step 2), `github-app` (step 6), `model` (step 7) and `check` (step 8);
+`setup <step>` runs one. Steps 3 to 5 are still done by hand, between `directory` and `github-app`. Each step first
+reads what is already done, then prints what it did, `skipped (<reason>)`, or `done`, so running `setup` again after a
+stop or a change redoes only what is missing. A step that stops stops the steps that need it, which print `skipped (it
+needs <step>, which stopped)`; the others still run. The publisher's steps, `setup repository` and `setup rehearsal`, run only when named. `setup` asks on
 the terminal, so it refuses an environment marked as CI, and it refuses a terminal holding an override, as the deploy
 does ([The deploy command](#the-deploy-command)). It exits 0 when every step it ran passed, 1 when one refused or wrote
 nothing, and 2 when a write's effect is not known.
@@ -103,7 +103,7 @@ before anything is written. The file is written whole to a new `0600` file besid
 A value the setup asks for is typed at a prompt that does not echo; Ctrl-C there stops the setup and restores the
 terminal.
 
-Steps 3 to 6 add their lines by hand. To add a value without it showing on screen or in the shell's history, paste it
+Steps 3 to 5 add their lines by hand. To add a value without it showing on screen or in the shell's history, paste it
 at a prompt that does not echo, with `umask 077` in the shell:
 
 ```sh
@@ -152,43 +152,72 @@ Then fix `<host>` and add `PRQ_HOST=<host>` to `target.env`. The web UI is `http
 
 ### 6. GitHub App
 
-Create the App on the account that opens the pull requests, or add a key to one you already have:
+```sh
+pnpm --dir packages/server run setup github-app
+```
 
-- **A new App**: a name and homepage URL; under Webhook, **Active** unchecked (the URL, the secret, Active and the
-  events are set once the Worker serves the hostname, below); Repository permissions Contents, Pull requests and Issues,
-  each read-only (Metadata read-only comes with them); installable "Only on this account".
-- **An App you already use elsewhere** (such as for local checks): generate a second private key for prq's deployment,
-  so that either key can be revoked without the other. Both keys mint tokens for the same installations, so the second
-  narrows nothing.
+It makes a new App for prq's deployment on the account `gh` is logged in as, which must be the account that opens the
+pull requests; an App you use elsewhere, such as for local checks, stays as it is. It needs `PRQ_HOST` and asks for the
+hostname when `target.env` lacks it.
 
-Then, with `umask 077` in the shell:
+1. It opens a page on `127.0.0.1` that sends GitHub the App's manifest: the name `<login>-prq` (`<login>-prq-2` and on
+   when GitHub has an App of that name; a long login is cut to fit GitHub's 34 characters), the description `prq's
+   deployment (registration <nonce>)` with a random nonce, the homepage `https://<host>`, the webhook URL
+   `https://<host>/webhook` with **Active** unchecked, Repository permissions Contents, Pull requests and Issues, each
+   read-only (Metadata read-only comes with them), the Pull request event, and installable only on this account. The
+   name and the nonce are recorded in `~/.local/state/prq/setup.json` before the browser opens. On GitHub's page, keep
+   the proposed name and click **Create GitHub App**, within 55 minutes of the page's making (GitHub gives the whole
+   flow an hour, the code's exchange included).
+2. GitHub redirects back to the page on `127.0.0.1`. When the browser cannot reach it (it runs on another machine),
+   paste the URL from the browser's address bar at the prompt, which does not echo it. Either way the redirect must
+   carry the random state the page sent, and its code is exchanged within the hour for the App's ID, its private key
+   and its webhook secret. The step writes, as one set, the key converted to the PKCS#8 the Worker reads
+   ([design.md](design.md#authentication-boundary)) to `github-app.pk8.pem`, and `GITHUB_APP_ID`, `WEBHOOK_SECRET` (the
+   App's own from GitHub, else 32 random bytes in hex) and `HOST_GITHUB_ID` (the `gh` account's ID) to `worker.env`.
+   The App's OAuth client secret is not kept, and nothing printed holds the code, the state, the key or a secret. When
+   `worker.env` already sets `GITHUB_APP_ID` or `WEBHOOK_SECRET`, or the key file exists, the step asks `The new App
+   replaces … Go on? [y/N]` before the browser opens: the new App's set replaces them whole.
+3. It opens the App's installation page: install it on the repositories you open pull requests in and on one small
+   private test repository. It waits up to 30 minutes for the installation on your account, asks for the test
+   repository (`owner/name`), checks that the App is installed on it and that it is private, and records it in
+   `setup.json`.
+4. It reads the App back: the four read permissions and nothing else, the Pull request event (or none yet), the owner
+   `HOST_GITHUB_ID` names, and the webhook URL `https://<host>/webhook` (or none yet).
 
-1. Generate a private key in the App's settings, convert GitHub's PKCS#1 to the PKCS#8 the Worker reads
-   ([design.md](design.md#authentication-boundary)), then delete the download:
+On a re-run, the recorded App (`GITHUB_APP_ID`, a `WEBHOOK_SECRET` that is not empty, and the key file) is checked with
+GitHub (its key must make a token GitHub takes for that ID), then the installation and the read-back again. A
+registration that did not finish is settled before another starts:
 
-   ```sh
-   openssl pkcs8 -topk8 -nocrypt -in <downloaded>.pem -out ~/.config/prq/deploy/github-app.pk8.pem
-   ```
+- When the App of the recorded name carries the recorded nonce in its description, GitHub made it but its key did not
+  reach the deploy directory: the step prints its settings page, asks you to delete it there (**Delete GitHub App**, at
+  the bottom), checks that it is gone and starts over.
+- Otherwise setup cannot tell which App, if any, the registration made (the name was changed on GitHub, or the code's
+  exchange was lost), and it never names another App for deletion: it asks you to delete, in
+  <https://github.com/settings/apps>, any App whose description holds `registration <nonce>`, and starts over only on
+  `y` to `Is no App with that description left? [y/N]`.
 
-2. Generate the webhook secret into `worker.env` (nothing is printed):
+A key and an ID that do not belong together otherwise stop the step.
 
-   ```sh
-   printf 'WEBHOOK_SECRET=%s\n' "$(openssl rand -hex 32)" >> ~/.config/prq/deploy/worker.env
-   ```
+**An App made by hand** (when GitHub refuses the redirect to `127.0.0.1`, or for a second key): create it as above on
+<https://github.com/settings/apps/new> (homepage `https://<host>`, webhook URL `https://<host>/webhook` with **Active**
+unchecked, the three read permissions, installable only on this account), generate a private key in its settings, then
 
-   Do not enter it, or the webhook URL, in the App yet.
+```sh
+pnpm --dir packages/server run setup github-app --key <downloaded>.pem --app-id <the App's ID>
+```
 
-3. Install the App on the repositories you open pull requests in, and on one small private test repository.
-4. Add `GITHUB_APP_ID=<the App's ID>` and `HOST_GITHUB_ID=<id>` to `worker.env`, where `<id>` is what
-   `gh api user --jq .id` prints when `gh` is logged in as the account that opens the pull requests.
+converts the download into `github-app.pk8.pem`, checks it with GitHub for that ID, and refuses, writing nothing, an App
+whose owner is not the account `gh` is logged in as. It records that account's ID as `HOST_GITHUB_ID`, keeps a
+`WEBHOOK_SECRET` already set (else generates one: the App's own is set from it when the webhook is turned on), asks
+before deleting the download, and goes on with the installation and the read-back as above.
 
 **Turning the webhook on**, once the Worker serves `https://<host>`: in one save of the App's webhook settings, set the
 URL `https://<host>/webhook`, the secret from `worker.env`, SSL verification on, and Active. On macOS,
 `sed -n 's/^WEBHOOK_SECRET=//p' ~/.config/prq/deploy/worker.env | pbcopy` copies the secret without showing it. Then,
-under Permissions & events, select the **Pull request** event and save: an App created with its webhook inactive
-subscribes to events only once it is active. A `ping` answered 200 does not show the subscription, since the Worker
-answers other events `ignored`. A pull request opened before the subscription has no delivery in the App's Recent
-deliveries and is never taken in: open a new one.
+under Permissions & events, select the **Pull request** event if it is not, and save: an App created with its webhook
+inactive may subscribe to events only once it is active. A `ping` answered 200 does not show the subscription, since
+the Worker answers other events `ignored`. A pull request opened before the subscription has no delivery in the App's
+Recent deliveries and is never taken in: open a new one.
 
 ### 7. The model
 
@@ -789,8 +818,8 @@ Auth_ policy before any session uses it, and the old one removed after.
 
 ### The App's private key
 
-1. Generate a new private key in the App's settings and convert it over `github-app.pk8.pem` as in
-   [GitHub App](#6-github-app).
+1. Generate a new private key in the App's settings, then run `setup github-app --key <downloaded>.pem --app-id
+   <the App's ID>` ([GitHub App](#6-github-app)), which asks before replacing `github-app.pk8.pem`.
 2. `pnpm --dir packages/server run secrets put`.
 3. With no local agent waiting, push a commit to a pull request in the private test repository that the cloud agent
    owns (a pull request keeps the owner it first got), and see its analysis prepare the workspace
