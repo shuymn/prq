@@ -1,5 +1,5 @@
-// The host's setup steps that need no account: directory, model and check, which setup.ts runs in this order when no
-// step is named. What each checks, asks and writes is docs/operations.md's (Setup, steps 2, 7 and 8). Values are asked
+// The host's setup steps: directory, github-app (setup-github-app.ts), model and check, which setup.ts runs in this
+// order when no step is named. What each checks, asks and writes is docs/operations.md's (Setup, steps 2, 6, 7 and 8). Values are asked
 // at a prompt that does not echo (askSecret) and written through writePrivate; nothing printed holds one.
 
 import * as v from "valibot";
@@ -22,15 +22,17 @@ import {
   writable,
   writePrivate,
 } from "./operations.ts";
+import { githubAppStep } from "./setup-github-app.ts";
 import { checkSecrets } from "./worker-secrets.ts";
 
-export const HOST_STEPS = ["directory", "model", "check"] as const;
+export const HOST_STEPS = ["directory", "github-app", "model", "check"] as const;
 export type HostStep = (typeof HOST_STEPS)[number];
 // The steps each needs done first: a step that stops stops these.
 export const NEEDS: Readonly<Record<HostStep, readonly HostStep[]>> = {
   directory: [],
+  "github-app": ["directory"],
   model: ["directory"],
-  check: ["directory", "model"],
+  check: ["directory", "github-app", "model"],
 };
 
 // DeepSeek's API, which the stored MODEL_BASE_URL must name before the stored key is sent to it, the page its keys are
@@ -174,6 +176,8 @@ export async function hostStep(step: HostStep): Promise<void> {
   switch (step) {
     case "directory":
       return directoryStep();
+    case "github-app":
+      return githubAppStep();
     case "model":
       return modelStep();
     case "check":

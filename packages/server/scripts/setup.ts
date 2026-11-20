@@ -3,9 +3,7 @@
 // records, and its exit codes, are docs/operations.md's (Setup, and First deploy, step 1). Every program runs as
 // operations.ts runs it, with a bound on its time; the publisher's gh-infra in the foreground, where it asks.
 
-import { randomBytes } from "node:crypto";
-import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, rename } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import * as v from "valibot";
@@ -15,27 +13,27 @@ import {
   answer,
   answerOf,
   exited,
-  mode,
   notInCi,
   type Outcome,
   print,
   printError,
   refuseOverrides,
   Refusal,
-  run,
   runCommand,
-  stateRoot,
   Unconfirmed,
   waitMs,
 } from "./operations.ts";
 import { GITHUB } from "./release-check.ts";
+import { adoptArgs, githubAppStep } from "./setup-github-app.ts";
 import { HOST_STEPS, type HostStep, hostStep, NEEDS as HOST_NEEDS } from "./setup-host.ts";
+import { call, type CallOptions, duration, gh, sleep } from "./setup-run.ts";
+import { readState, recordState } from "./setup-state.ts";
 
 const PUBLISHER_STEPS = ["repository", "rehearsal"] as const;
 const STEPS = [...PUBLISHER_STEPS, ...HOST_STEPS] as const;
 type Step = (typeof STEPS)[number];
 type PublisherStep = (typeof PUBLISHER_STEPS)[number];
-const USAGE = `usage: setup [${STEPS.join(" | ")}]`;
+const USAGE = `usage: setup [${STEPS.join(" | ")}] | setup github-app --key <file> --app-id <id>`;
 const CI_REASON =
   "where nobody answers gh-infra's confirmation or this command's: run setup from a terminal of your own";
 
@@ -71,10 +69,8 @@ const VIEW_FAILURES = 3;
 // A run of a dispatch whose ID was lost is looked for from this long before the dispatch was recorded (the clocks of
 // this machine and GitHub's differ).
 const CLOCK_SKEW_MS = 60_000;
-const STATE_FILE = "setup.json";
 
-// Only the tests' fixture sets the programs run in gh's and gh-infra's place, the state directory, or shorter bounds.
-const ghProgram = fixture.gh ?? "gh";
+// Only the tests' fixture sets the program run in gh-infra's place, or shorter bounds.
 const ghInfraCommand: [string, string[]] =
   fixture.ghInfra === undefined ? ["mise", ["exec", "--", "gh-infra"]] : [fixture.ghInfra, []];
 // gh-infra's apply waits for the owner to read its plan and confirm it.
@@ -82,37 +78,6 @@ const applyMs = fixture.stepMs ?? 30 * 60_000;
 const pollMs = fixture.pollMs ?? 15_000;
 // The rehearsal's run is followed this long.
 const followMs = fixture.followMs ?? 60 * 60_000;
-const stateDirectory = fixture.stateDir ?? join(stateRoot(), "prq");
-
-function duration(ms: number): string {
-  return ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 1000)} s`;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// A program's environment: this process's, which holds gh's login, and (in the tests) what their stand-ins read.
-function childEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, ...fixture.childEnv };
-}
-
-type CallOptions = { output?: "keep" | "show"; foreground?: boolean; timeoutMs?: number };
-
-// A program in cwd within its bound, refused when it cannot start or does not finish.
-async function call(
-  name: string,
-  program: string,
-  args: readonly string[],
-  cwd: string,
-  { output = "keep", foreground = false, timeoutMs = waitMs }: CallOptions = {},
-): Promise<Outcome> {
-  const outcome = await run(name, program, args, { cwd, env: childEnv(), output, foreground, timeoutMs });
-  if (outcome.timedOut) {
-    throw new Refusal(`${name} did not finish within ${duration(timeoutMs)} and was stopped`);
-  }
-  return outcome;
-}
 
 // What a failed call printed on stderr, then the reason, and the permission gh's login needs for it when GitHub
 // answered 403 or 404 (a token without a permission can get either).
@@ -134,10 +99,6 @@ async function git(cwd: string, args: readonly string[]): Promise<string> {
     throw failure(`git ${args[0] ?? ""}`, outcome);
   }
   return outcome.stdout.trim();
-}
-
-function gh(args: readonly string[], cwd: string, timeoutMs = waitMs): Promise<Outcome> {
-  return call(`gh ${args[0] ?? ""}`, ghProgram, args, cwd, { timeoutMs });
 }
 
 // A gh api read that answers JSON: `gh api <args>`.
@@ -421,77 +382,6 @@ const RehearsalRecord = v.variant("outcome", [
 ]);
 type RehearsalRecord = v.InferOutput<typeof RehearsalRecord>;
 type Running = Extract<RehearsalRecord, { outcome: "running" }>;
-
-// The state directory, the owner's alone and not a symbolic link; made when missing and make is set. Null when it is
-// missing.
-async function stateDir(make: boolean): Promise<string | null> {
-  if (make) {
-    await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
-  }
-  const info = await lstat(stateDirectory).catch(() => null);
-  if (info === null) {
-    return null;
-  }
-  if (!info.isDirectory()) {
-    throw new Refusal(`the state directory ${stateDirectory} is not a directory`);
-  }
-  if ((info.mode & 0o077) !== 0) {
-    throw new Refusal(
-      `the state directory ${stateDirectory} is open to others than its owner (mode ${mode(info.mode)}): chmod 700 it`,
-    );
-  }
-  return stateDirectory;
-}
-
-// The setup's state file as an object: empty when there is none.
-async function readState(): Promise<Record<string, unknown>> {
-  const dir = await stateDir(false);
-  if (dir === null) {
-    return {};
-  }
-  let handle;
-  try {
-    handle = await open(join(dir, STATE_FILE), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return {};
-    }
-    throw new Refusal(`could not read ${STATE_FILE} in ${dir}`);
-  }
-  try {
-    const info = await handle.stat();
-    if (!info.isFile() || (info.mode & 0o077) !== 0) {
-      throw new Refusal(`${STATE_FILE} in ${dir} is not a regular file of the owner's alone`);
-    }
-    const state: unknown = JSON.parse(await handle.readFile("utf8"));
-    if (typeof state !== "object" || state === null || Array.isArray(state)) {
-      throw new Refusal(`${STATE_FILE} in ${dir} does not hold a JSON object`);
-    }
-    return { ...state };
-  } catch (error) {
-    throw error instanceof Refusal ? error : new Refusal(`${STATE_FILE} in ${dir} does not hold JSON`);
-  } finally {
-    await handle.close();
-  }
-}
-
-// The state file with key set, the rest kept: written whole beside it (0600, a new file), then renamed over it.
-async function recordState(key: string, value: unknown): Promise<void> {
-  const state = { ...(await readState()), [key]: value };
-  const dir = (await stateDir(true)) ?? stateDirectory;
-  const temp = join(dir, `.${STATE_FILE}.${randomBytes(6).toString("hex")}`);
-  const handle = await open(
-    temp,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-    0o600,
-  );
-  try {
-    await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`);
-  } finally {
-    await handle.close();
-  }
-  await rename(temp, join(dir, STATE_FILE));
-}
 
 async function recordRehearsal(record: RehearsalRecord, notice?: string | null): Promise<void> {
   await recordState("rehearsal", {
@@ -942,11 +832,16 @@ async function hostSteps(): Promise<void> {
 
 async function main(args: readonly string[]): Promise<void> {
   const [step, ...rest] = args;
-  if (rest.length > 0 || (step !== undefined && !isStep(step))) {
+  const adopted = step === "github-app" ? adoptArgs(rest) : rest.length > 0 ? "invalid" : null;
+  if (adopted === "invalid" || (step !== undefined && !isStep(step))) {
     throw new Refusal(USAGE);
   }
   refuseOverrides();
   notInCi(CI_REASON);
+  if (adopted !== null) {
+    await githubAppStep(adopted);
+    return;
+  }
   if (step === undefined) {
     print(`setup: the host's steps: ${HOST_STEPS.join(", ")}`);
     print(

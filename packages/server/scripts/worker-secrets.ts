@@ -19,7 +19,7 @@ import { hide, readPrivate, Refusal, WORKER_ENV } from "./operations.ts";
 const KEY = "GITHUB_APP_PRIVATE_KEY";
 // What worker.env holds: every secret but the key, which has a file of its own.
 const SCALARS = SECRET_NAMES.filter((name) => name !== KEY);
-const KEY_FILE = "github-app.pk8.pem";
+export const KEY_FILE = "github-app.pk8.pem";
 
 // The ten secrets, as the Worker reads them and in its order, refused unless each is set and nothing else is. worker.env
 // as given (read by a stricter reader), else read here.
