@@ -8,11 +8,19 @@
     padding-inline: var(--inset-page);
     background: var(--color-bg-subtle);
 
-    /* The mark and the name centre in the header, so the mark, an even size in an even height, sits on whole pixels. */
+    /* The mark and the name centre in the header, so the mark, an even size in an even height, sits on whole pixels.
+       They link to the PR list with the name's look, and the controls' focus ring. */
     & .start {
       display: flex;
       align-items: center;
       gap: var(--gap-related);
+      border-radius: var(--radius-sm);
+      text-decoration: none;
+
+      &:focus-visible {
+        outline: var(--border-width-thick) solid var(--color-border-focus);
+        outline-offset: var(--focus-offset);
+      }
     }
 
     /* "prq" is lowercase only, so the mark centres on its x-height: 1px below the line's centre, the nearest whole
