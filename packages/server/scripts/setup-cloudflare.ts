@@ -145,6 +145,9 @@ async function choose(what: string, labels: readonly string[], names = labels): 
     }
     return chosen - 1;
   }
+  if (line === "") {
+    throw new Refusal(`no ${what.toLowerCase()} was chosen`);
+  }
   const named = names.flatMap((name, index) => (name.toLowerCase() === line.toLowerCase() ? [index] : []));
   if (named.length > 1) {
     throw new Refusal(`${named.length} ${what.toLowerCase()}s are named ${line}: choose one by its number`);
@@ -299,7 +302,7 @@ async function token(target: Target): Promise<{ api: CloudflareApi; zoneId: stri
     `cloudflare: create an API token from this link, which fills its permissions in: ${tokenLink(target.accountId)}`,
   );
   print(
-    `cloudflare: there, check it has these permissions, set its zone resources to only the zone ${target.zone} and its TTL to end tomorrow (Cloudflare ends it at that date's 00:00 UTC):`,
+    `cloudflare: there, check it has these permissions, set its zone resources to only the zone ${target.zone} and its TTL's end date to tomorrow in UTC (Cloudflare ends it at that date's 00:00 UTC):`,
   );
   for (const line of RECIPE) {
     print(`  ${line}`);

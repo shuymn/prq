@@ -589,6 +589,15 @@ describe("setup cloudflare", () => {
     expect(writes()).toEqual([]);
   });
 
+  it("chooses no account at an empty line, though one account has no name", async () => {
+    wranglerState({ loggedIn: true, accounts: [{ id: OTHER_ACCOUNT }, { id: ACCOUNT, name: "Synthetic Account" }] });
+
+    const result = await setup(["cloudflare"], [["Account [1-2]: ", "\r"]]);
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("setup: no account was chosen");
+  });
+
   it("takes a zone by its name", async () => {
     cf.zones.push({ id: "fedcba9876543210fedcba9876543210", name: "other-zone.example" });
 

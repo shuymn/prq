@@ -122,7 +122,7 @@ with a new token.
 
 1. **wrangler's login.** When wrangler is not logged in, it runs `wrangler login`: allow its access in the browser it
    opens. The deploys use this login, not the token below.
-2. **The account**: `target.env`'s, else the only one the login reaches, else the one you pick from the numbered list (by its number or its name).
+2. **The account**: `target.env`'s, else the only one the login reaches, else the one you pick from the numbered list (by its number, or by its name when that name is not a number and no other account has it).
 3. **The zone and the hostname**: the zone `target.env`'s `PRQ_HOST` is in; else the only zone the login lists, the
    one you pick (by number or name), or (when the login's grant does not list zones) the one you type; then `Hostname label [prq]:`. The
    web UI is `https://<host>`, the CLI's `PRQ_URL` is `https://<host>`, and GitHub delivers to
@@ -130,8 +130,7 @@ with a new token.
 4. **The API token.** It prints a link to your profile's
    [API Tokens](https://dash.cloudflare.com/profile/api-tokens) page with the permissions below and the account filled
    in (Cloudflare's token template URL); there, check the permissions, set the zone resources to only that zone and the
-   TTL's end date to tomorrow (Cloudflare ends a token at its end date's 00:00 UTC, so today's has passed in a
-   timezone ahead of UTC), and create it. It asks `Cloudflare API token (not shown):`. A token made on the account's own API
+   TTL's end date to tomorrow in UTC (Cloudflare ends a token at its end date's 00:00 UTC), and create it. It asks `Cloudflare API token (not shown):`. A token made on the account's own API
    Tokens page is refused: Cloudflare's Page Rules endpoint does not take account-owned tokens.
 
    | Resources | Permissions                                                                                                                                                                                    |
