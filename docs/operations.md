@@ -424,8 +424,9 @@ nothing mise's configuration sets (an `[env]`, global or a project's, or a `MISE
 - `--bootstrap`: once, before prq's first upload. It deploys an inert Worker named `prq` (every request answers 404
   with an `x-prq-bootstrap` header; no assets, Durable Objects or container) with workers.dev and preview URLs off and
   the version tag `prq-bootstrap`, so that no upload of prq is ever reachable at those addresses. It refuses while the
-  Worker `prq` has a live version. It prints the version's ID, asks for the account's workers.dev subdomain as the
-  dashboard shows it (Workers & Pages, `<subdomain>.workers.dev`) or `none`, and records both. `--bootstrap --resume`
+  Worker `prq` has a live version. It prints the version's ID, reads the account's workers.dev subdomain from Cloudflare's
+  API with wrangler's login, and records both. When the login may not read it, or the API names none, it asks for the
+  subdomain as the dashboard shows it (Workers & Pages, `<subdomain>.workers.dev`) or `none`. `--bootstrap --resume`
   deploys the same Worker again over a live version tagged `prq-bootstrap` alone.
 - `vX.Y.Z`: a release, in a terminal (it refuses otherwise: wrangler asks there before it replaces a DNS record or
   another Worker's domain on the hostname). In order, it
@@ -641,49 +642,113 @@ Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `setup ch
    that failed is run again as a new dispatch, by running the step again, not with "Re-run failed jobs": its draft is
    already deleted.
 
-2. **The first release**, `v0.1.0`, as in [Releases](#releases): the release pull request, the check with `--pre-tag`,
-   the tag, and the release workflow it runs, which publishes `prq` `v0.1.0`.
-3. **The bootstrap**: `pnpm --dir packages/server run deploy -- --bootstrap`. Then, in the dashboard's Domains & Routes
-   for `prq`: workers.dev and Preview URLs disabled, no custom domain. It prints, on a line of its own, the check that
-   the two addresses answer nothing of prq, `check:deployed endpoints <subdomain> --version <id>` with the subdomain you
-   gave and the version it made, or `endpoints none`, which leaves the dashboard as the evidence: run it.
+2. **The first deploy**, in a terminal with Docker running and `gh` logged in as the account that opens the pull
+   requests (the one `HOST_GITHUB_ID` names), from a checkout of `main` with its dependencies installed. A host
+   deploys a published release:
 
-   If the bootstrap stopped part-way and running it again is refused because the Worker has a live version tagged
-   `prq-bootstrap`, run `pnpm --dir packages/server run deploy -- --bootstrap --resume`: it deploys the same Worker over
-   that version, so its settings apply, and records it. `--resume` works only until the next step, whose versions carry
-   no tag. A release refuses while workers.dev or preview URLs are on, so a stopped bootstrap is finished here, or the
-   two turned off in the dashboard.
+   ```sh
+   pnpm --dir packages/server run first-deploy -- --tag v0.1.0
+   ```
 
-4. **The secrets**: `pnpm --dir packages/server run secrets put` until it exits 0
-   ([The secrets command](#the-secrets-command)), then `secrets status`, which lists all ten and nothing besides.
-5. **The deploy**, in a terminal with Docker running: `pnpm --dir packages/server run deploy -- v0.1.0`. Before
-   answering `y`, check the account, the hostname, and that the applications "prq" and "prq webhook" cover it
-   ([Zero Trust and Access](#5-zero-trust-and-access-zone)). The idle check is skipped, since nothing is served at the
-   hostname yet. The container application is created: answer `y` once the dashboard shows `prq-workspace` ready. If
-   the dashboard does not show it, answer `n` and wait the provisioning time Cloudflare documents before going on; the
-   record then says the provisioning is unverified, and `--read-back <record>` lets you answer again later.
-6. **What is served**: the dashboard's Domains & Routes for `prq` shows `<host>` as its custom domain, with workers.dev
-   and Preview URLs still disabled; signing in at `https://<host>` with the one-time PIN shows the web UI with
-   `v0.1.0`, and the browser's developer tools show the Hub's WebSocket open, its `prq:version` message naming
-   `v0.1.0`: the cookie's way through Access, which `edge` does not check. Then run the two commands the deploy printed,
-   each on a line of its own and run in the clone it kept, `check:deployed edge --team-domain "$ACCESS_TEAM_DOMAIN"`
-   and `check:deployed endpoints "$WORKERS_SUBDOMAIN"`, with `PRQ_URL` and the service token in the shell,
-   `ACCESS_TEAM_DOMAIN` set to `https://<team>.cloudflareaccess.com` and `WORKERS_SUBDOMAIN` to the account's
-   workers.dev subdomain (the deploy prints neither).
-7. **The webhook**: turn it on as in [GitHub App](#6-github-app), in one save, then the Pull request event.
-8. **The first pull request**: stop every `prq wait`, and run `check:deployed pool` until it passes (an agent stays in
-   the pool 10 minutes after its last contact), so the cloud agent owns the next new pull request. Then
-   `check:deployed summary <owner>/<repo>` with the private test repository: open a new pull request there when it
-   asks. It passes once the analysis is stored; the logs ([Rotation](#rotation) says where) show it prepare the
-   workspace (`prq.workspace.prepared`) and finish (`prq.job.usage` with the outcome `done`). A pull request opened
-   before the Pull request event was subscribed has no delivery in the App's Recent deliveries: open a new one. An
-   analysis that failed while the container application was still provisioning is retried with
-   `check:deployed retry <pr> <jobId>` once the dashboard shows the application ready. `retry` only puts the job back
-   in line: follow it with `check:deployed jobs <pr>` until the job is done, then, for `summary`'s verdict, run
-   `summary` again with a new pull request once the pool is empty.
-9. **A question**: `check:deployed ask <pr> "<question>"` on that pull request, then
-   `check:deployed edge --team-domain https://<team>.cloudflareaccess.com --pr <pr>`, which adds its session's
-   WebSocket to E1 and E2.
+   The publisher, once the release pull request `<n>` (`chore(release): vX.Y.Z`, as in [Releases](#releases)) is
+   merged, runs `first-deploy -- --create-tag --release-pr <n>` instead, which also checks and makes the tag.
+
+   It runs the steps below in order, each step's commands as children on the terminal, where they ask their own
+   questions. Its progress is recorded in `setup.json` (`firstDeploy`) as each step passes; run again, it goes on from
+   the first step that has not, and `--from <step>` runs again from that step. A step reads what it depends on again
+   (the tag on origin, the deploy's records, the test pull request on GitHub) rather than trusting the record, and a
+   run for another tag or release pull request than the recorded one is refused until `--from preflight` starts it
+   over. Each deployed check's saved run (`--json`) goes to `~/.local/state/prq/first-deploy/<tag>/`
+   (`$XDG_STATE_HOME/prq` when that is set), readable by you alone. A check is accepted only when it exits 0 and its
+   verdicts are `pass`, except that an `unattributed` denial passes once you answer `y` that Zero Trust's Access logs
+   show it refused by Access (its line gives the time and `cf-ray`), and an `unexercised` `endpoints` address once
+   you answer `y` that the dashboard's Domains & Routes for `prq` shows workers.dev and Preview URLs disabled. Any
+   other `unexercised` verdict stops the step, to run again once its event can happen. An accepted check and the
+   question before it are not repeated until `--from` runs its step again. It refuses an environment marked as CI and a
+   terminal holding an override, as the deploy does ([The deploy command](#the-deploy-command)), and exits 0 once
+   every step passed, 1 when one refused, and 2 when a command it ran exited 2 (a write without an acknowledgement).
+   What each step runs is also the way to run it by hand:
+   - `preflight`: `setup check`, `docker info` and `gh auth status`; the test repository (`setup github-app`
+     recorded it) must have a commit on its default branch (push a README to an empty one); with `--create-tag`,
+     `setup repository` too.
+   - `release-sha`: with `--tag`, origin's tag must be annotated, and the commit it tags is recorded. With
+     `--create-tag`, the pull request must be merged into `main` and titled `chore(release): vX.Y.Z`; the tag and the
+     merge commit are recorded before anything is made of them.
+   - `pre-tag` (`--create-tag` only): a passed rehearsal (step 1) of this repository whose
+     `.github/workflows/release.yml` is the merge commit's (both must be found), `release-check -- vX.Y.Z --pre-tag <sha>`, and immutable releases on ([Releases](#releases), steps 2 and
+     3).
+   - `tag` (`--create-tag` only): origin's tag, when it has one, is taken only when it is annotated on the recorded
+     commit and a local tag of the name is the same object; a local tag alone is pushed only when it is annotated on
+     that commit, on `y` to `Push the tag …? A pushed tag is permanent. [y/N]`; with neither, `Tag <sha> as vX.Y.Z
+     and push it? A pushed tag is permanent. [y/N]` makes it (`git tag -a`) and pushes it. Anything else is refused.
+     Origin's tag is read after the push, so a push whose acknowledgement was lost is found there by the next run.
+   - `release`: origin's tag must still be annotated on the recorded commit. It follows the release workflow's push
+     run of the tag at that commit through Publish ([Releases](#releases), step 4), waiting up to 5 minutes for the
+     run to appear and an hour for it to finish; the run must succeed, and the release must then be published,
+     immutable, with its three archives and nothing besides. A failed job is rerun on GitHub as Releases says, then
+     `--from release`.
+   - `bootstrap`: `deploy -- --bootstrap`, and when that fails, `deploy -- --bootstrap --resume`
+     ([The deploy command](#the-deploy-command)); a bootstrap record of the account is taken as it is, or resumed when
+     it holds no subdomain. Then, from this checkout, `check:deployed endpoints <subdomain> --version <id>` with the
+     subdomain and the version of the newest bootstrap record, or `endpoints none`, which leaves the dashboard's
+     Domains & Routes for `prq` (workers.dev and Preview URLs disabled, no custom domain) as the evidence. The step is
+     skipped once `secrets put` was acknowledged, since the Worker's versions are then no longer the bootstrap's.
+   - `secrets`: `secrets put` ([The secrets command](#the-secrets-command)), with its own `Put the secrets? [y/N]`;
+     an exit 2 puts the intended set again, up to three times in a run, and a run that stops with the update
+     unconfirmed puts it again on the next. Then `secrets status` must list all ten and nothing besides. Once a put
+     was acknowledged, a run again (even `--from preflight`) reads the status alone; a status that lists another set
+     makes the next run put them again.
+   - `deploy`: the newest record of the tag at the recorded commit, to the account and hostname `target.env` names,
+     decides. A complete one is taken. One whose upload began is read back first (`deploy -- --read-back <record>`),
+     and the tag is deployed again only when that read-back exits 2 having recorded, itself, that the upload did not
+     finish (which it says only once it read what is live). Any other outcome, a read-back that recorded no verdict
+     of its own among them, stops the step, naming that read-back as the next step (`--from deploy` runs it). A
+     deploy that fails after its upload began stops the same way; one that stopped before it (declined, or a check
+     refused) stops with its reason, for `--from deploy` to run the deploy again once that is resolved. Otherwise
+     `deploy -- vX.Y.Z` runs: before answering `y`, check the account, the hostname, and
+     that the applications "prq" and "prq webhook" cover it ([Zero Trust and Access](#5-zero-trust-and-access-zone)).
+     The idle check is skipped, since nothing is served at the hostname yet. The container application is created:
+     answer `y` once the dashboard shows `prq-workspace` ready; `n` records the provisioning unverified, and
+     `--from deploy` reads the record back to answer again once you have waited the provisioning time Cloudflare
+     documents.
+   - `served`: sign in at `https://<host>` with the one-time PIN. The web UI shows the tag, and the browser's
+     developer tools show the Hub's WebSocket open with its `prq:version` message naming it: the cookie's way through
+     Access, which `edge` does not check. Answer `y` to `Signed in, and saw …? [y/N]`. Then, in the clone the deploy
+     kept, `check:deployed edge --team-domain <ACCESS_TEAM_DOMAIN>` and `check:deployed endpoints <subdomain>` (or
+     `endpoints none`), with `PRQ_URL` and the service token from `access.env` in their environment. An `edge` run
+     whose own saved run has E4 passed confirms a service token secret that `setup cloudflare` rotated. When the
+     deploy's clone is gone, the step names how to make it again at the same path (`git clone --branch vX.Y.Z`, then
+     its tools, dependencies and build), and `--from <step>` goes on from it without another upload. The dashboard's Domains & Routes
+     for `prq` shows `<host>` as its custom domain, with workers.dev and Preview URLs still disabled.
+   - `webhook`: it sets the App's webhook through GitHub's API with the App's token (`PATCH /app/hook/config`): the
+     URL `https://<host>/webhook`, the secret from `worker.env`, JSON, and SSL verification on, and reads them back.
+     It prints the App's settings page: tick **Active** under Webhook, save, and answer `y`. It reads the App's events
+     until they hold the Pull request event, asking you to tick it under Permissions & events when they do not
+     (as in [GitHub App](#6-github-app)). Then it waits up to 5 minutes for GitHub's `ping`: answered 200, the URL,
+     Access's bypass and the secret are right; another status is refused (401: the secret differs from the
+     Worker's). Only a ping that the deliveries list after the update was read back, delivered after that point, counts;
+     no such ping leaves it unexercised, for the summary to decide.
+   - `pool`: stop every `prq wait` first; `check:deployed pool` passes once no local agent is present (an agent stays
+     in the pool 10 minutes after its last contact), so the cloud agent owns the next new pull request.
+   - `summary`: the test pull request is the private test repository's (`setup github-app` recorded it), on the
+     branch `prq-first-deploy-vX.Y.Z`, recorded before anything is made; `gh` must be logged in as `HOST_GITHUB_ID`'s
+     account, whose pull requests alone the Worker takes. A branch whose pull requests are all closed gives way to the
+     next (`prq-first-deploy-vX.Y.Z-2`, and on), and an open one must be that account's. With no pull request on the
+     branch, it runs
+     `check:deployed summary <owner>/<repo>`, and when that asks for a new pull request, `Open the test pull request
+     …? [y/N]` makes the branch, a one-line file and the pull request. The summary must have taken that pull request,
+     and passes once its analysis is stored; the logs ([Rotation](#rotation) says where) show the workspace prepared
+     (`prq.workspace.prepared`) and the job finished (`prq.job.usage` with the outcome `done`). A pull request already
+     on the branch (a run again) is read with `check:deployed jobs <pr>`: the cloud agent must own it and its analysis
+     of the head must be done. An analysis that failed while the container application was still provisioning is
+     retried with `check:deployed retry <pr> <jobId>` once the dashboard shows the application ready; follow it with
+     `check:deployed jobs <pr>` until the job is done, then `--from summary`.
+   - `ask`: `check:deployed ask <pr> "What does this pull request change?"`, then
+     `check:deployed edge --team-domain <ACCESS_TEAM_DOMAIN> --pr <pr>`, which adds the session's WebSocket to E1 and
+     E2.
+   - `report`: first the accepted checks' saved runs, which are yours alone; then each accepted check's verdicts and
+     the ping's, for the first deploy's record. That part holds no hostname, account, team domain, AUD, version or
+     path.
 
 ## Each release
 
@@ -693,7 +758,7 @@ Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `setup ch
    complete.
 3. In a terminal with Docker running: `pnpm --dir packages/server run deploy -- vX.Y.Z`. It exits 0 once the read-back is complete.
 4. Sign in at `https://<host>`: the web UI shows the new version. Then run the two checks the deploy printed, as in
-   [First deploy](#first-deploy) step 6.
+   [First deploy](#first-deploy) step 2's `served`.
 5. Once the release workflow has published it, install the new `prq` wherever a local agent runs
    ([Installing prq](#installing-prq)). Until then a `prq` of the previous release prints the version notice
    ([design.md](design.md#versions)) and works as before.
@@ -783,8 +848,10 @@ what is live, which the record holds too.
   `--ignore-running`, still in the quiet interval. Once the hostname serves prq, deploy without it, so that the idle
   check runs.
 - **The upload was stopped** (Ctrl-C, or its bound): the record says what is live is unread. `--read-back <record>`
-  reads it, and completes the read-back when the version the upload made is live alone; otherwise it says to deploy the
-  tag again. A record left at `uploading` with no result (the deploy ended with no chance to record one) is read the same
+  reads it, and completes the read-back when the version the upload made is live alone. When it could not read what is
+  live, it says so (`what is live could not be read: …`): fix what it names (the login, the network) and run the same
+  `--read-back <record>` again, without deploying. Only a read-back that read what is live says that the upload did not
+  finish: then deploy the tag again. A record left at `uploading` with no result (the deploy ended with no chance to record one) is read the same
   way, with the version wrangler's output file names, which wrangler writes once its deploy is done.
 - **Nothing of the new version went live**: the previous release still serves. Deploy the tag again once the cause is
   fixed.

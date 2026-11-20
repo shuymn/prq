@@ -99,6 +99,14 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`; host
   `FixtureGit`, a local server for the ledger and Cloudflare's API, and a terminal from python3's `pty` module, with
   `HOME` and the deploy directory in the OS temp directory; the deploy's run through the same test entry, whose fixture
   holds its shorter bounds, the ledger's origin and the API's address. Nothing reaches the network.
+- `pnpm run first-deploy -- --tag <tag> | --create-tag --release-pr <number> [--from <step>]` in `packages/server`
+  runs the first deploy from a release tag to a summary and an answer on a test pull request, through the commands
+  above and the deployed checks (`docs/operations.md`, First deploy), and is the host's to run. Its tests
+  (`packages/server/scripts/first-deploy.node.test.ts`) run it through the scripts' test entry on a terminal from
+  python3's `pty` module, in a clone of an origin made with `FixtureGit`, with stand-ins for those commands,
+  `check:deployed`, docker and `gh` that ask one local server what to answer; that server also answers GitHub's API
+  for the App's webhook, and the deployed checks' arguments are read by the CLI's own parser. Nothing reaches the
+  network.
 - A pushed `v*` tag runs `.github/workflows/release.yml`, which publishes `prq` for darwin-arm64, linux-x64 and
   linux-arm64 with build provenance (`docs/operations.md`, Releases); run by hand on `main`, it rehearses that and
   publishes nothing. It runs only on GitHub, so the hooks and `gha.yml` check it with actionlint and ghalint alone. Its
