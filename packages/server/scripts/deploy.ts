@@ -11,7 +11,7 @@
 import { randomBytes } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
@@ -42,6 +42,7 @@ import {
   Refusal,
   run,
   runCommand,
+  stateRoot,
   succeeded,
   TARGET_ENV,
   TOP_LEVEL,
@@ -245,8 +246,7 @@ async function removeOwn(dir: string): Promise<void> {
 
 // The directory the records go into, the owner's alone.
 async function records(...names: string[]): Promise<string> {
-  const xdg = process.env["XDG_STATE_HOME"];
-  const dir = join(xdg !== undefined && isAbsolute(xdg) ? xdg : join(homedir(), ".local", "state"), "prq", "deploys");
+  const dir = join(stateRoot(), "prq", "deploys");
   const made = join(dir, ...names);
   await mkdir(made, { recursive: true, mode: 0o700 });
   for (const each of [dir, made]) {
@@ -314,7 +314,7 @@ async function liveDeployment(accountId: string): Promise<Deployment | null> {
     }
     throw failed("deployments status", outcome);
   }
-  const answered = answerOf("deployments status", DeploymentAnswer, outcome.stdout);
+  const answered = answerOf("wrangler deployments status", DeploymentAnswer, outcome.stdout);
   const versions: Deployment["versions"] = [];
   for (const each of answered.versions) {
     versions.push({

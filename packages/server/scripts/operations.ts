@@ -9,8 +9,9 @@
 //
 // A program runs with a bound on its time, in a process group of its own unless it runs in the foreground; a timeout,
 // or a signal to this process, stops it with what it started (SIGTERM, then SIGKILL after a grace), and this process
-// then ends as the signal would have ended it. A program in the foreground is stopped with the processes its tree holds
-// when each signal is sent: one that left the tree and ignores SIGTERM can outlive it.
+// then ends as the signal would have ended it. A program in the foreground is stopped with every process its tree held
+// at any signal sent, so one that left the tree after the first still gets SIGKILL; one that left before it is not
+// found. What a program run in its own group left in that group when it failed is killed with it.
 //
 // A command whose programs ask the owner refuses an environment marked as CI (notInCi()). A command that reaches the
 // account first refuses a terminal holding an override (refuseOverrides()), and wrangler
@@ -22,7 +23,7 @@ import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 
@@ -287,6 +288,12 @@ export async function readPrivate(name: string): Promise<string> {
   }
 }
 
+// The directory the user's state goes in: XDG_STATE_HOME when it is absolute, else ~/.local/state.
+export function stateRoot(): string {
+  const xdg = process.env["XDG_STATE_HOME"];
+  return xdg !== undefined && isAbsolute(xdg) ? xdg : join(homedir(), ".local", "state");
+}
+
 // The account target.env names.
 export async function account(): Promise<string> {
   const id = parseEnv(await readPrivate(TARGET_ENV))["CLOUDFLARE_ACCOUNT_ID"] ?? "";
@@ -383,16 +390,6 @@ function tree(pid: number): number[] {
   return [...found, pid];
 }
 
-function signalTree(pid: number, signal: NodeJS.Signals): void {
-  for (const each of tree(pid)) {
-    try {
-      process.kill(each, signal);
-    } catch {
-      // It has ended.
-    }
-  }
-}
-
 function end(signal: NodeJS.Signals): void {
   if (ending) {
     return;
@@ -455,7 +452,25 @@ export async function run(
     throw new Refusal(`${name} could not start (${errorCode(started)})`);
   }
 
-  const signalAll = (signal: NodeJS.Signals) => (foreground ? signalTree(pid, signal) : signalGroup(pid, signal));
+  // A program in the foreground is stopped with every process its tree held at any signal sent, so one that left the
+  // tree after the first (its parent ended) still gets the last.
+  const seen = new Set<number>();
+  const signalAll = (signal: NodeJS.Signals) => {
+    if (!foreground) {
+      signalGroup(pid, signal);
+      return;
+    }
+    for (const each of tree(pid)) {
+      seen.add(each);
+    }
+    for (const each of seen) {
+      try {
+        process.kill(each, signal);
+      } catch {
+        // It has ended.
+      }
+    }
+  };
   let stopping: Promise<void> | null = null;
   current = {
     stop: async (signal) => {
@@ -483,6 +498,10 @@ export async function run(
   }, options.timeoutMs);
   const [code, signal] = await closed;
   clearTimeout(timer);
+  if (!foreground && code !== 0) {
+    // What a program that failed left running in its group ends with it.
+    signalGroup(pid, "SIGKILL");
+  }
   if (ending) {
     // A signal stops this process once the program has ended; nothing more is done or printed.
     await new Promise(() => {});
@@ -577,17 +596,17 @@ export function failed(what: string, outcome: Outcome): Refusal {
   return new Refusal(outcome.timedOut ? stopped(what) : `wrangler ${what} failed (${exited(outcome)})`);
 }
 
-// What wrangler answers as JSON, read with a schema.
-export function answerOf<S extends v.GenericSchema>(what: string, schema: S, text: string): v.InferOutput<S> {
+// What a program answers as JSON, read with a schema; source names the call (such as "wrangler whoami").
+export function answerOf<S extends v.GenericSchema>(source: string, schema: S, text: string): v.InferOutput<S> {
   let json: unknown;
   try {
     json = JSON.parse(text);
   } catch {
-    throw new Refusal(`wrangler ${what} did not answer JSON`);
+    throw new Refusal(`${source} did not answer JSON`);
   }
   const parsed = v.safeParse(schema, json);
   if (!parsed.success) {
-    throw new Refusal(`wrangler ${what} did not answer in the shape this command reads`);
+    throw new Refusal(`${source} did not answer in the shape this command reads`);
   }
   return parsed.output;
 }
@@ -603,7 +622,7 @@ export async function wranglerJson<S extends v.GenericSchema>(
   if (!succeeded(outcome)) {
     throw failed(what, outcome);
   }
-  return answerOf(what, schema, outcome.stdout);
+  return answerOf(`wrangler ${what}`, schema, outcome.stdout);
 }
 
 // `whoami --json`'s accounts.

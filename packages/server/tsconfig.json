@@ -11,6 +11,8 @@
     "scripts/operations.ts",
     "scripts/release-check.ts",
     "scripts/deploy.ts",
+    "scripts/setup.ts",
+    "scripts/test-terminal.ts",
     "scripts/**/*.node.test.ts",
     "src/client"
   ]
