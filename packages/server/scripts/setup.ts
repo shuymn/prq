@@ -811,7 +811,7 @@ async function hostSteps(): Promise<void> {
       continue;
     }
     try {
-      await hostStep(step);
+      await hostStep(step, { named: false });
     } catch (error) {
       if (!(error instanceof Refusal)) {
         throw error;
@@ -851,7 +851,7 @@ async function main(args: readonly string[]): Promise<void> {
     return;
   }
   if (isHostStep(step)) {
-    await hostStep(step);
+    await hostStep(step, { named: true });
     return;
   }
   const where = await checkout();

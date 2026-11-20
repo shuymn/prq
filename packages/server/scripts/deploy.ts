@@ -20,11 +20,12 @@ import { LedgerPage } from "@prq/protocol";
 import * as v from "valibot";
 import { unstable_readConfig } from "wrangler";
 
+import { apiOrigin, forgetWranglerHeaders, wranglerHeaders } from "./cloudflare-api.ts";
 import { fixture } from "./fixture.ts";
 import {
+  ACCESS_ENV,
   account,
   accountName,
-  API,
   answer,
   answerOf,
   ask,
@@ -37,6 +38,7 @@ import {
   onInterrupt,
   print,
   printError,
+  readEnvFile,
   readPrivate,
   readTarget,
   refuseOverrides,
@@ -85,17 +87,15 @@ const LEDGER_PAGES = 1_000;
 const LEDGER_REQUEST_MS = 30_000;
 
 // Only the tests' fixture sets shorter bounds for the clone's steps and the upload, a shorter poll interval, the
-// Worker's origin for the idle check, or the API the deploy's own reads go to (a stand-in).
+// Worker's origin for the idle check (a stand-in).
 const stepMs = fixture.stepMs ?? 60 * 60_000;
 const uploadMs = fixture.stepMs ?? 2 * 60 * 60_000;
 const pollMs = fixture.pollMs ?? 10_000;
 // The rollout is read every poll interval until it is complete or this long has passed since the poll began.
 const rolloutMs = fixture.rolloutMs ?? 30 * 60_000;
 const originOverride = fixture.origin;
-const api = fixture.api ?? API;
 
-// What wrangler answers: `deployments status --json`, `versions view --json`, `auth token --json` (wrangler's
-// credentials: an OAuth or API token, or a global API key with its email), `containers info --json` and a page of `containers instances --json --per-page` (a Durable Object with no instance
+// What wrangler answers: `deployments status --json`, `versions view --json`, `containers info --json` and a page of `containers instances --json --per-page` (a Durable Object with no instance
 // is a row of its own, its state "inactive").
 const DeploymentAnswer = v.object({
   id: v.nullish(v.string()),
@@ -105,10 +105,6 @@ const VersionAnswer = v.object({
   annotations: v.nullish(v.record(v.string(), v.string())),
   resources: v.nullish(v.object({ bindings: v.nullish(v.array(v.object({ type: v.string() }))) })),
 });
-const AuthAnswer = v.variant("type", [
-  v.object({ type: v.picklist(["oauth", "api_token"]), token: v.string() }),
-  v.object({ type: v.literal("api_key"), key: v.string(), email: v.string() }),
-]);
 const ApplicationAnswer = v.object({
   id: v.string(),
   version: v.nullish(v.number()),
@@ -322,44 +318,6 @@ async function liveDeployment(accountId: string): Promise<Deployment | null> {
   return { id: answered.id ?? null, versions };
 }
 
-// The headers of a read with wrangler's login: its credentials, from `wrangler auth token --json`, held in this
-// process alone (in no argument, other process's environment, file or line printed), read once before the upload and
-// once after it.
-let credentials: Promise<Record<string, string>> | null = null;
-
-function authHeaders(accountId: string): Promise<Record<string, string>> {
-  credentials ??= (async () => {
-    // No log file: its output is the credentials.
-    const outcome = await wrangler(["auth", "token", "--json", ...TOP_LEVEL], accountId, {
-      env: { WRANGLER_WRITE_LOGS: "false" },
-    });
-    if (!succeeded(outcome)) {
-      // Its output is not shown: it can hold the credentials.
-      throw new Refusal(
-        `wrangler auth token ${outcome.timedOut ? "did not finish" : `failed (${exited(outcome)})`}: log wrangler in (docs/operations.md, Cloudflare account)`,
-      );
-    }
-    let json: unknown = null;
-    try {
-      json = JSON.parse(outcome.stdout);
-    } catch {
-      // Refused below.
-    }
-    const parsed = v.safeParse(AuthAnswer, json);
-    if (!parsed.success) {
-      throw new Refusal("wrangler auth token did not answer in the shape this command reads");
-    }
-    const auth = parsed.output;
-    if (auth.type === "api_key") {
-      hide([auth.key, auth.email]);
-      return { "X-Auth-Key": auth.key, "X-Auth-Email": auth.email };
-    }
-    hide([auth.token]);
-    return { Authorization: `Bearer ${auth.token}` };
-  })();
-  return credentials;
-}
-
 // A GET of Cloudflare's API on the account with wrangler's login, its result as schema reads it; null when the API
 // answers 404.
 async function apiRead<S extends v.GenericSchema>(
@@ -368,10 +326,10 @@ async function apiRead<S extends v.GenericSchema>(
   path: string,
   schema: S,
 ): Promise<v.InferOutput<S> | null> {
-  const headers = await authHeaders(accountId);
+  const headers = await wranglerHeaders(accountId);
   let response: Response;
   try {
-    response = await fetch(`${api}/accounts/${accountId}${path}`, {
+    response = await fetch(`${apiOrigin}/accounts/${accountId}${path}`, {
       headers,
       redirect: "manual",
       signal: AbortSignal.timeout(waitMs),
@@ -508,10 +466,15 @@ function applicationLine(app: Application | null): string {
   return `${app.id}, version ${app.version ?? "unknown"}, image ${app.image ?? "unknown"}, rollout ${app.activeRollout ?? "none active"}`;
 }
 
-// The service token prq uses, from the environment, for the idle check.
-function serviceToken(): { id: string; secret: string } | null {
-  const id = process.env["PRQ_ACCESS_CLIENT_ID"] ?? "";
-  const secret = process.env["PRQ_ACCESS_CLIENT_SECRET"] ?? "";
+// The service token prq uses, for the idle check: from the environment when it sets both, else from access.env.
+async function serviceToken(): Promise<{ id: string; secret: string } | null> {
+  let id = process.env["PRQ_ACCESS_CLIENT_ID"] ?? "";
+  let secret = process.env["PRQ_ACCESS_CLIENT_SECRET"] ?? "";
+  if (id === "" || secret === "") {
+    const stored = (await readEnvFile(ACCESS_ENV)) ?? new Map<string, string>();
+    id = stored.get("PRQ_ACCESS_CLIENT_ID") ?? "";
+    secret = stored.get("PRQ_ACCESS_CLIENT_SECRET") ?? "";
+  }
   hide([secret].filter((value) => value !== ""));
   return id === "" || secret === "" ? null : { id, secret };
 }
@@ -561,10 +524,10 @@ async function busyRows(origin: string, token: { id: string; secret: string }): 
 // Whether any cloud work waits or runs, refused when some does or the check cannot tell; with ignoreRunning, a warning.
 async function idleCheck(host: string, ignoreRunning: boolean): Promise<string> {
   try {
-    const token = serviceToken();
+    const token = await serviceToken();
     if (token === null) {
       throw new Refusal(
-        "the idle check reads the ledger with the service token: set PRQ_ACCESS_CLIENT_ID and PRQ_ACCESS_CLIENT_SECRET as for prq",
+        `the idle check reads the ledger with the service token: set PRQ_ACCESS_CLIENT_ID and PRQ_ACCESS_CLIENT_SECRET as for prq, or run setup cloudflare, which writes them to ${ACCESS_ENV}`,
       );
     }
     const busy = await busyRows(originOverride ?? `https://${host}`, token);
@@ -1185,7 +1148,7 @@ async function release(tag: string, flags: Flags): Promise<number> {
   }
   await record.save();
   // The login read before the upload can have expired since (wrangler refreshes it when asked again).
-  credentials = null;
+  forgetWranglerHeaders();
   record.data.after = await readState(accountId, before.application?.id ?? null);
   pin(record, record.data.after.application);
   if (!succeeded(uploaded)) {

@@ -42,6 +42,8 @@ const MODEL_LINES = (key: string) => [
   "MODEL_CONTEXT_TOKENS=1048576",
 ];
 const TARGET = "CLOUDFLARE_ACCOUNT_ID=5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e\nPRQ_HOST=prq.example.com\n";
+const ACCESS =
+  "PRQ_URL=https://prq.example.com\nPRQ_ACCESS_CLIENT_ID=id.access\nPRQ_ACCESS_CLIENT_SECRET=sentinel-client-secret\n";
 const keyLines = (key: string) => key.split("\n").filter((line) => line !== "" && !line.startsWith("-----"));
 const SENTINELS = [
   "LSCAUSEDNOECHO",
@@ -49,6 +51,7 @@ const SENTINELS = [
   NEW_KEY,
   ...OTHERS.map((line) => line.slice(line.indexOf("=") + 1)).filter((value) => value.includes("sentinel")),
   ...keyLines(APP_KEY),
+  "sentinel-client-secret",
 ];
 const KEY_PROMPT = "DeepSeek API key (not shown): ";
 // A value pasted where a name goes, whose part before its padding reads as a name.
@@ -144,6 +147,8 @@ async function setup(
   { terminal = true, turns = [], umask = "022", stty = false, signalAt, signalWhen, holdMs }: Run = {},
 ): Promise<Result> {
   const file = join(root, "fixture.json");
+  // wrangler in place: a program that fails, so that the cloudflare step stops where it is not recorded (its own
+  // tests, setup-cloudflare.node.test.ts, give it stand-ins).
   const settings: v.InferOutput<typeof Fixture> = {
     directory,
     modelApi: origin,
@@ -154,6 +159,7 @@ async function setup(
     gh: programs.gh,
     open: programs.open,
     childEnv: { PRQ_GITHUB_STAND_IN: github.origin },
+    wrangler: "false",
     ...(holdMs === undefined ? {} : { holdMs }),
   };
   writeFileSync(file, JSON.stringify(settings));
@@ -243,10 +249,11 @@ async function recordedApp(): Promise<void> {
   });
 }
 
-// A complete deploy directory but the model's lines.
+// A complete deploy directory but the model's lines (the cloudflare step's recorded).
 async function completeButModel(): Promise<void> {
   await writePrivateFile("worker.env", `${OTHERS.join("\n")}\n`);
   await recordedApp();
+  await writePrivateFile("access.env", ACCESS);
 }
 
 // Adds an access control list entry that grants nothing the mode shows: macOS's chmod +a, or setfacl elsewhere with a
@@ -272,6 +279,7 @@ describe("setup without a step", () => {
     const order = [
       "setup: the host's steps",
       "directory: done",
+      "cloudflare: done (recorded",
       "github-app: done",
       "model: done",
       "check: done",
@@ -282,6 +290,10 @@ describe("setup without a step", () => {
     expect(first.output).toContain(
       "setup: the publisher's steps run only when named: setup repository, setup rehearsal",
     );
+    expect(first.output).toContain(
+      "cloudflare: done (recorded in target.env, worker.env and access.env; setup cloudflare checks them",
+    );
+    expect(first.output).not.toContain("Cloudflare API token");
     expect(first.output).toContain(
       "model: wrote MODEL_BASE_URL, MODEL_API_KEY, MODEL_ID, MODEL_CONTEXT_TOKENS to worker.env",
     );
@@ -301,7 +313,7 @@ describe("setup without a step", () => {
     expect(deepseek.requests).toEqual([`Bearer ${MODEL_KEY}`]);
   });
 
-  it("creates the directory and the file with exact owner bits under any umask, and skips the check the App's step stopped", async () => {
+  it("creates the directory and the file with exact owner bits under any umask, and skips the check after cloudflare and the App's step stop", async () => {
     const result = await setup([], {
       turns: [
         ["The hostname prq will serve", "\r"],
@@ -312,11 +324,12 @@ describe("setup without a step", () => {
 
     expect(result.code).toBe(1);
     expect(result.output).toContain(`directory: created ${directory} (0700)`);
+    expect(result.output).toContain("cloudflare: wrangler whoami failed");
     expect(result.output).toContain("github-app: that is not a hostname; nothing was written");
     expect(result.output).toContain("model: done");
-    expect(result.output).toContain("check: skipped (it needs github-app, which stopped)");
+    expect(result.output).toContain("check: skipped (it needs cloudflare, which stopped)");
     expect(result.output).toContain(
-      "setup: stopped: github-app, check; fix what the first one says, then run setup again",
+      "setup: stopped: cloudflare, github-app, check; fix what the first one says, then run setup again",
     );
     expect((await stat(directory)).mode & 0o777).toBe(0o700);
     expect((await stat(join(root, "config"))).mode & 0o777).toBe(0o700);
@@ -349,9 +362,21 @@ describe("setup without a step", () => {
     expect(result.code).toBe(1);
     expect(result.output).toMatch(/github-app: could not write setup\.json in .+ \(EACCES\); it is as it was/);
     expect(result.output).toContain("model: done");
-    expect(result.output).toContain("check: skipped (it needs github-app, which stopped)");
+    expect(result.output).toContain(
+      "setup: stopped: cloudflare, github-app, check; fix what the first one says, then run setup again",
+    );
     expect(await readdir(join(root, "state"))).toEqual([]);
     expect(github.state().opened).toEqual([]);
+  });
+
+  it("runs the cloudflare step when access.env holds an empty credential", async () => {
+    await completeButModel();
+    await writePrivateFile("access.env", ACCESS.replace("PRQ_ACCESS_CLIENT_ID=id.access", "PRQ_ACCESS_CLIENT_ID="));
+
+    const result = await setup([], { turns: [[KEY_PROMPT, `${MODEL_KEY}\r`]] });
+
+    expect(result.output).not.toContain("cloudflare: done");
+    expect(result.output).toContain("cloudflare: wrangler whoami failed");
   });
 
   it.each([
@@ -478,6 +503,7 @@ describe("setup model", () => {
     const before = `${[...OTHERS, ...MODEL_LINES("sk-sentinel-revoked")].join("\n")}\n`;
     await writePrivateFile("worker.env", before);
     await recordedApp();
+    await writePrivateFile("access.env", ACCESS);
     SENTINELS.push("sk-sentinel-revoked");
 
     const result = await setup([], {
@@ -644,7 +670,7 @@ describe("setup model writing", () => {
   });
 
   it("refuses a directory it cannot write, naming it, and skips the check", async () => {
-    // The App recorded, so that the model's write is the first this run makes.
+    // The cloudflare step and the App recorded, so that the model's write is the first this run makes.
     await completeButModel();
     await chmod(directory, 0o500);
 
@@ -665,30 +691,15 @@ describe("setup check", () => {
     await writePrivateFile("worker.env", `${[...OTHERS, ...MODEL_LINES(MODEL_KEY)].join("\n")}\n`);
   }
 
-  it("passes a complete directory without access.env, reaching nothing", async () => {
+  it("passes a complete directory, reaching nothing", async () => {
     await complete();
-
-    const result = await setup(["check"]);
-
-    expect(result.code).toBe(0);
-    expect(result.output).toContain("check: access.env: none yet");
-    expect(result.output).toContain("check: target.env: exactly their names");
-    expect(result.output).toContain("check: done");
-    expect(deepseek.requests).toEqual([]);
-  });
-
-  it("passes access.env with exactly its names", async () => {
-    await complete();
-    await writePrivateFile(
-      "access.env",
-      "PRQ_URL=https://prq.example.com\nPRQ_ACCESS_CLIENT_ID=id.access\nPRQ_ACCESS_CLIENT_SECRET=sentinel-client-secret\n",
-    );
-    SENTINELS.push("sentinel-client-secret");
 
     const result = await setup(["check"]);
 
     expect(result.code).toBe(0);
     expect(result.output).toContain("check: target.env and access.env: exactly their names");
+    expect(result.output).toContain("check: done");
+    expect(deepseek.requests).toEqual([]);
   });
 
   it.each([
@@ -712,6 +723,19 @@ describe("setup check", () => {
       "CLOUDFLARE_ACCOUNT_ID=5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e\n",
       "target.env does not set PRQ_HOST",
     ],
+    ["no access.env", "access.env", null, "the deploy directory has no access.env (setup cloudflare writes it)"],
+    [
+      "access.env naming another host",
+      "access.env",
+      ACCESS.replace("prq.example.com", "other.example.com"),
+      "access.env does not set PRQ_URL to https:// and target.env's PRQ_HOST",
+    ],
+    [
+      "access.env with an empty secret",
+      "access.env",
+      ACCESS.replace("PRQ_ACCESS_CLIENT_SECRET=sentinel-client-secret", "PRQ_ACCESS_CLIENT_SECRET="),
+      "access.env sets PRQ_ACCESS_CLIENT_SECRET to nothing",
+    ],
     [
       "access.env without its secret",
       "access.env",
@@ -727,7 +751,11 @@ describe("setup check", () => {
     ["a file open to others", "access.env", "PRQ_URL=x\n", "access.env is open to others than its owner (mode 0640)"],
   ])("refuses %s", async (_what, file, text, refusal) => {
     await complete();
-    await writePrivateFile(file, text, refusal.includes("0640") ? 0o640 : 0o600);
+    if (text === null) {
+      await rm(join(directory, file));
+    } else {
+      await writePrivateFile(file, text, refusal.includes("0640") ? 0o640 : 0o600);
+    }
 
     const result = await setup(["check"]);
 

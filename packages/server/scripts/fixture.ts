@@ -16,14 +16,15 @@ export const Fixture = v.strictObject({
   gh: v.optional(v.string()),
   ghInfra: v.optional(v.string()),
   stateDir: v.optional(v.string()),
-  // The wait for wrangler, gh, git and an answer; the clone's steps, the upload and gh-infra's apply; the rollout's and
+  // The wait for wrangler, gh, git and an answer; the clone's steps, the upload, gh-infra's apply, and what the owner
+  // does in a browser during setup cloudflare; the rollout's and
   // the rehearsal's poll; the rollout's end; and the rehearsal's end.
   waitMs: v.optional(Milliseconds),
   stepMs: v.optional(Milliseconds),
   pollMs: v.optional(Milliseconds),
   rolloutMs: v.optional(Milliseconds),
   followMs: v.optional(Milliseconds),
-  // The Worker's origin for the idle check, and the API the deploy's own reads go to.
+  // The Worker's origin for the idle check, and the API the deploy's own reads and setup cloudflare's calls go to.
   origin: v.optional(v.string()),
   api: v.optional(v.string()),
   // How long a write to the deploy directory holds its temporary file before renaming it: the tests' window to stop

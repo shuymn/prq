@@ -1352,10 +1352,31 @@ describe("deploy <tag>", () => {
 
     expect(result.code).toBe(1);
     expect(result.output).toContain(
-      "deploy: the idle check reads the ledger with the service token: set PRQ_ACCESS_CLIENT_ID and PRQ_ACCESS_CLIENT_SECRET as for prq",
+      "deploy: the idle check reads the ledger with the service token: set PRQ_ACCESS_CLIENT_ID and PRQ_ACCESS_CLIENT_SECRET as for prq, or run setup cloudflare, which writes them to access.env",
     );
     expect(ledgerRequests).toEqual([]);
     expect(await deployCalls()).toEqual([]);
+  });
+
+  it("reads the service token from access.env when the environment lacks it", async () => {
+    await released();
+    delete env["PRQ_ACCESS_CLIENT_ID"];
+    delete env["PRQ_ACCESS_CLIENT_SECRET"];
+    await writeFile(
+      join(settings.directory ?? "", "access.env"),
+      `PRQ_URL=https://${HOST}\nPRQ_ACCESS_CLIENT_ID=${TOKEN.id}\nPRQ_ACCESS_CLIENT_SECRET=${TOKEN.secret}\n`,
+      { mode: 0o600 },
+    );
+    ledger = [{ rows: [ledgerRow(3, "cloud", 1, 0)], nextCursor: null }];
+
+    const result = await deploy([TAG], { answers: ["y"] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("deploy: cloud work is waiting or running: prq-test/app#3");
+    expect(ledgerRequests[0]?.headers).toMatchObject({
+      "cf-access-client-id": TOKEN.id,
+      "cf-access-client-secret": TOKEN.secret,
+    });
   });
 
   it("deploys with a warning past busy cloud work under --ignore-running", async () => {

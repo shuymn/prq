@@ -14,6 +14,8 @@
     "scripts/setup.ts",
     "scripts/test-terminal.ts",
     "scripts/setup-host.ts",
+    "scripts/setup-cloudflare.ts",
+    "scripts/cloudflare-api.ts",
     "scripts/setup-state.ts",
     "scripts/setup-run.ts",
     "scripts/setup-terminal.ts",

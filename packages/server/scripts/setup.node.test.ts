@@ -516,7 +516,7 @@ describe("setup", () => {
       expect(result).toMatchObject({
         code: 1,
         output:
-          "setup: usage: setup [repository | rehearsal | directory | github-app | model | check] | setup github-app --key <file> --app-id <id>\n",
+          "setup: usage: setup [repository | rehearsal | directory | cloudflare | github-app | model | check] | setup github-app --key <file> --app-id <id>\n",
       });
     }
     expect(await calls()).toEqual([]);
