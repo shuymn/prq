@@ -12,18 +12,21 @@
 // then ends as the signal would have ended it. A program in the foreground is stopped with the processes its tree holds
 // when each signal is sent: one that left the tree and ignores SIGTERM can outlive it.
 //
-// A command that reaches the account first refuses a terminal holding an override (refuseOverrides()), and wrangler
+// A command whose programs ask the owner refuses an environment marked as CI (notInCi()). A command that reaches the
+// account first refuses a terminal holding an override (refuseOverrides()), and wrangler
 // runs with an environment built for it (wranglerEnv()) and an env file that holds nothing (NO_ENV_FILE). The tests
 // reach their stand-ins through their own entry (test-entry.ts, fixture.ts), not through the environment.
 
 import { spawn, spawnSync } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 
+import { isCI, name as ciName } from "ci-info";
 import * as v from "valibot";
 
 import { fixture } from "./fixture.ts";
@@ -102,6 +105,57 @@ export function refuseOverrides(): void {
   }
 }
 
+// The variables ci-info, which wrangler bundles, takes as CI besides each CI service's own (ci-info's vendors.json),
+// unless CI is "false".
+const CI_VARIABLES = [
+  "CI",
+  "BUILD_ID",
+  "BUILD_NUMBER",
+  "CI_APP_ID",
+  "CI_BUILD_ID",
+  "CI_BUILD_NUMBER",
+  "CI_NAME",
+  "CONTINUOUS_INTEGRATION",
+  "RUN_ID",
+];
+// A CI service's variables in vendors.json: a name, a list of them, { env: name, includes }, { any: [names] }, or
+// { name: value }.
+const VendorEnv = v.union([v.string(), v.record(v.string(), v.unknown())]);
+const Vendors = v.array(v.object({ name: v.string(), env: v.union([VendorEnv, v.array(VendorEnv)]) }));
+
+function vendorVariables(env: v.InferOutput<typeof VendorEnv>): string[] {
+  if (typeof env === "string") {
+    return [env];
+  }
+  if (typeof env["env"] === "string") {
+    return [env["env"]];
+  }
+  return v.is(v.array(v.string()), env["any"]) ? env["any"] : Object.keys(env);
+}
+
+function isSet(name: string): boolean {
+  return (process.env[name] ?? "") !== "";
+}
+
+// Refused in an environment ci-info marks as CI, naming what marks it, and why the command runs from the owner's
+// terminal alone (reason): a command whose programs ask the owner, which take CI as nobody to ask.
+export function notInCi(reason: string): void {
+  if (!isCI) {
+    return;
+  }
+  const vendor =
+    ciName === null
+      ? undefined
+      : v.parse(Vendors, createRequire(import.meta.url)("ci-info/vendors.json")).find((each) => each.name === ciName);
+  const marks = new Set([
+    ...CI_VARIABLES.filter(isSet),
+    ...(vendor === undefined ? [] : [vendor.env].flat().flatMap(vendorVariables).filter(isSet)),
+  ]);
+  throw new Refusal(
+    `the environment marks this run as CI (${marks.size > 0 ? [...marks].join(", ") : `the variables of ${ciName ?? "a CI service"}`}), ${reason}`,
+  );
+}
+
 // What wrangler's environment keeps of this process's: what a program needs to run here (the paths, the user, the
 // shell, the temp directory, the locale and the terminal), the directories wrangler keeps its login in (XDG_*), and the
 // Docker settings the image's build and push take. Nothing else reaches wrangler, so a variable that would redirect it
@@ -177,7 +231,7 @@ export function printError(line: string): void {
   process.stderr.write(`${redact(line)}\n`);
 }
 
-function mode(bits: number): string {
+export function mode(bits: number): string {
   return `0${(bits & 0o777).toString(8)}`;
 }
 

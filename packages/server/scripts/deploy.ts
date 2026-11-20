@@ -17,7 +17,6 @@ import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 
 import { LedgerPage } from "@prq/protocol";
-import { isCI, name as ciName } from "ci-info";
 import * as v from "valibot";
 import { unstable_readConfig } from "wrangler";
 
@@ -34,6 +33,7 @@ import {
   failed,
   hide,
   NO_ENV_FILE,
+  notInCi,
   onInterrupt,
   print,
   printError,
@@ -56,6 +56,9 @@ import {
 import { TAG } from "./release-check.ts";
 
 const BOOTSTRAP_TAG = "prq-bootstrap";
+// wrangler takes an environment ci-info marks as CI as one with nobody to ask, and answers its own questions (whether to
+// replace a DNS record or another Worker's domain) with their defaults: the deploy runs from the owner's terminal alone.
+const CI_REASON = "where wrangler answers its own questions: deploy from a terminal of your own";
 // The Workspace's container application, as wrangler names it from wrangler.jsonc (<Worker>-<class>, lowercased).
 const APPLICATION = "prq-workspace";
 const RELEASE_CHECK = fileURLToPath(new URL("release-check.ts", import.meta.url));
@@ -79,38 +82,6 @@ const BUILD_OVERRIDES = ["PRQ_BUILD_VERSION", "PRQ_BUILD_PREFIX"];
 // The most ledger pages the idle check reads.
 const LEDGER_PAGES = 1_000;
 const LEDGER_REQUEST_MS = 30_000;
-
-// The variables ci-info, which wrangler bundles, takes as CI besides each CI service's own (ci-info's vendors.json),
-// unless CI is "false".
-const CI_VARIABLES = [
-  "CI",
-  "BUILD_ID",
-  "BUILD_NUMBER",
-  "CI_APP_ID",
-  "CI_BUILD_ID",
-  "CI_BUILD_NUMBER",
-  "CI_NAME",
-  "CONTINUOUS_INTEGRATION",
-  "RUN_ID",
-];
-// A CI service's variables in vendors.json: a name, a list of them, { env: name, includes }, { any: [names] }, or
-// { name: value }.
-const VendorEnv = v.union([v.string(), v.record(v.string(), v.unknown())]);
-const Vendors = v.array(v.object({ name: v.string(), env: v.union([VendorEnv, v.array(VendorEnv)]) }));
-
-function vendorVariables(env: v.InferOutput<typeof VendorEnv>): string[] {
-  if (typeof env === "string") {
-    return [env];
-  }
-  if (typeof env["env"] === "string") {
-    return [env["env"]];
-  }
-  return v.is(v.array(v.string()), env["any"]) ? env["any"] : Object.keys(env);
-}
-
-function isSet(name: string): boolean {
-  return (process.env[name] ?? "") !== "";
-}
 
 // Only the tests' fixture sets shorter bounds for the clone's steps and the upload, a shorter poll interval, the
 // Worker's origin for the idle check, or the API the deploy's own reads go to (a stand-in).
@@ -1417,30 +1388,11 @@ async function bootstrap(resume: boolean): Promise<number> {
   return 0;
 }
 
-// wrangler takes an environment ci-info marks as CI as one with nobody to ask, and answers its own questions (whether to
-// replace a DNS record or another Worker's domain) with their defaults: the deploy runs from the owner's terminal alone.
-function notInCi(): void {
-  if (!isCI) {
-    return;
-  }
-  const vendor =
-    ciName === null
-      ? undefined
-      : v.parse(Vendors, createRequire(import.meta.url)("ci-info/vendors.json")).find((each) => each.name === ciName);
-  const marks = new Set([
-    ...CI_VARIABLES.filter(isSet),
-    ...(vendor === undefined ? [] : [vendor.env].flat().flatMap(vendorVariables).filter(isSet)),
-  ]);
-  throw new Refusal(
-    `the environment marks this run as CI (${marks.size > 0 ? [...marks].join(", ") : `the variables of ${ciName ?? "a CI service"}`}), where wrangler answers its own questions: deploy from a terminal of your own`,
-  );
-}
-
 async function main(args: readonly string[]): Promise<number> {
   refuseOverrides();
   const [first = "", ...rest] = args;
   if (first === "--bootstrap" && (rest.length === 0 || (rest.length === 1 && rest[0] === "--resume"))) {
-    notInCi();
+    notInCi(CI_REASON);
     return bootstrap(rest.length === 1);
   }
   if (first === "--read-back" && rest.length === 1 && rest[0] !== undefined) {
@@ -1448,7 +1400,7 @@ async function main(args: readonly string[]): Promise<number> {
   }
   const known = ["--ignore-running", "--immediate", "--keep-image"];
   if (TAG.test(first) && rest.every((arg) => known.includes(arg)) && new Set(rest).size === rest.length) {
-    notInCi();
+    notInCi(CI_REASON);
     return release(first, {
       ignoreRunning: rest.includes("--ignore-running"),
       immediate: rest.includes("--immediate"),
