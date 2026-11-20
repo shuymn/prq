@@ -3,7 +3,7 @@
 // rail's jobs, each job's Retry, the composer's hold and context line, and the connection. Pure: the screen and the
 // gallery derive the same page from the same inputs.
 
-import type { HubView, JobView, MessageMetadata, Owner, PrSessionView } from "@prq/protocol";
+import type { HubView, JobView, MessageMetadata, Owner, PrDetails, PrRef, PrSessionView } from "@prq/protocol";
 
 import type { ComposerDown, ComposerHeld } from "../components/Composer.tsx";
 import type { ConnectionState } from "../components/ConnectionBanner.tsx";
@@ -25,6 +25,9 @@ export type DetailInput = {
   hub: HubView | null;
   // The version the host picked, by its job.
   picked: string | null;
+  // The pull request before the session's first view: the page's reference and the details the PR list last read of
+  // it, if any, which the header shows meanwhile.
+  known?: { pr: PrRef; details: PrDetails | null } | undefined;
 };
 
 type Header = { state: PrState | null; repository: string; number: number; title: string; url: string };
@@ -449,9 +452,10 @@ const BANNER: Record<Connection, ConnectionState | null> = {
   failed: "failed",
 };
 
-function headerOf(view: PrSessionView): Header {
-  const { owner, repo, number } = view.pr;
-  const details = view.details;
+// Without details (before the pull request's first webhook, or a page opened directly before the session's first
+// view), what the reference gives: the repository and number, the number as the title, and its GitHub address.
+function headerOf({ pr, details }: { pr: PrRef; details: PrDetails | null }): Header {
+  const { owner, repo, number } = pr;
   return details === null
     ? {
         state: null,
@@ -463,11 +467,12 @@ function headerOf(view: PrSessionView): Header {
     : { state: details.state, repository: details.fullName, number, title: details.title, url: details.url };
 }
 
-export function detailModel({ session, slot, hub, picked }: DetailInput): DetailModel {
+export function detailModel({ session, slot, hub, picked, known }: DetailInput): DetailModel {
   const { view } = session;
   const held: ComposerHeld | null = slot === null ? null : failureOf(slot) === null ? "pending" : "failed";
+  const pr = view ?? known;
   const base = {
-    header: view === null ? null : headerOf(view),
+    header: pr === undefined ? null : headerOf(pr),
     banner: BANNER[session.connection],
     composer: { loading: true, down: DOWN[session.connection], held, answeredAt: null },
   };

@@ -4,8 +4,9 @@ import type { ReactNode } from "react";
 import { BrandMark } from "./BrandMark.tsx";
 import { IconButtonLink } from "./IconButton.tsx";
 
-// The page's header (design/components.md, AppHeader): the product's mark and name, the version of the build this
-// tab runs, and at its end the pool's status and the link to the settings, marked on the Settings page.
+// The page's header (design/components.md, AppHeader): the product's mark and name with the version of the build this
+// tab runs, a link to the PR list, and at its end the pool's status and the link to the settings, marked on the
+// Settings page.
 export function AppHeader({
   version,
   pool,
@@ -17,7 +18,7 @@ export function AppHeader({
 }) {
   return (
     <header data-component="AppHeader">
-      <div className="start">
+      <a className="start" href="/">
         <span className="mark-box">
           <BrandMark variant="face" size={2} />
         </span>
@@ -25,7 +26,7 @@ export function AppHeader({
           <span className="product">prq</span>
           <span className="version">{version}</span>
         </span>
-      </div>
+      </a>
       <div className="end">
         {pool}
         <IconButtonLink icon="gear" label="Settings" href="/settings" current={settings} />

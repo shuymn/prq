@@ -11,6 +11,7 @@ import { FAILURES } from "../components/Message.tsx";
 import { RETRY_ERROR } from "../components/retry.tsx";
 import type { Hub } from "../hub.ts";
 import type { Layout } from "../layout.ts";
+import { knownDetails } from "../ledger.ts";
 import { poolStatus } from "../pool.tsx";
 import { backToList } from "../routes.ts";
 import { useSession } from "../session.ts";
@@ -60,7 +61,9 @@ export function PrDetailScreen({
     writeRailCollapsed(railCollapsed);
   }, [railCollapsed]);
   const field = useRef<HTMLTextAreaElement>(null);
-  const model = detailModel({ session, slot, hub: hub.view, picked });
+  // What the PR list last read of this pull request, for the header until the session's first view.
+  const [known] = useState(() => ({ pr: prRef, details: knownDetails(prRef) }));
+  const model = detailModel({ session, slot, hub: hub.view, picked, known });
   const title = model.header?.title;
 
   useEffect(() => {
