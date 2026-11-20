@@ -466,9 +466,26 @@ describe("setup cloudflare", () => {
     expect(result.output).toContain("cloudflare: wrote ACCESS_TEAM_DOMAIN, ACCESS_AUD to worker.env");
     expect(result.output).toContain("delete the API token now");
     const link = /from this link, which fills its permissions in: (\S+)/.exec(result.output)?.[1] ?? "";
-    const query = new URL(link).searchParams;
-    expect(query.get("accountId")).toBe(ACCOUNT);
-    expect(JSON.parse(query.get("permissionGroupKeys") ?? "[]")).toHaveLength(12);
+    const url = new URL(link);
+    expect(`${url.origin}${url.pathname}`).toBe("https://dash.cloudflare.com/profile/api-tokens");
+    expect(url.searchParams.get("accountId")).toBe(ACCOUNT);
+    expect(url.searchParams.get("zoneId")).toBe("all");
+    expect(JSON.parse(url.searchParams.get("permissionGroupKeys") ?? "[]")).toEqual(
+      [
+        ["access_acct", "edit"],
+        ["access", "edit"],
+        ["access_service_token", "edit"],
+        ["account_settings", "read"],
+        ["billing", "read"],
+        ["workers_scripts", "read"],
+        ["zone", "read"],
+        ["dns", "read"],
+        ["zone_settings", "read"],
+        ["bot_management", "read"],
+        ["page_rules", "read"],
+        ["config_settings", "edit"],
+      ].map(([key, type]) => ({ key, type })),
+    );
     const app = cf.apps.find((each) => each["name"] === "prq");
     expect(app).toMatchObject({
       domain: HOST,
@@ -548,7 +565,7 @@ describe("setup cloudflare", () => {
       ],
     });
 
-    const chosen = await setup(["cloudflare"], [["Account [1-2]: ", "2\r"], ...FRESH]);
+    const chosen = await setup(["cloudflare"], [["Account [1-2]: ", "synthetic account\r"], ...FRESH]);
 
     expect(chosen.code).toBe(0);
     expect(await envFile("target.env")).toContain(`CLOUDFLARE_ACCOUNT_ID=${ACCOUNT}\n`);
@@ -579,6 +596,15 @@ describe("setup cloudflare", () => {
 
     expect(result.code).toBe(0);
     expect(result.output).toContain(`zone ${ZONE}, hostname ${HOST}`);
+  });
+
+  it("stands by a lost verification without probing the account's", async () => {
+    cf.lost = ["GET /user/tokens/verify"];
+
+    const result = await setup(["cloudflare"], FRESH);
+
+    expect(result.code).toBe(1);
+    expect(cf.requests.some((each) => each.path === `/accounts/${ACCOUNT}/tokens/verify`)).toBe(false);
   });
 
   it("refuses a token made on the account's API Tokens page, naming the profile's", async () => {

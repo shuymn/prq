@@ -130,7 +130,8 @@ with a new token.
 4. **The API token.** It prints a link to your profile's
    [API Tokens](https://dash.cloudflare.com/profile/api-tokens) page with the permissions below and the account filled
    in (Cloudflare's token template URL); there, check the permissions, set the zone resources to only that zone and the
-   TTL to end today, and create it. It asks `Cloudflare API token (not shown):`. A token made on the account's own API
+   TTL's end date to tomorrow (Cloudflare ends a token at its end date's 00:00 UTC, so today's has passed in a
+   timezone ahead of UTC), and create it. It asks `Cloudflare API token (not shown):`. A token made on the account's own API
    Tokens page is refused: Cloudflare's Page Rules endpoint does not take account-owned tokens.
 
    | Resources | Permissions                                                                                                                                                                                    |

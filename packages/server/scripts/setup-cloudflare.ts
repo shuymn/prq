@@ -131,21 +131,29 @@ async function loginAccounts(): Promise<v.InferOutput<typeof Accounts> | null> {
   return parsed.output.accounts ?? [];
 }
 
-// A choice among items by number, or by an item's text as listed; refused when none is chosen.
-async function choose(what: string, items: readonly string[]): Promise<number> {
-  for (const [index, item] of items.entries()) {
-    print(`  ${index + 1}. ${item}`);
+// A choice among items listed by label, by number or by an item's name (any case); refused when none is chosen, or
+// when the name is several items'.
+async function choose(what: string, labels: readonly string[], names = labels): Promise<number> {
+  for (const [index, label] of labels.entries()) {
+    print(`  ${index + 1}. ${label}`);
   }
-  const line = ((await ask(`${what} [1-${items.length}]: `)) ?? "").trim();
-  const named = items.findIndex((item) => item.toLowerCase() === line.toLowerCase());
-  if (named !== -1) {
-    return named;
+  const line = ((await ask(`${what} [1-${labels.length}]: `)) ?? "").trim();
+  if (/^\d+$/.test(line)) {
+    const chosen = Number(line);
+    if (chosen < 1 || chosen > labels.length) {
+      throw new Refusal(`no ${what.toLowerCase()} was chosen`);
+    }
+    return chosen - 1;
   }
-  const chosen = Number(line);
-  if (!/^\d+$/.test(line) || chosen < 1 || chosen > items.length) {
+  const named = names.flatMap((name, index) => (name.toLowerCase() === line.toLowerCase() ? [index] : []));
+  if (named.length > 1) {
+    throw new Refusal(`${named.length} ${what.toLowerCase()}s are named ${line}: choose one by its number`);
+  }
+  const [index] = named;
+  if (index === undefined) {
     throw new Refusal(`no ${what.toLowerCase()} was chosen`);
   }
-  return chosen - 1;
+  return index;
 }
 
 // The zones of the account as wrangler's login lists them; null when its grant does not read them.
@@ -198,6 +206,7 @@ async function chooseTarget(): Promise<Target> {
     const index = await choose(
       "Account",
       accounts.map((each) => `${each.name ?? "unnamed"} (${each.id})`),
+      accounts.map((each) => each.name ?? ""),
     );
     accountId = accounts[index]?.id ?? "";
   }
@@ -270,6 +279,10 @@ async function verify(api: CloudflareApi, accountId: string): Promise<v.InferOut
   try {
     return await api.get("/user/tokens/verify", call, Verified);
   } catch (error) {
+    // Only Cloudflare's refusal of the credentials is probed; a timeout or another answer stands as it is.
+    if (!(error instanceof Refusal) || !error.message.startsWith("Cloudflare's API did not accept the credentials")) {
+      throw error;
+    }
     const owned = await api.get(`/accounts/${accountId}/tokens/verify`, call, Verified).catch(() => null);
     if (owned !== null) {
       throw new Refusal(
@@ -286,7 +299,7 @@ async function token(target: Target): Promise<{ api: CloudflareApi; zoneId: stri
     `cloudflare: create an API token from this link, which fills its permissions in: ${tokenLink(target.accountId)}`,
   );
   print(
-    `cloudflare: there, check it has these permissions, set its zone resources to only the zone ${target.zone} and its TTL to end today:`,
+    `cloudflare: there, check it has these permissions, set its zone resources to only the zone ${target.zone} and its TTL to end tomorrow (Cloudflare ends it at that date's 00:00 UTC):`,
   );
   for (const line of RECIPE) {
     print(`  ${line}`);
