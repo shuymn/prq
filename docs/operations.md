@@ -49,6 +49,23 @@ the shells that run `prq`. Nothing in this repository names them.
 
 ## Setup on a fresh account
 
+Setting prq up has two roles. The **publisher** owns the repository the releases come from: its settings, the release
+rehearsal and the release tags ([First deploy](#first-deploy), step 1). The **host** owns a Cloudflare account, a
+hostname, a GitHub App and a model key, and deploys a published release from a plain clone. One person can be both.
+
+```sh
+pnpm --dir packages/server run setup
+```
+
+runs the host's steps in order: `directory` (step 2), `model` (step 7) and `check` (step 8); `setup <step>` runs one.
+Steps 3 to 6 are still done by hand, between `directory` and `model`. Each step first reads what is already done, then
+prints what it did, `skipped (<reason>)`, or `done`, so running `setup` again after a stop or a change redoes only what
+is missing. A step that stops stops the steps that need it, which print `skipped (it needs <step>, which stopped)`; the
+others still run. The publisher's steps, `setup repository` and `setup rehearsal`, run only when named. `setup` asks on
+the terminal, so it refuses an environment marked as CI, and it refuses a terminal holding an override, as the deploy
+does ([The deploy command](#the-deploy-command)). It exits 0 when every step it ran passed, 1 when one refused or wrote
+nothing, and 2 when a write's effect is not known.
+
 The steps marked **[zone]** change settings of the chosen zone.
 
 ### 1. Tools
@@ -66,13 +83,10 @@ command.
 
 ### 2. The private deploy directory
 
-The deployment's values are read from `~/.config/prq/deploy`, readable by you alone. Create it before writing anything
-into it, and write its files with the same umask:
-
-```sh
-umask 077
-mkdir -p -m 0700 ~/.config/prq/deploy
-```
+The deployment's values are read from `~/.config/prq/deploy`, readable by you alone. `setup directory` creates it
+(mode `0700`) when it is missing, then checks it and each file in it: none may be a symbolic link, have a group or other
+permission bit set, or carry an access control list, which can let others read what the mode does not (`chmod -N
+<path>` removes one on macOS, `setfacl -b <path>` on Linux).
 
 - `worker.env`: the Worker's nine scalar secrets as `NAME=value` lines: `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`,
   `WEBHOOK_SECRET`, `HOST_GITHUB_ID`, `MODEL_BASE_URL`, `MODEL_API_KEY`, `MODEL_ID`, `MODEL_CONTEXT_TOKENS` and
@@ -81,14 +95,22 @@ mkdir -p -m 0700 ~/.config/prq/deploy
 - `target.env`: `PRQ_HOST=<host>` and `CLOUDFLARE_ACCOUNT_ID=<account-id>`.
 
 The files are read as Node's `util.parseEnv` reads them: a value may be quoted, and a line starting with `#` is a
-comment. Each of the steps below names the line it adds. To add a value without it showing on screen or in the shell's
-history, paste it at a prompt that does not echo:
+comment. Each of the steps below names the lines it adds. A setup step sets its names and keeps the file's other lines.
+It refuses a file that sets a name twice, holds a value spanning lines, or has a line that is neither `NAME=value`, a
+comment nor empty, and writes each value unquoted on one line. A name already set to another value is replaced only on
+`y` to `Replace <NAME> in <file>? [y/N]`, which shows neither value; `n` stops the step, and the steps that need it,
+before anything is written. The file is written whole to a new `0600` file beside it, renamed over it, and read back.
+A value the setup asks for is typed at a prompt that does not echo; Ctrl-C there stops the setup and restores the
+terminal.
+
+Steps 3 to 6 add their lines by hand. To add a value without it showing on screen or in the shell's history, paste it
+at a prompt that does not echo, with `umask 077` in the shell:
 
 ```sh
-read -rs 'value?MODEL_API_KEY: ' && printf 'MODEL_API_KEY=%s\n' "$value" >> ~/.config/prq/deploy/worker.env; unset value
+read -rs 'value?ACCESS_AUD: ' && printf 'ACCESS_AUD=%s\n' "$value" >> ~/.config/prq/deploy/worker.env; unset value
 ```
 
-(That is zsh; in bash, `read -rsp 'MODEL_API_KEY: ' value`.)
+(That is zsh; in bash, `read -rsp 'ACCESS_AUD: ' value`.)
 
 ### 3. Zone and hostname [zone]
 
@@ -170,8 +192,15 @@ deliveries and is never taken in: open a new one.
 
 ### 7. The model
 
-Create a key for prq's deployment alone, with prepaid credit or a spend limit; a key used for local checks stays
-separate, so either can be revoked alone (two keys drawing on one account balance still share it). Add to `worker.env`:
+```sh
+pnpm --dir packages/server run setup model
+```
+
+With no model in `worker.env`, it prints DeepSeek's API keys page, where you create a key for prq's deployment alone,
+with prepaid credit or a spend limit; a key used for local checks stays separate, so either can be revoked alone (two
+keys drawing on one account balance still share it). It asks `DeepSeek API key (not shown):`, checks the key with
+DeepSeek's models list (`GET https://api.deepseek.com/models`), which must take it and list `deepseek-flash`, and adds
+to `worker.env`:
 
 ```
 MODEL_BASE_URL=https://api.deepseek.com
@@ -180,19 +209,29 @@ MODEL_ID=deepseek-flash
 MODEL_CONTEXT_TOKENS=1048576
 ```
 
+The models list shows that the key and the model work, not that the key has credit: the first completed analysis
+does. With a model in `worker.env`, the step sends the stored key only when `MODEL_BASE_URL` is
+`https://api.deepseek.com`: it checks the key and the stored `MODEL_ID` the same way and adds a missing line, keeping
+the `MODEL_ID` and `MODEL_CONTEXT_TOKENS` set. When DeepSeek refuses the stored key, it asks for a new one, then whether
+to replace it. Another `MODEL_BASE_URL` is skipped (the step checks nothing), and a key without a `MODEL_BASE_URL` is
+refused, sent nowhere.
+
 The window is prq's own budget for every cloud session: it keeps 16,384 tokens for the answer and compacts a
 conversation once it would exceed 1,032,192; it is not sent to the provider. Another OpenAI-compatible provider takes
-its own base URL, model ID and window (at least 16,384 tokens).
+its own base URL, model ID and window (at least 16,384 tokens), added by hand as in step 2.
 
 ### 8. Check the files
 
 ```sh
-ls -la ~/.config/prq/deploy
-pnpm --dir packages/server run secrets check
+pnpm --dir packages/server run setup check
 ```
 
-The directory shows `drwx------` and each file `-rw-------`, with no `+` after the mode: a `+` marks an access control
-list, which can let others read what the mode does not (on macOS, `ls -le` shows it and `chmod -N <path>` removes it).
+It runs `secrets check`'s checks, then checks the directory and each file in it as `setup directory` does (modes,
+symbolic links and access control lists), that no file sets a name twice or a value spanning lines, that `target.env`
+sets exactly `CLOUDFLARE_ACCOUNT_ID` and `PRQ_HOST` as the deploy reads them (an account ID and a hostname), and that
+`access.env`, when there is one, sets exactly `PRQ_URL`, `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET`. It makes
+no network call.
+
 `secrets check` reads `worker.env` and `github-app.pk8.pem` and makes no network call. It refuses the directory or a
 file when it is a symbolic link or has a group or other permission bit set (it reads the mode, not an access control
 list), a missing or empty secret, a name the Worker does not read, a value the Worker's own checks
@@ -482,7 +521,7 @@ the hostname, the team domain, the application's AUD, the workers.dev subdomain 
 
 ## First deploy
 
-Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `secrets check` passes:
+Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `setup check` passes:
 
 1. **Protect the release tags and set up releases.** These are the publisher's steps, for the repository the
    releases come from; a host deploying a published release from a plain clone skips them. They run only when named

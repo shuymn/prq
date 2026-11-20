@@ -13,6 +13,8 @@
     "scripts/deploy.ts",
     "scripts/setup.ts",
     "scripts/test-terminal.ts",
+    "scripts/setup-host.ts",
+    "scripts/worker-secrets.ts",
     "scripts/**/*.node.test.ts",
     "src/client"
   ]

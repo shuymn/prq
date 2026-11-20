@@ -2,6 +2,8 @@
 // config, lefthook, oxlint, commitlint) are not listed again; the rest are below, each with what loads it.
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
+  // Linux's access control list tool, which the setup's tests use where the machine has it (not macOS).
+  "ignoreBinaries": ["setfacl"],
   "workspaces": {
     ".": {
       // The design scripts, run by hand (`node design/*.mjs`) or through the Pencil MCP `execute` tool
