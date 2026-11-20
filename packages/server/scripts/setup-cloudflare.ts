@@ -241,21 +241,21 @@ async function askZone(suggested: string | null): Promise<string> {
 
 const Verified = v.object({ status: v.string() });
 
-// The token's verification: an account's API Tokens page makes a token only its account's endpoint verifies (the
-// user's answers it as invalid), and a profile's makes one only the user's endpoint verifies.
+// The token's verification at the user's endpoint. A token made on an account's API Tokens page is invalid there; it is
+// refused with where to make one, since the Page Rules endpoint does not take account-owned tokens (error 1011).
 async function verify(api: CloudflareApi, accountId: string): Promise<v.InferOutput<typeof Verified> | null> {
   const call = { what: "the token's verification", permission: "no permission (the token must be active)" };
   try {
-    const owned = await api.get(`/accounts/${accountId}/tokens/verify`, call, Verified);
-    if (owned !== null) {
-      return owned;
-    }
+    return await api.get("/user/tokens/verify", call, Verified);
   } catch (error) {
-    if (!(error instanceof Refusal)) {
-      throw error;
+    const owned = await api.get(`/accounts/${accountId}/tokens/verify`, call, Verified).catch(() => null);
+    if (owned !== null) {
+      throw new Refusal(
+        `the token was made on the account's API Tokens page, and the zone's Page Rules are not read with such a token: make it at ${API_TOKENS_PAGE} (My Profile)`,
+      );
     }
+    throw error;
   }
-  return api.get("/user/tokens/verify", call, Verified);
 }
 
 // Step 2: the token, from the printed recipe, checked active and scoped to the zone.

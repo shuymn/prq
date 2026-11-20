@@ -128,9 +128,9 @@ with a new token.
    web UI is `https://<host>`, the CLI's `PRQ_URL` is `https://<host>`, and GitHub delivers to
    `https://<host>/webhook`. It writes `CLOUDFLARE_ACCOUNT_ID` and `PRQ_HOST` to `target.env`.
 4. **The API token.** It prints the permissions to give a custom token at
-   [API Tokens](https://dash.cloudflare.com/profile/api-tokens) (or the account's own API Tokens page, whose tokens it
-   verifies through the account), with its account resources only that account and its zone resources only that zone,
-   and asks `Cloudflare API token (not shown):`:
+   [API Tokens](https://dash.cloudflare.com/profile/api-tokens) of your profile, with its account resources only that
+   account and its zone resources only that zone, and asks `Cloudflare API token (not shown):`. A token made on the
+   account's own API Tokens page is refused: Cloudflare's Page Rules endpoint does not take account-owned tokens.
 
    | Resources | Permissions                                                                                                                                                                                    |
    | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

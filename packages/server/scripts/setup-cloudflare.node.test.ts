@@ -254,12 +254,13 @@ function answer(method: string, path: string, query: URLSearchParams, body: Json
 }
 
 // An answer in Cloudflare's envelope.
-function reply(response: ServerResponse, status: number, result: unknown, info?: Json): void {
+// An envelope as Cloudflare's API answers; Web Analytics' list answers a success with errors and messages null.
+function reply(response: ServerResponse, status: number, result: unknown, info?: Json, nulls = false): void {
   response.writeHead(status, { "content-type": "application/json" }).end(
     JSON.stringify({
       success: status < 400,
-      errors: status < 400 ? [] : [{ code: 10_000 + status, message: "stand-in" }],
-      messages: [],
+      errors: status < 400 ? (nulls ? null : []) : [{ code: 10_000 + status, message: "stand-in" }],
+      messages: nulls ? null : [],
       result,
       ...(info === undefined ? {} : { result_info: info }),
     }),
@@ -268,12 +269,13 @@ function reply(response: ServerResponse, status: number, result: unknown, info?:
 
 beforeAll(async () => {
   server = createServer((request, response) => {
-    const send = (status: number, result: unknown, info?: Json) => reply(response, status, result, info);
     let text = "";
     request.setEncoding("utf8").on("data", (chunk: string) => (text += chunk));
     request.on("end", () => {
       const url = new URL(request.url ?? "/", "http://stand-in.invalid");
       const path = url.pathname.replace(/^\/client\/v4/, "");
+      const send = (status: number, result: unknown, info?: Json) =>
+        reply(response, status, result, info, path.endsWith("/rum/site_info/list"));
       const method = request.method ?? "GET";
       const auth = request.headers.authorization ?? "";
       const body = text === "" ? {} : v.parse(JsonObject, JSON.parse(text));
@@ -566,15 +568,22 @@ describe("setup cloudflare", () => {
     expect(writes()).toEqual([]);
   });
 
-  it("takes a zone by its name, and a token made on the account's API Tokens page", async () => {
+  it("takes a zone by its name", async () => {
     cf.zones.push({ id: "fedcba9876543210fedcba9876543210", name: "other-zone.example" });
-    cf.tokenOwner = "account";
 
     const result = await setup(["cloudflare"], [["Zone [1-2]: ", `${ZONE.toUpperCase()}\r`], ...FRESH]);
 
     expect(result.code).toBe(0);
     expect(result.output).toContain(`zone ${ZONE}, hostname ${HOST}`);
-    expect(result.output).toContain("cloudflare: the token is active and reads the zone");
+  });
+
+  it("refuses a token made on the account's API Tokens page, naming the profile's", async () => {
+    cf.tokenOwner = "account";
+
+    const result = await setup(["cloudflare"], FRESH);
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("setup: the token was made on the account's API Tokens page");
   });
 
   it("refuses a token that does not read the zone", async () => {

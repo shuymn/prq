@@ -59,7 +59,11 @@ export function forgetWranglerHeaders(): void {
 
 const Envelope = v.object({
   success: v.boolean(),
-  errors: v.optional(v.array(v.object({ code: v.number() })), []),
+  // Web Analytics' list answers a success with errors and messages null.
+  errors: v.pipe(
+    v.nullish(v.array(v.object({ code: v.number() }))),
+    v.transform((errors) => errors ?? []),
+  ),
   result: v.optional(v.unknown()),
   // Any of its counts can be missing or null (Web Analytics' total_pages is documented nullable).
   result_info: v.nullish(
