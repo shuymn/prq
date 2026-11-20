@@ -57,11 +57,11 @@ hostname, a GitHub App and a model key, and deploys a published release from a p
 pnpm --dir packages/server run setup
 ```
 
-runs the host's steps in order: `directory` (step 2), `github-app` (step 6), `model` (step 7) and `check` (step 8);
-`setup <step>` runs one. Steps 3 to 5 are still done by hand, between `directory` and `github-app`. Each step first
-reads what is already done, then prints what it did, `skipped (<reason>)`, or `done`, so running `setup` again after a
-stop or a change redoes only what is missing. A step that stops stops the steps that need it, which print `skipped (it
-needs <step>, which stopped)`; the others still run. The publisher's steps, `setup repository` and `setup rehearsal`, run only when named. `setup` asks on
+runs the host's steps in order: `directory` (step 2), `cloudflare` (steps 3 to 5), `github-app` (step 6), `model`
+(step 7) and `check` (step 8); `setup <step>` runs one. Each step first reads what is already done, then
+prints what it did, `skipped (<reason>)`, or `done`, so running `setup` again after a stop or a change redoes only what
+is missing. A step that stops stops the steps that need it, which print `skipped (it needs <step>, which stopped)`; the
+others still run. The publisher's steps, `setup repository` and `setup rehearsal`, run only when named. `setup` asks on
 the terminal, so it refuses an environment marked as CI, and it refuses a terminal holding an override, as the deploy
 does ([The deploy command](#the-deploy-command)). It exits 0 when every step it ran passed, 1 when one refused or wrote
 nothing, and 2 when a write's effect is not known.
@@ -93,6 +93,10 @@ permission bit set, or carry an access control list, which can let others read w
   `GITHUB_APP_ID`.
 - `github-app.pk8.pem`: the GitHub App's private key in PKCS#8, the Worker's `GITHUB_APP_PRIVATE_KEY`.
 - `target.env`: `PRQ_HOST=<host>` and `CLOUDFLARE_ACCOUNT_ID=<account-id>`.
+- `access.env`: the service token prq's CLI uses, `PRQ_URL=https://<host>`, `PRQ_ACCESS_CLIENT_ID` and
+  `PRQ_ACCESS_CLIENT_SECRET`, for the AI sessions that run `prq` (README, Running a local agent) and the deploy's idle
+  check. It is not a Worker secret. Its values are written unquoted and hold no space, quote or shell metacharacter, so
+  `set -a; . ~/.config/prq/deploy/access.env; set +a` loads it into a shell.
 
 The files are read as Node's `util.parseEnv` reads them: a value may be quoted, and a line starting with `#` is a
 comment. Each of the steps below names the lines it adds. A setup step sets its names and keeps the file's other lines.
@@ -103,52 +107,89 @@ before anything is written. The file is written whole to a new `0600` file besid
 A value the setup asks for is typed at a prompt that does not echo; Ctrl-C there stops the setup and restores the
 terminal.
 
-Steps 3 to 5 add their lines by hand. To add a value without it showing on screen or in the shell's history, paste it
-at a prompt that does not echo, with `umask 077` in the shell:
-
-```sh
-read -rs 'value?ACCESS_AUD: ' && printf 'ACCESS_AUD=%s\n' "$value" >> ~/.config/prq/deploy/worker.env; unset value
-```
-
-(That is zsh; in bash, `read -rsp 'ACCESS_AUD: ' value`.)
-
 ### 3. Zone and hostname [zone]
 
-Pick the zone before fixing the hostname, and check what it already does to traffic:
+```sh
+pnpm --dir packages/server run setup cloudflare
+```
 
-- **Bot Fight Mode** is zone-wide on the Free plan and challenges both `prq` and GitHub's webhook deliveries. If the
-  zone needs it for other services, choose another zone, turn it off for the whole zone, or move the zone to Pro and
-  use Super Bot Fight Mode with a skip rule for the hostname.
-- **Access**: an Access policy set on a Worker named `prq` (Worker-level Access answers WebSocket upgrades 403, which
-  breaks the web UI), and any wildcard Access application that would cover the hostname.
-- **An existing DNS record** on the hostname: a Worker's custom domain cannot take a hostname that has a CNAME.
-- **HTML rewrites**: Rocket Loader, Email Address Obfuscation and Web Analytics injection change the web UI's page,
-  which its Content-Security-Policy then refuses. Where the zone uses them, turn them off for the hostname with a
-  Configuration Rule.
+does steps 3 to 5. It reads before it writes: the zone's settings before its one zone write, and the Zero Trust
+organization and every Access application, login method, service token and policy before any Access write. Every
+create is read back, and a refusal names what it found, or the token permission a denied read needed. In `setup`'s run
+of every step, the step is `done` without asking anything once `target.env`, `worker.env`'s `ACCESS_TEAM_DOMAIN` and
+`ACCESS_AUD`, and `access.env` are recorded; `setup cloudflare` on its own checks them all against the account again,
+with a new token.
 
-Then fix `<host>` and add `PRQ_HOST=<host>` to `target.env`. The web UI is `https://<host>`, the CLI's `PRQ_URL` is
-`https://<host>`, and GitHub delivers to `https://<host>/webhook`.
+1. **wrangler's login.** When wrangler is not logged in, it runs `wrangler login`: allow its access in the browser it
+   opens. The deploys use this login, not the token below.
+2. **The account**: `target.env`'s, else the only one the login reaches, else the one you pick from the numbered list.
+3. **The zone and the hostname**: the zone `target.env`'s `PRQ_HOST` is in; else the only zone the login lists, the
+   one you pick, or (when the login's grant does not list zones) the one you type; then `Hostname label [prq]:`. The
+   web UI is `https://<host>`, the CLI's `PRQ_URL` is `https://<host>`, and GitHub delivers to
+   `https://<host>/webhook`. It writes `CLOUDFLARE_ACCOUNT_ID` and `PRQ_HOST` to `target.env`.
+4. **The API token.** It prints the permissions to give a custom token at
+   [API Tokens](https://dash.cloudflare.com/profile/api-tokens), with its account resources only that account and its
+   zone resources only that zone, and asks `Cloudflare API token (not shown):`:
+
+   | Resources | Permissions                                                                                                                                                                                    |
+   | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Account   | Access: Organizations, Identity Providers, and Groups (Edit); Access: Apps and Policies (Edit); Access: Service Tokens (Edit); Account Settings (Read); Billing (Read); Workers Scripts (Read) |
+   | Zone      | Zone (Read); DNS (Read); Zone Settings (Read); Bot Management (Read); Page Rules (Read); Config Rules (Edit)                                                                                   |
+
+   The token must be active and read the zone. It stays in the setup's process alone, in no argument, file, other
+   program's environment or line printed, and is kept nowhere: delete it when the step ends, as its last line says. A
+   later run asks for a new one.
+
+5. **The zone's checks**, each refusing with what to change:
+   - **Bot Fight Mode** is zone-wide on the Free plan and challenges both `prq` and GitHub's webhook deliveries. If the
+     zone needs it for other services, choose another zone, turn it off for the whole zone, or move the zone to Pro and
+     use Super Bot Fight Mode with a skip rule for the hostname.
+   - **A DNS record** on the hostname: a Worker's custom domain cannot take a hostname that has a CNAME. A record is
+     accepted only when it is the Worker `prq`'s custom domain (a run after the deploy).
+   - **HTML rewrites**: Rocket Loader, Email Address Obfuscation and Web Analytics injection change the web UI's page,
+     which its Content-Security-Policy then refuses. When the zone's settings, a Web Analytics site on the zone, an
+     active Page Rule that may match the hostname or a Configuration Rule not limited to another hostname could turn one on, it adds
+     the Configuration Rule `prq-no-rewrites` (`http.host eq "<host>"`, Rocket Loader and Email Obfuscation off, RUM
+     disabled) last among the zone's Configuration Rules, one rule added or updated, the others left as they are. A rule
+     `prq-no-rewrites` for another hostname is refused, and so is a later rule that would turn a rewrite on again.
 
 ### 4. Cloudflare account
 
-1. Add a billing profile and subscribe to **Workers Paid**.
-2. Log wrangler in to the account that holds the zone: `pnpm --dir packages/server exec wrangler login`.
-3. Add `CLOUDFLARE_ACCOUNT_ID=<account-id>` to `target.env`: `pnpm --dir packages/server exec wrangler whoami` lists
-   the accounts the login reaches, with their IDs.
-4. Keep Docker running when deploying.
+- **Workers Paid**: when the account's subscriptions show none, it prints the account's Workers plans page, where you
+  add a billing profile and subscribe, and asks `Subscribed to Workers Paid? [y/N]`, then reads them again. When they
+  still show no plan by that name, it lists the plans they show and asks whether one of them is Workers Paid.
+- Keep Docker running when deploying.
 
 ### 5. Zero Trust and Access [zone]
 
-1. **The Zero Trust organization**: choose a team name, the Free plan, and One-time PIN as the login method. Add
-   `ACCESS_TEAM_DOMAIN=https://<team>.cloudflareaccess.com` (no trailing slash) to `worker.env`.
-2. **A service token** named `prq-cli`, valid for a year, with an expiry alert if the account offers one. Its Client ID
-   and Client Secret are shown once: they are `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET` in the environment
-   of every AI session that runs `prq` (README, Running a local agent). They are not Worker secrets.
-3. **The application "prq"**: self-hosted, hostname `<host>`, path empty; a policy _Allow_ for your email address, and a
-   policy _Service Auth_ for the token `prq-cli`; session duration 24 hours; the cookie settings as they are. Add its
-   audience tag as `ACCESS_AUD=<aud>` to `worker.env`.
-4. **The application "prq webhook"**: hostname `<host>`, path `webhook`; one policy _Bypass_ for Everyone. The more
-   specific path wins, so GitHub reaches `/webhook` without Access, and the Worker checks each delivery's signature.
+1. **The Zero Trust organization**: when the account has none, it prints the Zero Trust dashboard, where you choose a
+   team name, the Free plan and its payment step, and asks `Is the Zero Trust organization made? [y/N]`. It writes
+   `ACCESS_TEAM_DOMAIN=https://<team>.cloudflareaccess.com` to `worker.env`.
+2. **Strict service token authentication**, on for organizations created from 2026-10-05: on an older organization
+   where it is off, it says that turning it on applies to every Access application on the account (a request with
+   service token headers is let in only by a _Service Auth_ policy, so an integration whose service token an _Allow_
+   policy lets in loses access, and a bad token is refused instead of sent to sign-in) and asks; `y` changes that one
+   setting alone. `n` stops the step: first-deploy's edge check
+   E2 cannot pass on that account.
+3. **Conflicts**: it refuses an Access application other than prq's two that covers the hostname at any path, one named
+   "prq" or "prq webhook" that is not self-hosted at exactly prq's destination, and one on the Worker `prq` or on every
+   Worker (Worker-level Access answers WebSocket upgrades 403, which breaks the web UI).
+4. **One-time PIN**: when the account has no one-time PIN login method, it adds one; when applications (prq's own
+   among them) allow every login method, and would therefore offer it too, it names them and asks first.
+5. **The service token `prq-cli`**, valid for a year: created, and its Client ID and Client Secret, which Access shows
+   once, written to `access.env` at once. A token whose secret `access.env` does not hold (a lost answer, a failed
+   write, another client ID) is rotated only on `y` to `Rotate prq-cli's secret?`; the new secret stays unconfirmed in
+   the setup's state until first-deploy's edge check passes with it. A token that is disabled or expires within 30
+   days is refused, naming what to do in the dashboard.
+6. **The policies and applications**, reusable policies: `prq owner` (_Allow_, your email address, asked once; a
+   `prq owner` the account already has is used only after it shows whom that policy lets in and you answer `y`, which
+   the setup's state records for later runs),
+   `prq-cli` (_Service Auth_, the token) and `prq webhook` (_Bypass_, everyone); the application **"prq"**
+   (self-hosted, `<host>`, session duration 24 hours, the policies `prq owner` then `prq-cli`, the one-time PIN its
+   only login method) and **"prq webhook"** (`<host>/webhook`, the policy `prq webhook`). The more specific path wins,
+   so GitHub reaches `/webhook` without Access, and the Worker checks each delivery's signature. One that exists and
+   differs from this is refused, naming the field; the step changes none it finds. It writes "prq"'s audience tag as
+   `ACCESS_AUD` to `worker.env`.
 
 ### 6. GitHub App
 
@@ -247,7 +288,7 @@ refused, sent nowhere.
 
 The window is prq's own budget for every cloud session: it keeps 16,384 tokens for the answer and compacts a
 conversation once it would exceed 1,032,192; it is not sent to the provider. Another OpenAI-compatible provider takes
-its own base URL, model ID and window (at least 16,384 tokens), added by hand as in step 2.
+its own base URL, model ID and window (at least 16,384 tokens), added to `worker.env` by hand.
 
 ### 8. Check the files
 
@@ -258,8 +299,8 @@ pnpm --dir packages/server run setup check
 It runs `secrets check`'s checks, then checks the directory and each file in it as `setup directory` does (modes,
 symbolic links and access control lists), that no file sets a name twice or a value spanning lines, that `target.env`
 sets exactly `CLOUDFLARE_ACCOUNT_ID` and `PRQ_HOST` as the deploy reads them (an account ID and a hostname), and that
-`access.env`, when there is one, sets exactly `PRQ_URL`, `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET`. It makes
-no network call.
+`access.env` sets exactly `PRQ_URL` (`https://` and `PRQ_HOST`), `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET`,
+the last two not empty. It makes no network call.
 
 `secrets check` reads `worker.env` and `github-app.pk8.pem` and makes no network call. It refuses the directory or a
 file when it is a symbolic link or has a group or other permission bit set (it reads the mode, not an access control
@@ -407,7 +448,8 @@ nothing mise's configuration sets (an `[env]`, global or a project's, or a `MISE
   5. prints the account, the live versions, the hostname with those two settings, the tag and its commit, the container
      application and what the deploy does to it, and asks `Deploy vX.Y.Z to <host>? [y/N]`;
   6. checks that no cloud work waits or runs: it reads every page of the ledger at `https://<host>/api/ledger` with the
-     service token of `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET`, set in the shell as for `prq`, and refuses
+     service token of `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET`, from the shell when it sets both, else from
+     `access.env`, and refuses
      while a pull request the cloud agent owns has a job waiting or running, or when the ledger cannot be read. The check
      is skipped while the live Worker is still the bootstrap's (versions whose bindings wrangler lists, none but
      secrets), which serves nothing at the hostname; a version whose bindings are not listed counts as a release;
@@ -649,8 +691,7 @@ Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `setup ch
    [Releases](#releases).
 2. Pick a quiet interval: no cloud job waiting or running, and no pushes or questions until the deploy's read-back is
    complete.
-3. In a terminal with Docker running, with `PRQ_ACCESS_CLIENT_ID` and `PRQ_ACCESS_CLIENT_SECRET` set as for `prq`:
-   `pnpm --dir packages/server run deploy -- vX.Y.Z`. It exits 0 once the read-back is complete.
+3. In a terminal with Docker running: `pnpm --dir packages/server run deploy -- vX.Y.Z`. It exits 0 once the read-back is complete.
 4. Sign in at `https://<host>`: the web UI shows the new version. Then run the two checks the deploy printed, as in
    [First deploy](#first-deploy) step 6.
 5. Once the release workflow has published it, install the new `prq` wherever a local agent runs
@@ -806,15 +847,15 @@ streamed by `CLOUDFLARE_ACCOUNT_ID=<account-id> pnpm --dir packages/server exec 
 
 1. Rotate `prq-cli` in Zero Trust with a grace period: the Client ID stays, a new Client Secret is issued, and the old
    one keeps working until the grace period ends.
-2. Set the new `PRQ_ACCESS_CLIENT_SECRET` in every AI session's environment.
+2. Set the new `PRQ_ACCESS_CLIENT_SECRET` in `access.env` and in every AI session's environment that does not load it.
 3. Run `prq wait --timeout 60` there: it ends with a job (exit 0) or a timeout (exit 2). Exit 3 with an authentication
    failure means Access refused the token. With the new secret in the shell,
    `check:deployed edge --team-domain https://<team>.cloudflareaccess.com` passes E4 to E6
    ([The deployed checks](#the-deployed-checks)).
 4. Let the old secret expire.
 
-A lost secret: rotate without a grace period. A new token (a new Client ID) is added to the application's _Service
-Auth_ policy before any session uses it, and the old one removed after.
+A lost secret: `setup cloudflare` rotates it without a grace period and writes `access.env`. A new token (a new Client
+ID) is added to the policy `prq-cli` before any session uses it, and the old one removed after.
 
 ### The App's private key
 

@@ -27,8 +27,11 @@ A local agent is an AI session on your machine that answers prq's jobs through t
    `mise.toml`). Put it on the `PATH` of the session's shell.
 2. Give that shell the environment: `PRQ_URL` (the Worker's origin), `PRQ_ACCESS_CLIENT_ID` and
    `PRQ_ACCESS_CLIENT_SECRET` (an Access service token), `PRQ_AGENT_ID` (one per session) and `PRQ_CLONE_ROOTS` (the
-   directories holding your clones as `<owner>/<repo>`, where `prq checkout` finds the pull request's repository).
-   `prq --help` lists them all, and the Local CLI section of [docs/design.md](docs/design.md) describes each.
+   directories holding your clones as `<owner>/<repo>`, where `prq checkout` finds the pull request's repository). The
+   host's setup writes the first three to the deploy directory's `access.env`
+   ([docs/operations.md](docs/operations.md#5-zero-trust-and-access-zone)); the session's launcher loads them before
+   starting the session with `set -a; . ~/.config/prq/deploy/access.env; set +a`. `prq --help` lists them all, and the
+   Local CLI section of [docs/design.md](docs/design.md) describes each.
 3. Link `skills/prq` into the session's skills directory (for Claude Code, `.claude/skills/prq`) and start the session
    as a prq local agent. The skill is its procedure: wait for a job in the background, claim it, answer it, submit, and
    wait again. How the answers read comes from your own instructions to the session.
