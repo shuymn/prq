@@ -21,6 +21,7 @@
     "scripts/setup-terminal.ts",
     "scripts/setup-github-app.ts",
     "scripts/github-stand-in.ts",
+    "scripts/first-deploy.ts",
     "scripts/worker-secrets.ts",
     "scripts/**/*.node.test.ts",
     "src/client"

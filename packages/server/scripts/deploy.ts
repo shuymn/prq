@@ -1208,6 +1208,11 @@ async function readBackAgain(path: string): Promise<number> {
   print(`account: ${accountId}; live: ${versionsLine(state.deployment?.versions)}`);
   print(`container application ${APPLICATION}: ${applicationLine(state.application)}`);
   if (upload.exit !== 0) {
+    // What is live unread is not proof that the upload did not finish: read it back again.
+    if (state.unread.length > 0) {
+      await record.save();
+      return settle(record, "incomplete", `what is live could not be read: ${state.unread.join("; ")}`);
+    }
     const live = state.deployment?.versions ?? [];
     if (upload.versionId === null || live.length !== 1 || live[0]?.versionId !== upload.versionId) {
       await record.save();

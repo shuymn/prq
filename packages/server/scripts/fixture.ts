@@ -37,6 +37,9 @@ export const Fixture = v.strictObject({
   githubApi: v.optional(v.string()),
   githubWeb: v.optional(v.string()),
   open: v.optional(v.string()),
+  // The program first-deploy runs in place of the existing commands (setup, release-check, deploy, secrets, given as
+  // its first argument), check:deployed, and docker.
+  commands: v.optional(v.string()),
   // What the stand-ins read of their environment, added to the one wrangler gets.
   childEnv: v.optional(v.record(v.string(), v.string())),
 });

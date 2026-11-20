@@ -1855,7 +1855,7 @@ describe("deploy <tag>", () => {
       rollout: { id: APP.id, image: APP.image, version: APP.version },
       readBack: {
         state: "incomplete",
-        reason: `the upload did not finish (the deploy ended during the upload without recording its result): deploy ${TAG} again (docs/operations.md, Recovery)`,
+        reason: expect.stringMatching(/^what is live could not be read: the live versions: /),
       },
     });
 

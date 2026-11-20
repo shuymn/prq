@@ -9,7 +9,6 @@ import { lstat, open, readFile, rename, unlink } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 
-import githubAppJwt from "universal-github-app-jwt";
 import * as v from "valibot";
 
 import { fixture } from "./fixture.ts";
@@ -31,7 +30,7 @@ import {
   WORKER_ENV,
   writePrivate,
 } from "./operations.ts";
-import { call, duration, gh, sleep } from "./setup-run.ts";
+import { appJwt, call, duration, gh, sleep } from "./setup-run.ts";
 import { readState, recordState } from "./setup-state.ts";
 import { KEY_FILE } from "./worker-secrets.ts";
 
@@ -149,18 +148,9 @@ function shaped<S extends v.GenericSchema>(what: string, schema: S, json: unknow
   return parsed.output;
 }
 
-async function jwt({ appId, key }: AppValues): Promise<string> {
-  try {
-    const { token } = await githubAppJwt({ id: Number(appId), privateKey: key });
-    return token;
-  } catch {
-    throw new Refusal(`${KEY_FILE} does not make the App's token (an RSA private key is needed)`);
-  }
-}
-
 // GET /app with the key's token: the App, or null when GitHub does not take the token as the App's.
 async function getApp(values: AppValues): Promise<App | null> {
-  const { status, json } = await github("/app", { auth: await jwt(values) });
+  const { status, json } = await github("/app", { auth: await appJwt(values) });
   if (status === 401 || status === 404) {
     return null;
   }
@@ -611,7 +601,7 @@ async function installations(token: string): Promise<v.InferOutput<typeof Instal
 
 // The installation on the account, once the owner made it: its page opened, read every poll within the bound.
 async function installation(values: AppValues, slug: string, hostId: number): Promise<number> {
-  const find = async () => (await installations(await jwt(values))).find((each) => each.account?.id === hostId);
+  const find = async () => (await installations(await appJwt(values))).find((each) => each.account?.id === hostId);
   let found = await find();
   if (found !== undefined) {
     return found.id;
@@ -643,7 +633,7 @@ async function testRepository(values: AppValues, installationId: number): Promis
   }
   const created = await github(`/app/installations/${installationId}/access_tokens`, {
     method: "POST",
-    auth: await jwt(values),
+    auth: await appJwt(values),
   });
   if (created.status !== 201) {
     throw new Refusal(`GitHub answered the installation token's request with HTTP ${created.status}`);
@@ -698,7 +688,7 @@ async function readBack(app: App, values: AppValues, host: string, hostId: numbe
   if (app.owner?.id !== hostId) {
     issues.push(`the App's owner is not the account HOST_GITHUB_ID names`);
   }
-  const hook = await github("/app/hook/config", { auth: await jwt(values) });
+  const hook = await github("/app/hook/config", { auth: await appJwt(values) });
   const url = hook.status === 200 ? (shaped("webhook configuration", HookConfig, hook.json).url ?? "") : "";
   if (hook.status !== 200 && hook.status !== 404) {
     issues.push(`GitHub answered GET /app/hook/config with HTTP ${hook.status}`);
