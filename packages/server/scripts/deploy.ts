@@ -1208,6 +1208,11 @@ async function readBackAgain(path: string): Promise<number> {
   print(`account: ${accountId}; live: ${versionsLine(state.deployment?.versions)}`);
   print(`container application ${APPLICATION}: ${applicationLine(state.application)}`);
   if (upload.exit !== 0) {
+    // What is live unread is not proof that the upload did not finish: read it back again.
+    if (state.unread.length > 0) {
+      await record.save();
+      return settle(record, "incomplete", `what is live could not be read: ${state.unread.join("; ")}`);
+    }
     const live = state.deployment?.versions ?? [];
     if (upload.versionId === null || live.length !== 1 || live[0]?.versionId !== upload.versionId) {
       await record.save();
@@ -1224,6 +1229,30 @@ async function readBackAgain(path: string): Promise<number> {
   }
   await record.save();
   return readBack(record);
+}
+
+// The account's workers.dev subdomain, read with wrangler's login; null, with the reason printed, when the API does
+// not give one (a login that may not read it answers 403, an account without one 404) or cannot be read.
+async function accountSubdomain(accountId: string): Promise<string | null> {
+  try {
+    const found = await apiRead(
+      "the account's workers.dev subdomain",
+      accountId,
+      "/workers/subdomain",
+      v.object({ subdomain: v.nullish(v.string()) }),
+    );
+    const subdomain = found?.subdomain?.toLowerCase() ?? "";
+    if (SUBDOMAIN.test(subdomain)) {
+      return subdomain;
+    }
+    print("workers.dev subdomain: the account has none registered, as Cloudflare's API reads it");
+  } catch (error) {
+    if (!(error instanceof Refusal)) {
+      throw error;
+    }
+    print(`workers.dev subdomain: not read (${error.lines.join("; ")})`);
+  }
+  return null;
 }
 
 // The bootstrap's Worker: every request answers 404, marked, with nothing else in it.
@@ -1305,10 +1334,16 @@ async function bootstrap(resume: boolean): Promise<number> {
   }
   print(`version: ${versionId} (${BOOTSTRAP_TAG})`);
 
+  const read = await accountSubdomain(accountId);
+  if (read !== null) {
+    print(`workers.dev subdomain: ${read} (read from the account)`);
+  }
   const given = (
+    read ??
     (await ask(
       "The account's workers.dev subdomain, as the dashboard shows it (Workers & Pages, the account's <subdomain>.workers.dev), or none: ",
-    )) ?? ""
+    )) ??
+    ""
   )
     .trim()
     .toLowerCase()

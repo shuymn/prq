@@ -14,7 +14,8 @@
     "secrets": "node scripts/secrets.ts",
     "release-check": "node scripts/release-check.ts",
     "deploy": "node scripts/deploy.ts",
-    "setup": "node scripts/setup.ts"
+    "setup": "node scripts/setup.ts",
+    "first-deploy": "node scripts/first-deploy.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "catalog:",

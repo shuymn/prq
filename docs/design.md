@@ -1508,8 +1508,9 @@ prq/
 │  │   │                         the base styles, the BrandMark's drawing, and public/ (_headers, the favicon set)
 │  │   ├─ scripts/           manual checks of a model provider, the tool loop and the GitHub App
 │  │   │                     (`pnpm run check:provider`, `check:tools`, `check:github`), and production's commands:
-│  │   │                     the secrets, the release check and the deploy (`pnpm run secrets`, `release-check`,
-│  │   │                     `deploy`, their shared runner in operations.ts; docs/operations.md); not part of the Worker
+│  │   │                     the secrets, the release check, the deploy, the setup and the first deploy
+│  │   │                     (`pnpm run secrets`, `release-check`, `deploy`, `setup`, `first-deploy`, their shared
+│  │   │                     runner in operations.ts; docs/operations.md); not part of the Worker
 │  │   ├─ container/         the skill runner the image installs (prq-skill-run.py)
 │  │   ├─ Dockerfile         the workspace container's image
 │  │   ├─ build/             the UI's build: the tokens as CSS (Style Dictionary), the generated _headers, the font
@@ -1571,9 +1572,11 @@ Only a deployment can show these.
   pushes, and how far a replica lags, are tested only with a served API.
 - **Containers in production.** Start and rebuild times, and checkout time of a large repository. The local Docker
   numbers (`check:workspace`) are not production values.
-- **Deploying.** The bootstrap and the deploy have run only against stand-ins for wrangler, mise, pnpm and `gh`. The
-  first real deploy shows wrangler's answers as the command reads them, Cloudflare's answers to the command's own reads
-  with wrangler's login (the Worker's settings and the container applications), workers.dev and preview URLs off from
+- **Deploying.** The bootstrap, the deploy and the first deploy's driver have run only against stand-ins for wrangler,
+  mise, pnpm, `gh` and GitHub's API. The first real deploy shows wrangler's answers as the command reads them,
+  Cloudflare's answers to the command's own reads with wrangler's login (the Worker's settings, the container
+  applications and the account's workers.dev subdomain), whether GitHub sends a `ping` when the App's webhook turns
+  active, workers.dev and preview URLs off from
   the bootstrap on, the image built for amd64 on the host's machine, a new container application's provisioning, and,
   on the first deploy that changes the image, whether `active_rollout_id` clears when the rollout ends.
 - **Bundling by wrangler.** The PKCS#8-only crypto path of `@octokit/auth-app`, bundled by wrangler, has minted a

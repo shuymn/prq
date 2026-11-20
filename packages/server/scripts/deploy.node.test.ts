@@ -257,6 +257,8 @@ type State = {
   subdomain: { enabled: boolean; previews_enabled: boolean };
   subdomainAfterDeploy: { enabled: boolean; previews_enabled: boolean } | null;
   auth: "oauth" | "api_key";
+  // The account's workers.dev subdomain as the API answers it: a name, forbidden (403), or none (404).
+  accountSubdomain: string | null;
 };
 type Result = { code: number | null; signal: NodeJS.Signals | null; output: string };
 
@@ -292,6 +294,7 @@ const ApiState = v.looseObject({
   deployment: v.nullable(v.array(v.string())),
   applications: v.array(v.unknown()),
   subdomain: v.unknown(),
+  accountSubdomain: v.nullish(v.string()),
   behavior: v.record(v.string(), v.string()),
 });
 
@@ -314,6 +317,15 @@ function cloudflare(url: string, headers: IncomingHttpHeaders): [number, unknown
     return state.deployment === null
       ? [404, { success: false, errors: [{ code: 10007, message: "This Worker does not exist on your account." }] }]
       : [200, { success: true, errors: [], result: { id: "prq", name: "prq", subdomain: state.subdomain } }];
+  }
+  if (url === `${prefix}/workers/subdomain`) {
+    const found = state.accountSubdomain ?? null;
+    if (found === "forbidden") {
+      return [403, { success: false, errors: [{ code: 10000, message: "Authentication error" }] }];
+    }
+    return found === null
+      ? [404, { success: false, errors: [{ code: 10007, message: "workers.dev subdomain not found" }] }]
+      : [200, { success: true, errors: [], result: { subdomain: found } }];
   }
   if (url === `${prefix}/containers/applications`) {
     return failed("api applications")
@@ -474,6 +486,7 @@ async function saveState(state: Partial<State>): Promise<void> {
     subdomain: { enabled: false, previews_enabled: false },
     subdomainAfterDeploy: null,
     auth: "oauth",
+    accountSubdomain: null,
     ...state,
   };
   await writeFile(join(root, "wrangler-state.json"), JSON.stringify(full));
@@ -691,10 +704,17 @@ describe("the Worker's configuration", () => {
 });
 
 describe("deploy --bootstrap", () => {
-  it("deploys an inert Worker with workers.dev and preview URLs off, then records its version and the subdomain", async () => {
+  it("deploys an inert Worker with workers.dev and preview URLs off, then records its version and the subdomain it was given", async () => {
+    // The login may not read the subdomain: the owner gives it.
+    await saveState({ accountSubdomain: "forbidden" });
+
     const result = await deploy(["--bootstrap"], { terminal: false, answers: ["synthetic-sub"] });
 
     expect(result.code).toBe(0);
+    expect(result.output).toContain(
+      "workers.dev subdomain: not read (Cloudflare's API answered HTTP 403 for the account's workers.dev subdomain)",
+    );
+    expect(result.output).toContain("The account's workers.dev subdomain, as the dashboard shows it");
     const [call] = await deployCalls();
     expect(call?.args).toEqual([
       "deploy",
@@ -774,6 +794,19 @@ describe("deploy --bootstrap", () => {
     expect(resumed.output).toContain(
       "in the dashboard (Workers & Pages → prq → Settings → Domains & Routes): workers.dev and Preview URLs disabled, no custom domain",
     );
+  });
+
+  it("reads the account's workers.dev subdomain with wrangler's login, asking nothing", async () => {
+    await saveState({ accountSubdomain: "synthetic-sub" });
+
+    const result = await deploy(["--bootstrap"], { terminal: false });
+
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("workers.dev subdomain: synthetic-sub (read from the account)");
+    expect(result.output).not.toContain("The account's workers.dev subdomain, as the dashboard shows it");
+    const dir = join(root, ".local", "state", "prq", "deploys", "bootstrap");
+    const [file] = await readdir(dir);
+    expect(JSON.parse(await readFile(join(dir, file ?? ""), "utf8"))).toMatchObject({ subdomain: "synthetic-sub" });
   });
 
   it("records no subdomain it cannot read, and says the bootstrap is not complete", async () => {
@@ -1822,7 +1855,7 @@ describe("deploy <tag>", () => {
       rollout: { id: APP.id, image: APP.image, version: APP.version },
       readBack: {
         state: "incomplete",
-        reason: `the upload did not finish (the deploy ended during the upload without recording its result): deploy ${TAG} again (docs/operations.md, Recovery)`,
+        reason: expect.stringMatching(/^what is live could not be read: the live versions: /),
       },
     });
 
