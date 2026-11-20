@@ -1,5 +1,6 @@
-// The host's setup steps: directory, github-app (setup-github-app.ts), model and check, which setup.ts runs in this
-// order when no step is named. What each checks, asks and writes is docs/operations.md's (Setup, steps 2, 6, 7 and 8). Values are asked
+// The host's setup steps: directory, cloudflare (setup-cloudflare.ts), github-app (setup-github-app.ts), model
+// and check, which setup.ts runs in this order when no step is named. What each checks, asks and writes is
+// docs/operations.md's (Setup, steps 2 to 8). Values are asked
 // at a prompt that does not echo (askSecret) and written through writePrivate; nothing printed holds one.
 
 import * as v from "valibot";
@@ -22,17 +23,19 @@ import {
   writable,
   writePrivate,
 } from "./operations.ts";
+import { cloudflareStep } from "./setup-cloudflare.ts";
 import { githubAppStep } from "./setup-github-app.ts";
 import { checkSecrets } from "./worker-secrets.ts";
 
-export const HOST_STEPS = ["directory", "github-app", "model", "check"] as const;
+export const HOST_STEPS = ["directory", "cloudflare", "github-app", "model", "check"] as const;
 export type HostStep = (typeof HOST_STEPS)[number];
 // The steps each needs done first: a step that stops stops these.
 export const NEEDS: Readonly<Record<HostStep, readonly HostStep[]>> = {
   directory: [],
+  cloudflare: ["directory"],
   "github-app": ["directory"],
   model: ["directory"],
-  check: ["directory", "github-app", "model"],
+  check: ["directory", "cloudflare", "github-app", "model"],
 };
 
 // DeepSeek's API, which the stored MODEL_BASE_URL must name before the stored key is sent to it, the page its keys are
@@ -161,21 +164,32 @@ async function checkStep(): Promise<void> {
   }
   const access = await readEnvFile(ACCESS_ENV);
   if (access === null) {
-    print(`check: ${ACCESS_ENV}: none yet`);
+    issues.push(`the deploy directory has no ${ACCESS_ENV} (setup cloudflare writes it)`);
   } else {
     issues.push(...namesIssues(ACCESS_ENV, [...access.keys()]));
+    const host = target?.get("PRQ_HOST");
+    if (host !== undefined && access.has("PRQ_URL") && access.get("PRQ_URL") !== `https://${host}`) {
+      issues.push(`${ACCESS_ENV} does not set PRQ_URL to https:// and ${TARGET_ENV}'s PRQ_HOST`);
+    }
+    const empty = ["PRQ_ACCESS_CLIENT_ID", "PRQ_ACCESS_CLIENT_SECRET"].filter((name) => access.get(name) === "");
+    if (empty.length > 0) {
+      issues.push(`${ACCESS_ENV} sets ${empty.join(" and ")} to nothing`);
+    }
   }
   if (issues.length > 0) {
     throw new Refusal(...issues);
   }
-  print(`check: ${TARGET_ENV}${access === null ? "" : ` and ${ACCESS_ENV}`}: exactly their names`);
+  print(`check: ${TARGET_ENV} and ${ACCESS_ENV}: exactly their names`);
   print("check: done");
 }
 
-export async function hostStep(step: HostStep): Promise<void> {
+// A step; named, when it runs alone (setup <step>).
+export async function hostStep(step: HostStep, { named }: { named: boolean }): Promise<void> {
   switch (step) {
     case "directory":
       return directoryStep();
+    case "cloudflare":
+      return cloudflareStep({ named });
     case "github-app":
       return githubAppStep();
     case "model":

@@ -221,6 +221,11 @@ describe("setup github-app", () => {
       `${standIn.origin}/web/apps/octo-host-prq/installations/new`,
     ]);
 
+    // What the cloudflare step writes, which the check also needs.
+    await writePrivateFile(
+      "access.env",
+      "PRQ_URL=https://prq.example.com\nPRQ_ACCESS_CLIENT_ID=id.access\nPRQ_ACCESS_CLIENT_SECRET=sentinel-client-secret\n",
+    );
     const check = await setup(["check"]);
     expect(check.code).toBe(0);
 

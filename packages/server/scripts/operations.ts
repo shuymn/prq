@@ -222,6 +222,13 @@ export function hide(values: Iterable<string>): void {
   hidden = [...texts].toSorted((a, b) => b.length - a.length);
 }
 
+// Values hide() was given that are not secrets and that a command shows (an account ID, a hostname), as they are and
+// as JSON escapes them.
+export function reveal(values: Iterable<string>): void {
+  const shown = new Set([...values].flatMap((value) => [value, JSON.stringify(value).slice(1, -1)]));
+  hidden = hidden.filter((text) => !shown.has(text));
+}
+
 function redact(text: string): string {
   let result = text;
   for (const secret of hidden) {
@@ -871,7 +878,8 @@ export function wranglerEnv(accountId: string, { values = false } = {}): NodeJS.
     ),
   );
   Object.assign(env, fixture.childEnv, {
-    CLOUDFLARE_ACCOUNT_ID: accountId,
+    // None before an account is chosen ("").
+    ...(accountId === "" ? {} : { CLOUDFLARE_ACCOUNT_ID: accountId }),
     CLOUDFLARE_API_BASE_URL: API,
     // Its debug log, which it also writes to disk, leaves out request bodies, the values among them.
     WRANGLER_LOG_SANITIZE: "true",
@@ -885,8 +893,9 @@ export function wranglerEnv(accountId: string, { values = false } = {}): NodeJS.
   return env;
 }
 
-// The repository's wrangler with args on the account, input (if any) on its stdin, its output kept for the caller; or,
-// shown, its output on this process's. env adds to its environment.
+// The repository's wrangler with args on the account ("" before one is chosen), input (if any) on its stdin, its output
+// kept for the caller; or, shown, its output on this process's; or in the foreground, on the terminal, within
+// timeoutMs. env adds to its environment.
 export async function wrangler(
   args: readonly string[],
   accountId: string,
@@ -895,7 +904,16 @@ export async function wrangler(
     output = "keep",
     cwd = SERVER,
     env = {},
-  }: { input?: string | undefined; output?: "keep" | "show"; cwd?: string; env?: NodeJS.ProcessEnv } = {},
+    foreground = false,
+    timeoutMs = waitMs,
+  }: {
+    input?: string | undefined;
+    output?: "keep" | "show";
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    foreground?: boolean;
+    timeoutMs?: number;
+  } = {},
 ): Promise<Outcome> {
   const [program, base] = wranglerCommand();
   return run("wrangler", program, [...base, ...args], {
@@ -903,7 +921,8 @@ export async function wrangler(
     env: { ...wranglerEnv(accountId, { values: input !== undefined }), ...env },
     input,
     output,
-    timeoutMs: waitMs,
+    timeoutMs,
+    foreground,
   });
 }
 
