@@ -68,6 +68,8 @@ const RuleBody = v.object({
 type Rule = v.InferOutput<typeof RuleBody> & { id: string };
 // The account as the API stand-in holds it.
 type Account = {
+  // The page the token was made on: a profile's (the user's) or an account's.
+  tokenOwner: "user" | "account";
   zones: { id: string; name: string }[];
   // wrangler's login lists zones (its grant reads them).
   loginListsZones: boolean;
@@ -140,7 +142,9 @@ function answer(method: string, path: string, query: URLSearchParams, body: Json
   let match: RegExpExecArray | null;
   switch (route) {
     case "GET /user/tokens/verify":
-      return { id: "token-id", status: "active" };
+      return cf.tokenOwner === "user" ? { id: "token-id", status: "active" } : [401, null];
+    case `GET ${account}/tokens/verify`:
+      return cf.tokenOwner === "account" ? { id: "token-id", status: "active" } : [401, null];
     case "GET /zones": {
       const name = query.get("name");
       return cf.zones.filter((each) => name === null || each.name === name);
@@ -250,12 +254,13 @@ function answer(method: string, path: string, query: URLSearchParams, body: Json
 }
 
 // An answer in Cloudflare's envelope.
-function reply(response: ServerResponse, status: number, result: unknown, info?: Json): void {
+// An envelope as Cloudflare's API answers; Web Analytics' list answers a success with errors and messages null.
+function reply(response: ServerResponse, status: number, result: unknown, info?: Json, nulls = false): void {
   response.writeHead(status, { "content-type": "application/json" }).end(
     JSON.stringify({
       success: status < 400,
-      errors: status < 400 ? [] : [{ code: 10_000 + status, message: "stand-in" }],
-      messages: [],
+      errors: status < 400 ? (nulls ? null : []) : [{ code: 10_000 + status, message: "stand-in" }],
+      messages: nulls ? null : [],
       result,
       ...(info === undefined ? {} : { result_info: info }),
     }),
@@ -264,12 +269,13 @@ function reply(response: ServerResponse, status: number, result: unknown, info?:
 
 beforeAll(async () => {
   server = createServer((request, response) => {
-    const send = (status: number, result: unknown, info?: Json) => reply(response, status, result, info);
     let text = "";
     request.setEncoding("utf8").on("data", (chunk: string) => (text += chunk));
     request.on("end", () => {
       const url = new URL(request.url ?? "/", "http://stand-in.invalid");
       const path = url.pathname.replace(/^\/client\/v4/, "");
+      const send = (status: number, result: unknown, info?: Json) =>
+        reply(response, status, result, info, path.endsWith("/rum/site_info/list"));
       const method = request.method ?? "GET";
       const auth = request.headers.authorization ?? "";
       const body = text === "" ? {} : v.parse(JsonObject, JSON.parse(text));
@@ -338,6 +344,7 @@ beforeEach(async () => {
   await writeFile(join(root, "wrangler"), FAKE_WRANGLER, { mode: 0o755 });
   wranglerState({ loggedIn: true, accounts: [{ id: ACCOUNT, name: "Synthetic Account" }] });
   cf = {
+    tokenOwner: "user",
     zones: [{ id: ZONE_ID, name: ZONE }],
     loginListsZones: true,
     subscriptions: [{ id: "sub-1", state: "Paid", rate_plan: { id: "WORKERS_PAID", public_name: "Workers Paid" } }],
@@ -458,6 +465,27 @@ describe("setup cloudflare", () => {
     expect(result.output).toContain('cloudflare: created the Access application "prq"');
     expect(result.output).toContain("cloudflare: wrote ACCESS_TEAM_DOMAIN, ACCESS_AUD to worker.env");
     expect(result.output).toContain("delete the API token now");
+    const link = /from this link, which fills its permissions in: (\S+)/.exec(result.output)?.[1] ?? "";
+    const url = new URL(link);
+    expect(`${url.origin}${url.pathname}`).toBe("https://dash.cloudflare.com/profile/api-tokens");
+    expect(url.searchParams.get("accountId")).toBe(ACCOUNT);
+    expect(url.searchParams.get("zoneId")).toBe("all");
+    expect(JSON.parse(url.searchParams.get("permissionGroupKeys") ?? "[]")).toEqual(
+      [
+        ["access_acct", "edit"],
+        ["access", "edit"],
+        ["access_service_token", "edit"],
+        ["account_settings", "read"],
+        ["billing", "read"],
+        ["workers_scripts", "read"],
+        ["zone", "read"],
+        ["dns", "read"],
+        ["zone_settings", "read"],
+        ["bot_management", "read"],
+        ["page_rules", "read"],
+        ["config_settings", "edit"],
+      ].map(([key, type]) => ({ key, type })),
+    );
     const app = cf.apps.find((each) => each["name"] === "prq");
     expect(app).toMatchObject({
       domain: HOST,
@@ -537,7 +565,7 @@ describe("setup cloudflare", () => {
       ],
     });
 
-    const chosen = await setup(["cloudflare"], [["Account [1-2]: ", "2\r"], ...FRESH]);
+    const chosen = await setup(["cloudflare"], [["Account [1-2]: ", "synthetic account\r"], ...FRESH]);
 
     expect(chosen.code).toBe(0);
     expect(await envFile("target.env")).toContain(`CLOUDFLARE_ACCOUNT_ID=${ACCOUNT}\n`);
@@ -559,6 +587,42 @@ describe("setup cloudflare", () => {
       "setup: Cloudflare's API denied the zone's Bot Fight Mode: the token needs Bot Management Read (the zone)",
     );
     expect(writes()).toEqual([]);
+  });
+
+  it("chooses no account at an empty line, though one account has no name", async () => {
+    wranglerState({ loggedIn: true, accounts: [{ id: OTHER_ACCOUNT }, { id: ACCOUNT, name: "Synthetic Account" }] });
+
+    const result = await setup(["cloudflare"], [["Account [1-2]: ", "\r"]]);
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("setup: no account was chosen");
+  });
+
+  it("takes a zone by its name", async () => {
+    cf.zones.push({ id: "fedcba9876543210fedcba9876543210", name: "other-zone.example" });
+
+    const result = await setup(["cloudflare"], [["Zone [1-2]: ", `${ZONE.toUpperCase()}\r`], ...FRESH]);
+
+    expect(result.code).toBe(0);
+    expect(result.output).toContain(`zone ${ZONE}, hostname ${HOST}`);
+  });
+
+  it("stands by a lost verification without probing the account's", async () => {
+    cf.lost = ["GET /user/tokens/verify"];
+
+    const result = await setup(["cloudflare"], FRESH);
+
+    expect(result.code).toBe(1);
+    expect(cf.requests.some((each) => each.path === `/accounts/${ACCOUNT}/tokens/verify`)).toBe(false);
+  });
+
+  it("refuses a token made on the account's API Tokens page, naming the profile's", async () => {
+    cf.tokenOwner = "account";
+
+    const result = await setup(["cloudflare"], FRESH);
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("setup: the token was made on the account's API Tokens page");
   });
 
   it("refuses a token that does not read the zone", async () => {

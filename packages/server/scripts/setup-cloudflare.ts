@@ -80,6 +80,28 @@ const RECIPE = [
   `Account: Access: Organizations, Identity Providers, and Groups (Edit); Access: Apps and Policies (Edit); Access: Service Tokens (Edit); Account Settings (Read); Billing (Read); Workers Scripts (Read)`,
   `Zone: Zone (Read); DNS (Read); Zone Settings (Read); Bot Management (Read); Page Rules (Read); Config Rules (Edit)`,
 ];
+// RECIPE's permissions as the dashboard's token template link names them (Cloudflare's docs, API token template URLs).
+const RECIPE_KEYS = [
+  ["access_acct", "edit"],
+  ["access", "edit"],
+  ["access_service_token", "edit"],
+  ["account_settings", "read"],
+  ["billing", "read"],
+  ["workers_scripts", "read"],
+  ["zone", "read"],
+  ["dns", "read"],
+  ["zone_settings", "read"],
+  ["bot_management", "read"],
+  ["page_rules", "read"],
+  ["config_settings", "edit"],
+] as const;
+
+// The profile's API Tokens page with RECIPE filled in for the account; the dashboard drops a key it does not know.
+function tokenLink(accountId: string): string {
+  const keys = JSON.stringify(RECIPE_KEYS.map(([key, type]) => ({ key, type })));
+  const query = new URLSearchParams({ permissionGroupKeys: keys, accountId, zoneId: "all", name: "prq setup" });
+  return `${API_TOKENS_PAGE}?${query.toString()}`;
+}
 // What turns a rewrite of the page off for the hostname.
 const NO_REWRITES = { rocket_loader: false, email_obfuscation: false, disable_rum: true } as const;
 
@@ -109,17 +131,32 @@ async function loginAccounts(): Promise<v.InferOutput<typeof Accounts> | null> {
   return parsed.output.accounts ?? [];
 }
 
-// A choice among items by number; refused when none is chosen.
-async function choose(what: string, items: readonly string[]): Promise<number> {
-  for (const [index, item] of items.entries()) {
-    print(`  ${index + 1}. ${item}`);
+// A choice among items listed by label, by number or by an item's name (any case); refused when none is chosen, or
+// when the name is several items'.
+async function choose(what: string, labels: readonly string[], names = labels): Promise<number> {
+  for (const [index, label] of labels.entries()) {
+    print(`  ${index + 1}. ${label}`);
   }
-  const line = (await ask(`${what} [1-${items.length}]: `)) ?? "";
-  const chosen = Number(line.trim());
-  if (!Number.isInteger(chosen) || chosen < 1 || chosen > items.length) {
+  const line = ((await ask(`${what} [1-${labels.length}]: `)) ?? "").trim();
+  if (/^\d+$/.test(line)) {
+    const chosen = Number(line);
+    if (chosen < 1 || chosen > labels.length) {
+      throw new Refusal(`no ${what.toLowerCase()} was chosen`);
+    }
+    return chosen - 1;
+  }
+  if (line === "") {
     throw new Refusal(`no ${what.toLowerCase()} was chosen`);
   }
-  return chosen - 1;
+  const named = names.flatMap((name, index) => (name.toLowerCase() === line.toLowerCase() ? [index] : []));
+  if (named.length > 1) {
+    throw new Refusal(`${named.length} ${what.toLowerCase()}s are named ${line}: choose one by its number`);
+  }
+  const [index] = named;
+  if (index === undefined) {
+    throw new Refusal(`no ${what.toLowerCase()} was chosen`);
+  }
+  return index;
 }
 
 // The zones of the account as wrangler's login lists them; null when its grant does not read them.
@@ -172,6 +209,7 @@ async function chooseTarget(): Promise<Target> {
     const index = await choose(
       "Account",
       accounts.map((each) => `${each.name ?? "unnamed"} (${each.id})`),
+      accounts.map((each) => each.name ?? ""),
     );
     accountId = accounts[index]?.id ?? "";
   }
@@ -237,10 +275,34 @@ async function askZone(suggested: string | null): Promise<string> {
 
 const Verified = v.object({ status: v.string() });
 
+// The token's verification at the user's endpoint. A token made on an account's API Tokens page is invalid there; it is
+// refused with where to make one, since the Page Rules endpoint does not take account-owned tokens (error 1011).
+async function verify(api: CloudflareApi, accountId: string): Promise<v.InferOutput<typeof Verified> | null> {
+  const call = { what: "the token's verification", permission: "no permission (the token must be active)" };
+  try {
+    return await api.get("/user/tokens/verify", call, Verified);
+  } catch (error) {
+    // Only Cloudflare's refusal of the credentials is probed; a timeout or another answer stands as it is.
+    if (!(error instanceof Refusal) || !error.message.startsWith("Cloudflare's API did not accept the credentials")) {
+      throw error;
+    }
+    const owned = await api.get(`/accounts/${accountId}/tokens/verify`, call, Verified).catch(() => null);
+    if (owned !== null) {
+      throw new Refusal(
+        `the token was made on the account's API Tokens page, and the zone's Page Rules are not read with such a token: make it at ${API_TOKENS_PAGE} (My Profile)`,
+      );
+    }
+    throw error;
+  }
+}
+
 // Step 2: the token, from the printed recipe, checked active and scoped to the zone.
 async function token(target: Target): Promise<{ api: CloudflareApi; zoneId: string }> {
   print(
-    `cloudflare: create an API token (${API_TOKENS_PAGE}, Create Token, Create Custom Token) with these permissions, its account resources only this account and its zone resources only the zone ${target.zone}:`,
+    `cloudflare: create an API token from this link, which fills its permissions in: ${tokenLink(target.accountId)}`,
+  );
+  print(
+    `cloudflare: there, check it has these permissions, set its zone resources to only the zone ${target.zone} and its TTL's end date to tomorrow in UTC (Cloudflare ends it at that date's 00:00 UTC):`,
   );
   for (const line of RECIPE) {
     print(`  ${line}`);
@@ -251,11 +313,7 @@ async function token(target: Target): Promise<{ api: CloudflareApi; zoneId: stri
     throw new Refusal("the token is not one line of printable characters without spaces; nothing was sent");
   }
   const api = new CloudflareApi({ Authorization: `Bearer ${typed}` });
-  const verified = await api.get(
-    "/user/tokens/verify",
-    { what: "the token's verification", permission: "no permission (the token must be active)" },
-    Verified,
-  );
+  const verified = await verify(api, target.accountId);
   if (verified?.status !== "active") {
     throw new Refusal(`Cloudflare does not take the token as active (${verified?.status ?? "not found"})`);
   }
