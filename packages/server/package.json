@@ -13,7 +13,8 @@
     "check:tools": "node --env-file-if-exists=.dev.vars scripts/tools-check.ts",
     "secrets": "node scripts/secrets.ts",
     "release-check": "node scripts/release-check.ts",
-    "deploy": "node scripts/deploy.ts"
+    "deploy": "node scripts/deploy.ts",
+    "setup": "node scripts/setup.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "catalog:",

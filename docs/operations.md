@@ -484,39 +484,52 @@ the hostname, the team domain, the application's AUD, the workers.dev subdomain 
 
 Once [Setup on a fresh account](#setup-on-a-fresh-account) is done and `secrets check` passes:
 
-1. **Protect the release tags and set up releases.** From a checkout of the current `main` (`git switch main` and
-   `git pull`), so that `.github/infra.yaml` holds both, apply the repository settings, the two tag rulesets and the
-   release settings, with `mise exec -- gh-infra plan .github/infra.yaml` and then
-   `mise exec -- gh-infra apply .github/infra.yaml`, and read them back: in the repository's Settings → Rules →
-   Rulesets, `release-tag-creation` and `release-tag-immutability` active on `refs/tags/v*`, the first with the admin
-   role as its only bypass, the second with none; and, with `gh` logged in as the repository's admin,
+1. **Protect the release tags and set up releases.** These are the publisher's steps, for the repository the
+   releases come from; a host deploying a published release from a plain clone skips them. They run only when named
+   (`setup` without a step runs neither), on a terminal, from a checkout of the current `main` (`git switch main`, then
+   `git pull`), with `gh` 2.87.0 or later (it names the run a dispatch started) logged in as the repository's admin. A
+   fine-grained token needs Administration write and Issues write (or Pull requests write, for the labels
+   `.github/infra.yaml` declares) for `setup repository`, and Administration read, Actions write,
+   Checks read and Contents write for `setup rehearsal`; a call GitHub denies names the permission it takes.
 
    ```sh
-   gh api repos/{owner}/{repo}/actions/permissions/selected-actions --jq .patterns_allowed
-   gh api repos/{owner}/{repo}/immutable-releases --jq .enabled
+   pnpm --dir packages/server run setup repository
+   pnpm --dir packages/server run setup rehearsal
    ```
 
-   list `actions/attest@*` among the allowed actions and print `true`. Then rehearse the release workflow on `main`. It
-   builds and checks all three platforms' archives as a release does, under the tag name `rehearsal-<run-id>`, which
-   is never pushed, publishes nothing, and deletes its draft at the end:
+   `setup repository` fetches origin's `main` and refuses unless `HEAD` is that commit and `.github/infra.yaml` on disk
+   is byte for byte main's (an edit git status does not show included) and declares origin's repository. It runs
+   `mise exec -- gh-infra plan --detailed-exitcode .github/infra.yaml`; when the plan shows changes, it runs
+   `gh-infra apply` in the foreground, which shows its plan and asks its own confirmation (it is never given
+   `--auto-approve`, and a declined apply exits 0), then the plan again, which must show none. Then it reads back,
+   each printed as `pass`: `release-tag-creation` and `release-tag-immutability`, both `active` on `refs/tags/v*`
+   alone, the first with the creation rule and the admin role as its only bypass, the second with the update and
+   deletion rules and no bypass (`.github/infra.yaml` declares its bypass empty, so the apply removes one; a bypass
+   `gh`'s login cannot read is refused, not taken as none); `actions/attest@*` among the allowed actions; and
+   immutable releases enabled. Anything else is refused, naming the field. It exits 2 when the apply failed or did not
+   finish: what it changed is not known, and running the step again plans from what GitHub has.
 
-   ```sh
-   gh workflow run release.yml --ref main
-   ```
-
-   Follow it in Actions → Release (or `gh run list --workflow release.yml --limit 1`, then `gh run watch <run-id>`). It
-   passes once each Smoke job has verified, extracted and run its archive, read from the draft by its ID, and Discard
-   has deleted the draft. Its Read probe job notes whether `contents: read` alone reads the draft; Smoke keeps
-   `contents: write` until a rehearsal shows that it does. A rehearsal that failed is run again as a new dispatch, not
-   with "Re-run failed jobs": its draft is already deleted. Before dispatching again, make sure the failed run's draft is
-   gone: if Discard did not run, had no ID (Verify stopped after creating the draft) or failed, find the draft whose
-   tag names the failed run's ID and delete it by its ID:
-
-   ```sh
-   gh api --paginate 'repos/{owner}/{repo}/releases?per_page=100' \
-     --jq '.[] | select(.draft and (.tag_name | startswith("rehearsal-"))) | "\(.id) \(.tag_name)"'
-   gh api --method DELETE repos/{owner}/{repo}/releases/<id>
-   ```
+   `setup rehearsal` reads the same settings back, asks `Dispatch the release rehearsal on main (<sha>)? [y/N]`, and
+   runs `gh workflow run release.yml --ref main`. The rehearsal builds and checks all three platforms' archives as a
+   release does, under the tag name `rehearsal-<run-id>`, which is never pushed, publishes nothing, and deletes its
+   draft at the end. The dispatch names the branch, so the step fetches `main` again after the answer and dispatches
+   nothing if it moved. It records the dispatch in `~/.local/state/prq/setup.json` (`$XDG_STATE_HOME/prq` when that is
+   set) before sending it, then the run from the URL `gh` prints for it, and follows the run, refusing one that is not
+   `.github/workflows/release.yml` dispatched on `main`. A run on another commit than the one confirmed is no rehearsal
+   of `main`: its drafts are offered for deletion, then it is recorded as failed. It prints each job's conclusion as it
+   ends, then the run's, a `pass` or `fail` line for each Smoke job, the Read probe and Discard, and the Read probe's
+   notice, which says whether `contents: read` alone reads the draft (Smoke keeps `contents: write` until a rehearsal
+   shows that it does); a notice it cannot read is reported as such. The rehearsal passes once the run and each of those
+   jobs concluded success. Last, it lists the drafts tagged with the run's ID and asks `Delete the draft <id>? [y/N]`
+   for each one left (Discard did not run, had no ID or failed). Only once none is left is the outcome recorded, with
+   the commit it was rehearsed on; until then the run stays recorded, and the next run of the step follows it again and
+   lists its drafts before anything else. Run again, the step resolves what it recorded before dispatching: a run under
+   way (after a stop, or past the follow's hour) is followed; a dispatch whose run `gh` did not name (exit 2) is looked
+   for among the release workflow's dispatched runs at that commit since, each offered with `Follow run <id>, created
+   <time>? [y/N]`, and only when none is taken does it ask to dispatch again. Once a rehearsal of the current `main`
+   passed, it prints `done`; a passed one of an older commit is named, and the current `main` is rehearsed. A rehearsal
+   that failed is run again as a new dispatch, by running the step again, not with "Re-run failed jobs": its draft is
+   already deleted.
 
 2. **The first release**, `v0.1.0`, as in [Releases](#releases): the release pull request, the check with `--pre-tag`,
    the tag, and the release workflow it runs, which publishes `prq` `v0.1.0`.

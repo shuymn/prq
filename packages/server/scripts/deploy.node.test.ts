@@ -6,7 +6,7 @@
 // those runs get one from python3's pty module.
 // Nothing reaches the network or an account.
 
-import { type ChildProcess, execFile, execFileSync, spawn } from "node:child_process";
+import { type ChildProcess, execFile, execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
@@ -20,6 +20,7 @@ import { unstable_readConfig } from "wrangler";
 import { parseInvocation } from "../../cli/src/test/deployed-invocation.ts";
 import { FixtureGit, type FixtureRepo, fixtureRoot } from "../../cli/src/test/git.ts";
 import type { Fixture } from "./fixture.ts";
+import { runInTerminal } from "./test-terminal.ts";
 
 const SCRIPT = fileURLToPath(new URL("deploy.ts", import.meta.url));
 const CLI_DIR = fileURLToPath(new URL("../../cli", import.meta.url));
@@ -494,14 +495,6 @@ async function bootstrapped(state: Partial<State> = {}): Promise<void> {
   await saveState({ deployment: [LIVE], versions: { [LIVE]: "prq-bootstrap" }, ...state });
 }
 
-// A pseudo-terminal for a run, from the machine's python3 (as the skill runner's tests use it): its pty module runs
-// the command on a terminal of its own, copies this side's stdin to it and its output here, and exits as it did.
-const IN_TERMINAL = [
-  "import os, pty, sys",
-  "code = os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:]))",
-  "sys.exit(code if code >= 0 else 128 - code)",
-].join("\n");
-
 // The deploy with these arguments, in a terminal unless told otherwise, answering each question it asks in turn,
 // through the tests' entry with the settings, or (production) as `pnpm run deploy` runs it, with none. Its output never
 // holds a value it must not print.
@@ -512,25 +505,15 @@ function start(args: string[], { terminal = true, answers = [] as string[], prod
   const command = production
     ? [process.execPath, SCRIPT, ...args]
     : [process.execPath, TEST_ENTRY, file, "deploy", ...args];
-  const argv = terminal ? ["python3", "-I", "-S", "-c", IN_TERMINAL, ...command] : command;
-  const child = spawn(argv[0] ?? "", argv.slice(1), { cwd: host.path, env, stdio: ["pipe", "pipe", "pipe"] });
+  const { child, result: finished } = runInTerminal(command, {
+    cwd: host.path,
+    env,
+    terminal,
+    answers,
+    prompt: /\[y\/N\] |, or none: /,
+  });
   started.push(child);
-  let output = "";
-  let asked = 0;
-  const read = (chunk: string) => {
-    output += chunk;
-    const questions = output.split(/\[y\/N\] |, or none: /).length - 1;
-    while (asked < questions && asked < answers.length) {
-      child.stdin.write(`${answers[asked] ?? ""}\n`);
-      asked += 1;
-    }
-  };
-  child.stdout.setEncoding("utf8").on("data", read);
-  child.stderr.setEncoding("utf8").on("data", read);
-  const result = new Promise<Result>((resolve) => {
-    child.on("close", (code, signal) => resolve({ code, signal, output: output.replaceAll("\r\n", "\n") }));
-  }).then((outcome) => {
-    child.stdin.destroy();
+  const result = finished.then((outcome) => {
     for (const secret of [
       TEAM,
       "sentinel-team",

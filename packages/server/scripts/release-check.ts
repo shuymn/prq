@@ -14,7 +14,7 @@ const SHA = /^[0-9a-f]{40}$/;
 const USAGE = "usage: release-check <tag> [--pre-tag <sha>]";
 const PACKAGES = ["packages/server/package.json", "packages/cli/package.json"];
 // GitHub's repository from origin's URL, as GitHub gives it for HTTPS and SSH.
-const GITHUB =
+export const GITHUB =
   /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/;
 // How long one git or gh call is waited for.
 const CALL_MS = 60_000;
