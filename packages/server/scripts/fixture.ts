@@ -11,11 +11,18 @@ export const Fixture = v.strictObject({
   directory: v.optional(v.string()),
   wrangler: v.optional(v.string()),
   wranglerConfig: v.optional(v.string()),
-  // The wait for wrangler and for an answer; the clone's steps and the upload; the rollout's poll and its end.
+  // The programs run in gh's place and in gh-infra's (in place of `mise exec -- gh-infra`), and the directory of the
+  // setup's state file.
+  gh: v.optional(v.string()),
+  ghInfra: v.optional(v.string()),
+  stateDir: v.optional(v.string()),
+  // The wait for wrangler, gh, git and an answer; the clone's steps, the upload and gh-infra's apply; the rollout's and
+  // the rehearsal's poll; the rollout's end; and the rehearsal's end.
   waitMs: v.optional(Milliseconds),
   stepMs: v.optional(Milliseconds),
   pollMs: v.optional(Milliseconds),
   rolloutMs: v.optional(Milliseconds),
+  followMs: v.optional(Milliseconds),
   // The Worker's origin for the idle check, and the API the deploy's own reads go to.
   origin: v.optional(v.string()),
   api: v.optional(v.string()),

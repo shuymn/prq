@@ -96,6 +96,8 @@ spec:
     - name: release-tag-immutability
       target: tag
       enforcement: active
+      # Present and empty: gh-infra removes any bypass the ruleset has, where leaving it out would keep one.
+      bypass_actors: []
       conditions:
         ref_name:
           include:
