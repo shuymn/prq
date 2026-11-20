@@ -6,7 +6,15 @@
 // generation (a filter change, a refresh the Hub's view asks for, Try again) aborts the requests in flight and discards
 // whatever they bring: a result is adopted only while its generation's signal is not aborted.
 
-import { type HubView, LedgerPage, LedgerQuery, type LedgerRow } from "@prq/protocol";
+import {
+  type HubView,
+  LedgerPage,
+  LedgerQuery,
+  type LedgerRow,
+  type PrDetails,
+  type PrRef,
+  sessionName,
+} from "@prq/protocol";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type * as v from "valibot";
 
@@ -46,6 +54,12 @@ export type LedgerSnapshot = {
   failure: "load" | "refresh" | null;
 };
 
+// The details of each pull request the list has read, by its session's name, as its latest row gave them: what the
+// PR detail shows of it before its session's first view.
+const known = new Map<string, PrDetails | null>();
+
+export const knownDetails = (ref: PrRef): PrDetails | null => known.get(sessionName(ref)) ?? null;
+
 // The Hub's view as far as the rows depend on it: a stored entry advances ledgerVersion, and a row's problem depends
 // on presence. opens counts the Hub socket's opens.
 type HubSignal = { view: Pick<HubView, "ledgerVersion" | "localAgentPresent"> | null; opens: number };
@@ -76,6 +90,9 @@ export class LedgerReader {
 
   #update(change: Partial<LedgerSnapshot>): void {
     this.#snapshot = { ...this.#snapshot, ...change };
+    for (const row of change.rows ?? []) {
+      known.set(sessionName(row.pr), row.details);
+    }
     for (const listener of this.#listeners) {
       listener();
     }

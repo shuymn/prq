@@ -2,7 +2,7 @@
 // (plan P3.1–P3.4, P3.10, P3.12, P3.13, P4.3–P4.6, P4.8): the history reads and what a read may change, the send
 // model, streamed text by run, versions, the connection's states, a job's Retry and the rail.
 
-import { type HubView, PrSessionView } from "@prq/protocol";
+import { type HubView, LedgerRow, PrDetails, PrSessionView } from "@prq/protocol";
 import * as v from "valibot";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -12,6 +12,7 @@ import { RETRY_ERROR } from "../components/retry.tsx";
 import { Frame } from "../frame.tsx";
 import type { Hub } from "../hub.ts";
 import type { Layout } from "../layout.ts";
+import { LedgerReader } from "../ledger.ts";
 import { FetchContext } from "../reads.ts";
 import { RECONNECT_FAILED_MS, RETRY_ANSWER_MS, RETRY_STALE_MS, SocketContext } from "../session.ts";
 import { SEND_SETTLE_MS, SendSlots, SlotsContext } from "../slots.ts";
@@ -72,20 +73,31 @@ function job(spec: JobSpec, index: number) {
   };
 }
 
+const DETAILS = {
+  fullName: "shuymn/prq",
+  title: "Add retry to stalled jobs",
+  state: "open",
+  url: "https://github.com/shuymn/prq/pull/42",
+  headSha: HEAD,
+  baseSha: OLDER,
+} as const;
+
 const sessionView = (jobs: JobSpec[] = [], owner: "cloud" | "local" = "cloud") =>
-  v.parse(PrSessionView, {
-    pr: REF,
-    details: {
-      fullName: "shuymn/prq",
-      title: "Add retry to stalled jobs",
-      state: "open",
-      url: "https://github.com/shuymn/prq/pull/42",
-      headSha: HEAD,
-      baseSha: OLDER,
-    },
-    owner,
-    jobs: jobs.map(job),
+  v.parse(PrSessionView, { pr: REF, details: DETAILS, owner, jobs: jobs.map(job) });
+
+// The PR list reads this pull request's row, as it does before a click opens the detail.
+async function listed(details: PrDetails | null) {
+  const fetch = controlledFetch();
+  const reader = new LedgerReader(fetch.fetch, { attention: false, state: "open", repo: null });
+  reader.start({ view: null, opens: 0 });
+  const row = { pr: REF, details, owner: "cloud", latestEvent: null, problem: null, claims: [] };
+  (await fetch.request(0)).respond({
+    rows: [v.parse(LedgerRow, { ...row, jobs: { waiting: 0, running: 0, failed: 0 } })],
+    nextCursor: null,
   });
+  await until(() => reader.snapshot().rows !== null);
+  reader.stop();
+}
 
 const question = (id: string, text: string) => ({ id, role: "user", parts: [{ type: "text", text }] });
 
@@ -160,6 +172,32 @@ const shown = () =>
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("before the session's first view", () => {
+  test("the header shows the pull request as the PR list read it, the summary and conversation as skeletons", async () => {
+    await listed(v.parse(PrDetails, DETAILS));
+    await detail();
+    await expect.element(page.getByRole("heading", { level: 1, name: "Add retry to stalled jobs" })).toBeVisible();
+    expect(textOf("[data-component=PrHeader] [data-component=PrStateLabel]")).toBe("Open");
+    expect(textOf("[data-component=PrHeader] .repository")).toBe("shuymn/prq #42");
+    await expect
+      .element(page.getByRole("link", { name: "Open on GitHub" }))
+      .toHaveAttribute("href", "https://github.com/shuymn/prq/pull/42");
+    expect(document.querySelector("[data-component=Summary]")?.getAttribute("data-state")).toBe("loading");
+    expect(document.querySelectorAll(".conversation .skeleton")).toHaveLength(1);
+  });
+
+  test("without its details from the list, the header shows the repository and number from the address", async () => {
+    await listed(null);
+    await detail();
+    await expect.element(page.getByRole("heading", { level: 1, name: "Pull request #42" })).toBeVisible();
+    expect(textOf("[data-component=PrHeader] .repository")).toBe("shuymn/prq #42");
+    expect(document.querySelector("[data-component=PrStateLabel]")).toBeNull();
+    await expect
+      .element(page.getByRole("link", { name: "Open on GitHub" }))
+      .toHaveAttribute("href", "https://github.com/shuymn/prq/pull/42");
+  });
 });
 
 describe("the history", () => {
