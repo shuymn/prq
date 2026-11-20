@@ -80,6 +80,28 @@ const RECIPE = [
   `Account: Access: Organizations, Identity Providers, and Groups (Edit); Access: Apps and Policies (Edit); Access: Service Tokens (Edit); Account Settings (Read); Billing (Read); Workers Scripts (Read)`,
   `Zone: Zone (Read); DNS (Read); Zone Settings (Read); Bot Management (Read); Page Rules (Read); Config Rules (Edit)`,
 ];
+// RECIPE's permissions as the dashboard's token template link names them (Cloudflare's docs, API token template URLs).
+const RECIPE_KEYS = [
+  ["access_acct", "edit"],
+  ["access", "edit"],
+  ["access_service_token", "edit"],
+  ["account_settings", "read"],
+  ["billing", "read"],
+  ["workers_scripts", "read"],
+  ["zone", "read"],
+  ["dns", "read"],
+  ["zone_settings", "read"],
+  ["bot_management", "read"],
+  ["page_rules", "read"],
+  ["config_settings", "edit"],
+] as const;
+
+// The profile's API Tokens page with RECIPE filled in for the account; the dashboard drops a key it does not know.
+function tokenLink(accountId: string): string {
+  const keys = JSON.stringify(RECIPE_KEYS.map(([key, type]) => ({ key, type })));
+  const query = new URLSearchParams({ permissionGroupKeys: keys, accountId, zoneId: "all", name: "prq setup" });
+  return `${API_TOKENS_PAGE}?${query.toString()}`;
+}
 // What turns a rewrite of the page off for the hostname.
 const NO_REWRITES = { rocket_loader: false, email_obfuscation: false, disable_rum: true } as const;
 
@@ -261,7 +283,10 @@ async function verify(api: CloudflareApi, accountId: string): Promise<v.InferOut
 // Step 2: the token, from the printed recipe, checked active and scoped to the zone.
 async function token(target: Target): Promise<{ api: CloudflareApi; zoneId: string }> {
   print(
-    `cloudflare: create an API token (${API_TOKENS_PAGE}, Create Token, Create Custom Token) with these permissions, its account resources only this account and its zone resources only the zone ${target.zone}:`,
+    `cloudflare: create an API token from this link, which fills its permissions in: ${tokenLink(target.accountId)}`,
+  );
+  print(
+    `cloudflare: there, check it has these permissions, set its zone resources to only the zone ${target.zone} and its TTL to end today:`,
   );
   for (const line of RECIPE) {
     print(`  ${line}`);

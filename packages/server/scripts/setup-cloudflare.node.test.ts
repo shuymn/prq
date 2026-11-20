@@ -465,6 +465,10 @@ describe("setup cloudflare", () => {
     expect(result.output).toContain('cloudflare: created the Access application "prq"');
     expect(result.output).toContain("cloudflare: wrote ACCESS_TEAM_DOMAIN, ACCESS_AUD to worker.env");
     expect(result.output).toContain("delete the API token now");
+    const link = /from this link, which fills its permissions in: (\S+)/.exec(result.output)?.[1] ?? "";
+    const query = new URL(link).searchParams;
+    expect(query.get("accountId")).toBe(ACCOUNT);
+    expect(JSON.parse(query.get("permissionGroupKeys") ?? "[]")).toHaveLength(12);
     const app = cf.apps.find((each) => each["name"] === "prq");
     expect(app).toMatchObject({
       domain: HOST,

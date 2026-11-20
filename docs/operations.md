@@ -127,10 +127,11 @@ with a new token.
    one you pick (by number or name), or (when the login's grant does not list zones) the one you type; then `Hostname label [prq]:`. The
    web UI is `https://<host>`, the CLI's `PRQ_URL` is `https://<host>`, and GitHub delivers to
    `https://<host>/webhook`. It writes `CLOUDFLARE_ACCOUNT_ID` and `PRQ_HOST` to `target.env`.
-4. **The API token.** It prints the permissions to give a custom token at
-   [API Tokens](https://dash.cloudflare.com/profile/api-tokens) of your profile, with its account resources only that
-   account and its zone resources only that zone, and asks `Cloudflare API token (not shown):`. A token made on the
-   account's own API Tokens page is refused: Cloudflare's Page Rules endpoint does not take account-owned tokens.
+4. **The API token.** It prints a link to your profile's
+   [API Tokens](https://dash.cloudflare.com/profile/api-tokens) page with the permissions below and the account filled
+   in (Cloudflare's token template URL); there, check the permissions, set the zone resources to only that zone and the
+   TTL to end today, and create it. It asks `Cloudflare API token (not shown):`. A token made on the account's own API
+   Tokens page is refused: Cloudflare's Page Rules endpoint does not take account-owned tokens.
 
    | Resources | Permissions                                                                                                                                                                                    |
    | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
