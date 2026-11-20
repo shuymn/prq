@@ -109,14 +109,18 @@ async function loginAccounts(): Promise<v.InferOutput<typeof Accounts> | null> {
   return parsed.output.accounts ?? [];
 }
 
-// A choice among items by number; refused when none is chosen.
+// A choice among items by number, or by an item's text as listed; refused when none is chosen.
 async function choose(what: string, items: readonly string[]): Promise<number> {
   for (const [index, item] of items.entries()) {
     print(`  ${index + 1}. ${item}`);
   }
-  const line = (await ask(`${what} [1-${items.length}]: `)) ?? "";
-  const chosen = Number(line.trim());
-  if (!Number.isInteger(chosen) || chosen < 1 || chosen > items.length) {
+  const line = ((await ask(`${what} [1-${items.length}]: `)) ?? "").trim();
+  const named = items.findIndex((item) => item.toLowerCase() === line.toLowerCase());
+  if (named !== -1) {
+    return named;
+  }
+  const chosen = Number(line);
+  if (!/^\d+$/.test(line) || chosen < 1 || chosen > items.length) {
     throw new Refusal(`no ${what.toLowerCase()} was chosen`);
   }
   return chosen - 1;
@@ -237,6 +241,23 @@ async function askZone(suggested: string | null): Promise<string> {
 
 const Verified = v.object({ status: v.string() });
 
+// The token's verification: an account's API Tokens page makes a token only its account's endpoint verifies (the
+// user's answers it as invalid), and a profile's makes one only the user's endpoint verifies.
+async function verify(api: CloudflareApi, accountId: string): Promise<v.InferOutput<typeof Verified> | null> {
+  const call = { what: "the token's verification", permission: "no permission (the token must be active)" };
+  try {
+    const owned = await api.get(`/accounts/${accountId}/tokens/verify`, call, Verified);
+    if (owned !== null) {
+      return owned;
+    }
+  } catch (error) {
+    if (!(error instanceof Refusal)) {
+      throw error;
+    }
+  }
+  return api.get("/user/tokens/verify", call, Verified);
+}
+
 // Step 2: the token, from the printed recipe, checked active and scoped to the zone.
 async function token(target: Target): Promise<{ api: CloudflareApi; zoneId: string }> {
   print(
@@ -251,11 +272,7 @@ async function token(target: Target): Promise<{ api: CloudflareApi; zoneId: stri
     throw new Refusal("the token is not one line of printable characters without spaces; nothing was sent");
   }
   const api = new CloudflareApi({ Authorization: `Bearer ${typed}` });
-  const verified = await api.get(
-    "/user/tokens/verify",
-    { what: "the token's verification", permission: "no permission (the token must be active)" },
-    Verified,
-  );
+  const verified = await verify(api, target.accountId);
   if (verified?.status !== "active") {
     throw new Refusal(`Cloudflare does not take the token as active (${verified?.status ?? "not found"})`);
   }

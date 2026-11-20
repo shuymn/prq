@@ -68,6 +68,8 @@ const RuleBody = v.object({
 type Rule = v.InferOutput<typeof RuleBody> & { id: string };
 // The account as the API stand-in holds it.
 type Account = {
+  // The page the token was made on: a profile's (the user's) or an account's.
+  tokenOwner: "user" | "account";
   zones: { id: string; name: string }[];
   // wrangler's login lists zones (its grant reads them).
   loginListsZones: boolean;
@@ -140,7 +142,9 @@ function answer(method: string, path: string, query: URLSearchParams, body: Json
   let match: RegExpExecArray | null;
   switch (route) {
     case "GET /user/tokens/verify":
-      return { id: "token-id", status: "active" };
+      return cf.tokenOwner === "user" ? { id: "token-id", status: "active" } : [401, null];
+    case `GET ${account}/tokens/verify`:
+      return cf.tokenOwner === "account" ? { id: "token-id", status: "active" } : [401, null];
     case "GET /zones": {
       const name = query.get("name");
       return cf.zones.filter((each) => name === null || each.name === name);
@@ -338,6 +342,7 @@ beforeEach(async () => {
   await writeFile(join(root, "wrangler"), FAKE_WRANGLER, { mode: 0o755 });
   wranglerState({ loggedIn: true, accounts: [{ id: ACCOUNT, name: "Synthetic Account" }] });
   cf = {
+    tokenOwner: "user",
     zones: [{ id: ZONE_ID, name: ZONE }],
     loginListsZones: true,
     subscriptions: [{ id: "sub-1", state: "Paid", rate_plan: { id: "WORKERS_PAID", public_name: "Workers Paid" } }],
@@ -559,6 +564,17 @@ describe("setup cloudflare", () => {
       "setup: Cloudflare's API denied the zone's Bot Fight Mode: the token needs Bot Management Read (the zone)",
     );
     expect(writes()).toEqual([]);
+  });
+
+  it("takes a zone by its name, and a token made on the account's API Tokens page", async () => {
+    cf.zones.push({ id: "fedcba9876543210fedcba9876543210", name: "other-zone.example" });
+    cf.tokenOwner = "account";
+
+    const result = await setup(["cloudflare"], [["Zone [1-2]: ", `${ZONE.toUpperCase()}\r`], ...FRESH]);
+
+    expect(result.code).toBe(0);
+    expect(result.output).toContain(`zone ${ZONE}, hostname ${HOST}`);
+    expect(result.output).toContain("cloudflare: the token is active and reads the zone");
   });
 
   it("refuses a token that does not read the zone", async () => {

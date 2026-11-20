@@ -122,14 +122,15 @@ with a new token.
 
 1. **wrangler's login.** When wrangler is not logged in, it runs `wrangler login`: allow its access in the browser it
    opens. The deploys use this login, not the token below.
-2. **The account**: `target.env`'s, else the only one the login reaches, else the one you pick from the numbered list.
+2. **The account**: `target.env`'s, else the only one the login reaches, else the one you pick from the numbered list (by its number or its name).
 3. **The zone and the hostname**: the zone `target.env`'s `PRQ_HOST` is in; else the only zone the login lists, the
-   one you pick, or (when the login's grant does not list zones) the one you type; then `Hostname label [prq]:`. The
+   one you pick (by number or name), or (when the login's grant does not list zones) the one you type; then `Hostname label [prq]:`. The
    web UI is `https://<host>`, the CLI's `PRQ_URL` is `https://<host>`, and GitHub delivers to
    `https://<host>/webhook`. It writes `CLOUDFLARE_ACCOUNT_ID` and `PRQ_HOST` to `target.env`.
 4. **The API token.** It prints the permissions to give a custom token at
-   [API Tokens](https://dash.cloudflare.com/profile/api-tokens), with its account resources only that account and its
-   zone resources only that zone, and asks `Cloudflare API token (not shown):`:
+   [API Tokens](https://dash.cloudflare.com/profile/api-tokens) (or the account's own API Tokens page, whose tokens it
+   verifies through the account), with its account resources only that account and its zone resources only that zone,
+   and asks `Cloudflare API token (not shown):`:
 
    | Resources | Permissions                                                                                                                                                                                    |
    | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
