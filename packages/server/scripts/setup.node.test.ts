@@ -403,6 +403,7 @@ beforeEach(async () => {
     gh: join(bin, "gh"),
     ghInfra: join(bin, "gh-infra"),
     stateDir: join(root, "state", "prq"),
+    directory: join(root, "deploy"),
     waitMs: 15_000,
     stepMs: 15_000,
     pollMs: 50,
@@ -509,19 +510,13 @@ async function advanceMain(): Promise<string> {
 }
 
 describe("setup", () => {
-  it("runs no step without one, and names the publisher's", async () => {
-    const result = await setup([], { terminal: false });
-
-    expect(result.code).toBe(0);
-    expect(result.output).toContain("setup: there is no host step yet, so nothing was run");
-    expect(result.output).toContain("the publisher's steps run only when named: setup repository, setup rehearsal");
-    expect(await calls()).toEqual([]);
-  });
-
   it("prints its usage for anything but one step", async () => {
     for (const args of [["deploy"], ["repository", "rehearsal"]]) {
       const result = await setup(args, { terminal: false });
-      expect(result).toMatchObject({ code: 1, output: "setup: usage: setup [repository | rehearsal]\n" });
+      expect(result).toMatchObject({
+        code: 1,
+        output: "setup: usage: setup [repository | rehearsal | directory | model | check]\n",
+      });
     }
     expect(await calls()).toEqual([]);
   });

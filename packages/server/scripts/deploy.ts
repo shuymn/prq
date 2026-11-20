@@ -38,6 +38,7 @@ import {
   print,
   printError,
   readPrivate,
+  readTarget,
   refuseOverrides,
   Refusal,
   run,
@@ -65,7 +66,6 @@ const APPLICATION = "prq-workspace";
 const RELEASE_CHECK = fileURLToPath(new URL("release-check.ts", import.meta.url));
 const USAGE =
   "usage: deploy --bootstrap [--resume] | <tag> [--ignore-running] [--immediate] [--keep-image] | --read-back <record>";
-const HOST = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/;
 const SUBDOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 // The bootstrap's Worker serves nothing, so any recent date will do.
 const COMPATIBILITY_DATE = "2026-11-10";
@@ -263,13 +263,9 @@ async function records(...names: string[]): Promise<string> {
 
 // target.env's account, which the repository's wrangler configuration must not override, and hostname.
 async function target(): Promise<{ accountId: string; host: string }> {
-  const accountId = await account();
-  await checkConfigAccount(accountId);
-  const host = (parseEnv(await readPrivate(TARGET_ENV))["PRQ_HOST"] ?? "").toLowerCase();
-  if (!HOST.test(host)) {
-    throw new Refusal(`${TARGET_ENV} does not set PRQ_HOST to a hostname (such as prq.example.com)`);
-  }
-  return { accountId, host };
+  const found = await readTarget();
+  await checkConfigAccount(found.accountId);
+  return found;
 }
 
 // The version a deploy created, from wrangler's output file: none when it stopped before its end.

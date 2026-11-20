@@ -21,9 +21,10 @@ const KEY = "GITHUB_APP_PRIVATE_KEY";
 const SCALARS = SECRET_NAMES.filter((name) => name !== KEY);
 const KEY_FILE = "github-app.pk8.pem";
 
-// The ten secrets, as the Worker reads them and in its order, refused unless each is set and nothing else is.
-async function readSecrets(): Promise<Record<string, string>> {
-  const vars = parseEnv(await readPrivate(WORKER_ENV));
+// The ten secrets, as the Worker reads them and in its order, refused unless each is set and nothing else is. worker.env
+// as given (read by a stricter reader), else read here.
+async function readSecrets(given?: Readonly<Record<string, string | undefined>>): Promise<Record<string, string>> {
+  const vars = given ?? parseEnv(await readPrivate(WORKER_ENV));
   const key = await readPrivate(KEY_FILE);
   hide([...Object.values(vars).filter((value) => value !== undefined), key]);
 
@@ -66,8 +67,10 @@ async function signs(appId: number, key: string): Promise<boolean> {
 
 // The secrets as the Worker would read them: each group through src/config.ts (none reads as left out, since each
 // value is set), then the key by signing.
-export async function checkSecrets(): Promise<Record<string, string>> {
-  const values = await readSecrets();
+export async function checkSecrets(
+  vars?: Readonly<Record<string, string | undefined>>,
+): Promise<Record<string, string>> {
+  const values = await readSecrets(vars);
   const issues: string[] = [];
   const app = readGithubAppConfig(values);
   for (const result of [readAccessConfig(values), readWebhookConfig(values), readModelConfig(values), app]) {
