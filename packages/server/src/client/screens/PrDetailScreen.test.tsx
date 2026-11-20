@@ -2,7 +2,7 @@
 // (plan P3.1–P3.4, P3.10, P3.12, P3.13, P4.3–P4.6, P4.8): the history reads and what a read may change, the send
 // model, streamed text by run, versions, the connection's states, a job's Retry and the rail.
 
-import { type HubView, LedgerRow, PrDetails, PrSessionView } from "@prq/protocol";
+import { type HubView, LedgerRow, PrDetails, type PrRef, PrSessionView } from "@prq/protocol";
 import * as v from "valibot";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -85,14 +85,30 @@ const DETAILS = {
 const sessionView = (jobs: JobSpec[] = [], owner: "cloud" | "local" = "cloud") =>
   v.parse(PrSessionView, { pr: REF, details: DETAILS, owner, jobs: jobs.map(job) });
 
-// The PR list reads this pull request's row, as it does before a click opens the detail.
-async function listed(details: PrDetails | null) {
+// A pull request's details as GitHub gives them, its title and state as named.
+const detailsOf = (ref: PrRef, title: string, state: "open" | "closed" | "merged") =>
+  v.parse(PrDetails, {
+    ...DETAILS,
+    fullName: `${ref.owner}/${ref.repo}`,
+    title,
+    state,
+    url: `https://github.com/${ref.owner}/${ref.repo}/pull/${ref.number}`,
+  });
+
+// The PR list reads these pull requests' rows, as it does before a click opens a detail.
+async function listed(rows: { pr: PrRef; details: PrDetails | null }[]) {
   const fetch = controlledFetch();
   const reader = new LedgerReader(fetch.fetch, { attention: false, state: "open", repo: null });
   reader.start({ view: null, opens: 0 });
-  const row = { pr: REF, details, owner: "cloud", latestEvent: null, problem: null, claims: [] };
+  const rest = {
+    owner: "cloud",
+    latestEvent: null,
+    problem: null,
+    claims: [],
+    jobs: { waiting: 0, running: 0, failed: 0 },
+  };
   (await fetch.request(0)).respond({
-    rows: [v.parse(LedgerRow, { ...row, jobs: { waiting: 0, running: 0, failed: 0 } })],
+    rows: rows.map((row) => v.parse(LedgerRow, { ...row, ...rest })),
     nextCursor: null,
   });
   await until(() => reader.snapshot().rows !== null);
@@ -121,9 +137,11 @@ async function detail({
   slots = new SendSlots(),
   layout = "page",
   hub = HUB,
-}: { slots?: SendSlots; layout?: Layout; hub?: Hub } = {}) {
+  prRef = REF,
+}: { slots?: SendSlots; layout?: Layout; hub?: Hub; prRef?: PrRef } = {}) {
   const fetch = controlledFetch();
   const sockets = controlledSockets();
+  let shownRef = prRef;
   const tree = (shown: boolean) => (
     <FetchContext value={fetch.fetch}>
       <SlotsContext value={slots}>
@@ -131,7 +149,13 @@ async function detail({
           {shown ? (
             // The app's frame carries the layout the screen's styles follow.
             <div data-layout={layout}>
-              <PrDetailScreen prRef={REF} hub={hub} layout={layout} notice={() => null} />
+              <PrDetailScreen
+                key={JSON.stringify(shownRef)}
+                prRef={shownRef}
+                hub={hub}
+                layout={layout}
+                notice={() => null}
+              />
             </div>
           ) : (
             <p>Elsewhere</p>
@@ -141,7 +165,18 @@ async function detail({
     </FetchContext>
   );
   const screen = await render(tree(true));
-  return { fetch, sockets, slots, screen, show: (shown: boolean) => screen.rerender(tree(shown)) };
+  return {
+    fetch,
+    sockets,
+    slots,
+    screen,
+    show: (shown: boolean) => screen.rerender(tree(shown)),
+    // A navigation to another pull request's detail, which the app renders as a new screen.
+    open: (ref: PrRef) => {
+      shownRef = ref;
+      return screen.rerender(tree(true));
+    },
+  };
 }
 
 // The connection opens and the session sends its view, as the server does on connect.
@@ -170,33 +205,69 @@ const shown = () =>
     node.textContent?.trim(),
   );
 
+// The PR header's title, state label, repository and number, and GitHub link.
+const heading = (name: string) => page.getByRole("heading", { level: 1, name });
+const pill = () => textOf("[data-component=PrHeader] [data-component=PrStateLabel]");
+const repository = () => textOf("[data-component=PrHeader] .repository");
+const github = () => page.getByRole("link", { name: "Open on GitHub" });
+
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("before the session's first view", () => {
-  test("the header shows the pull request as the PR list read it, the summary and conversation as skeletons", async () => {
-    await listed(v.parse(PrDetails, DETAILS));
-    await detail();
-    await expect.element(page.getByRole("heading", { level: 1, name: "Add retry to stalled jobs" })).toBeVisible();
-    expect(textOf("[data-component=PrHeader] [data-component=PrStateLabel]")).toBe("Open");
-    expect(textOf("[data-component=PrHeader] .repository")).toBe("shuymn/prq #42");
-    await expect
-      .element(page.getByRole("link", { name: "Open on GitHub" }))
-      .toHaveAttribute("href", "https://github.com/shuymn/prq/pull/42");
+  const OTHER_REPO = { owner: "shuymn", repo: "tools", number: 42 };
+
+  test("the header shows the pull request as the PR list read it, the summary and conversation as skeletons, until the session's view, which it then follows", async () => {
+    await listed([{ pr: REF, details: detailsOf(REF, "Add retry to stalled jobs", "open") }]);
+    const { fetch, sockets } = await detail();
+    await expect.element(heading("Add retry to stalled jobs")).toBeVisible();
+    expect(pill()).toBe("Open");
+    expect(repository()).toBe("shuymn/prq #42");
+    await expect.element(github()).toHaveAttribute("href", "https://github.com/shuymn/prq/pull/42");
     expect(document.querySelector("[data-component=Summary]")?.getAttribute("data-state")).toBe("loading");
     expect(document.querySelectorAll(".conversation .skeleton")).toHaveLength(1);
+
+    // The view arrives while the history read is still out: its details replace the list's.
+    const socket = await sockets.socket(0);
+    socket.open();
+    socket.receive({
+      type: "cf_agent_state",
+      state: v.parse(PrSessionView, {
+        pr: REF,
+        details: detailsOf(REF, "Retry stalled jobs with backoff", "merged"),
+        owner: "cloud",
+        jobs: [],
+      }),
+    });
+    await expect.element(heading("Retry stalled jobs with backoff")).toBeVisible();
+    expect(pill()).toBe("Merged");
+    expect((await fetch.request(0)).url.pathname).toBe(HISTORY);
+    expect(document.querySelector("[data-component=Summary]")?.getAttribute("data-state")).toBe("loading");
   });
 
-  test("without its details from the list, the header shows the repository and number from the address", async () => {
-    await listed(null);
-    await detail();
-    await expect.element(page.getByRole("heading", { level: 1, name: "Pull request #42" })).toBeVisible();
-    expect(textOf("[data-component=PrHeader] .repository")).toBe("shuymn/prq #42");
+  test("another repository's pull request of the same number shows its own row", async () => {
+    await listed([
+      { pr: REF, details: detailsOf(REF, "Add retry to stalled jobs", "open") },
+      { pr: OTHER_REPO, details: detailsOf(OTHER_REPO, "Drop the legacy exporter", "closed") },
+    ]);
+    const { open } = await detail();
+    await expect.element(heading("Add retry to stalled jobs")).toBeVisible();
+
+    await open(OTHER_REPO);
+    await expect.element(heading("Drop the legacy exporter")).toBeVisible();
+    expect(pill()).toBe("Closed");
+    expect(repository()).toBe("shuymn/tools #42");
+    await expect.element(github()).toHaveAttribute("href", "https://github.com/shuymn/tools/pull/42");
+  });
+
+  test("opened directly, a pull request the list never read shows the repository and number from the address", async () => {
+    await listed([{ pr: REF, details: detailsOf(REF, "Add retry to stalled jobs", "open") }]);
+    await detail({ prRef: { owner: "acme", repo: "widgets", number: 7 } });
+    await expect.element(heading("Pull request #7")).toBeVisible();
+    expect(repository()).toBe("acme/widgets #7");
     expect(document.querySelector("[data-component=PrStateLabel]")).toBeNull();
-    await expect
-      .element(page.getByRole("link", { name: "Open on GitHub" }))
-      .toHaveAttribute("href", "https://github.com/shuymn/prq/pull/42");
+    await expect.element(github()).toHaveAttribute("href", "https://github.com/acme/widgets/pull/7");
   });
 });
 
