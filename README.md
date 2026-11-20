@@ -8,8 +8,8 @@ A Cloudflare Worker receives the webhooks and holds one conversation per pull re
 agent is available: a local AI session you already use (woken through the `prq` CLI), or a cloud agent with an API-key
 model. The web UI sits behind Cloudflare Access and is meant for the person who hosts it.
 
-Status: in development. The Worker and the `prq` CLI run locally, in the tests and in the local stack; nothing is
-deployed or released yet.
+Status: in development. Releases publish `prq` ([docs/operations.md](docs/operations.md#installing-prq)), and the
+host deploys the Worker from a release tag ([docs/operations.md](docs/operations.md#each-release)).
 
 - [docs/design.md](docs/design.md): purpose, architecture, rules, phases.
 - [docs/decisions.md](docs/decisions.md): library and platform decisions.
