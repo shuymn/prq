@@ -26,6 +26,11 @@ export const Fixture = v.strictObject({
   // The Worker's origin for the idle check, and the API the deploy's own reads go to.
   origin: v.optional(v.string()),
   api: v.optional(v.string()),
+  // How long a write to the deploy directory holds its temporary file before renaming it: the tests' window to stop
+  // it there.
+  holdMs: v.optional(Milliseconds),
+  // The origin the setup's model step reads DeepSeek's models list from, in place of DeepSeek's API.
+  modelApi: v.optional(v.string()),
   // What the stand-ins read of their environment, added to the one wrangler gets.
   childEnv: v.optional(v.record(v.string(), v.string())),
 });

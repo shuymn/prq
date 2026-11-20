@@ -105,12 +105,14 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`; host
   linux-arm64 runner installs the tools `mise.lock` pins for that platform, which `lockfile_platforms` keeps there.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
   change, and `mise exec -- gh-infra apply .github/infra.yaml` applies it once the owner approves.
-- `pnpm run setup repository|rehearsal` in `packages/server` runs the publisher's steps (`docs/operations.md`, First
-  deploy, step 1). They reach GitHub and are the owner's to run; `setup` without a step runs neither. Its tests
-  (`packages/server/scripts/setup.node.test.ts`) run it through the scripts' test entry, whose fixture gives it
-  stand-ins for `gh` and gh-infra that answer from a state file, its state directory and shorter bounds, in a clone of
-  an origin made with `FixtureGit` and a terminal from python3's `pty` module (`scripts/test-terminal.ts`, as the
-  deploy's tests get theirs); nothing reaches the network.
+- `pnpm run setup [directory|model|check]` in `packages/server` runs the host's setup steps, all of them in order
+  without a step (`docs/operations.md`, Setup); `setup repository|rehearsal` runs the publisher's steps, only when named
+  (First deploy, step 1). They write the owner's deploy directory or reach GitHub or DeepSeek and are the owner's to
+  run. Their tests run them through the scripts' test entry on a terminal from python3's `pty` module, and nothing
+  reaches the network: `packages/server/scripts/setup-host.node.test.ts` with a deploy directory in the OS temp
+  directory and a local stand-in for DeepSeek's models list, and `setup.node.test.ts` with stand-ins for `gh` and
+  gh-infra that answer from a state file, its state directory and shorter bounds, in a clone of an origin made with
+  `FixtureGit` (`scripts/test-terminal.ts`, as the deploy's tests get their terminal).
 
 ## Packages
 

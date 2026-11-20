@@ -1,8 +1,10 @@
 // What the host's operations commands share (docs/operations.md): the private deploy directory, output that holds no
-// value, an answer to a [y/N] question, and wrangler run on the account.
+// value, an answer to a [y/N] question, a secret asked without echo, and wrangler run on the account.
 //
 // The deploy directory, ~/.config/prq/deploy, and every file read from it must be the owner's alone (no group or other
-// permission bits), and neither may be a symbolic link. target.env names the account (CLOUDFLARE_ACCOUNT_ID).
+// permission bits), and neither may be a symbolic link. target.env names the account (CLOUDFLARE_ACCOUNT_ID). Where a
+// command writes there (writePrivate()), the directory and the file are also checked for an access control list, which
+// can let others read what the mode does not, and the file is written whole beside the old one, then renamed over it.
 //
 // Nothing printed holds a value read: every line printed through print() and printError() has each value hide() was
 // given (as it is, as JSON escapes it, and each line of it) replaced, and a refusal names a file or a variable.
@@ -19,23 +21,26 @@
 // reach their stand-ins through their own entry (test-entry.ts, fixture.ts), not through the environment.
 
 import { spawn, spawnSync } from "node:child_process";
-import { constants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { constants, unlinkSync } from "node:fs";
+import { chmod, lstat, mkdir, open, readdir, rename } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 
 import { isCI, name as ciName } from "ci-info";
 import * as v from "valibot";
 
+import { SECRET_NAMES } from "../src/config.ts";
 import { fixture } from "./fixture.ts";
 
 // The Worker's name in wrangler.jsonc.
 export const WORKER = "prq";
 export const WORKER_ENV = "worker.env";
 export const TARGET_ENV = "target.env";
+export const ACCESS_ENV = "access.env";
 const NOT_INSTALLED = "wrangler is not installed: run pnpm install --frozen-lockfile in the repository";
 
 const SERVER = fileURLToPath(new URL("..", import.meta.url));
@@ -45,14 +50,15 @@ export const API = "https://api.cloudflare.com/client/v4";
 const DEFAULT_WAIT_MS = 5 * 60_000;
 // How long a program has to end after SIGTERM before SIGKILL.
 const KILL_GRACE_MS = 5_000;
-const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const;
 // Exit codes: a refusal, or nothing written; and a write sent without an acknowledgement.
 const EXIT_REFUSED = 1;
 const EXIT_UNCONFIRMED = 2;
 
 // Only the tests' fixture sets another deploy directory, a program run in wrangler's place, another wrangler
 // configuration, or a shorter wait.
-const directory = fixture.directory ?? join(homedir(), ".config", "prq", "deploy");
+export const DEPLOY_DIRECTORY = fixture.directory ?? join(homedir(), ".config", "prq", "deploy");
+const directory = DEPLOY_DIRECTORY;
 const wranglerOverride = fixture.wrangler;
 const CONFIG = fixture.wranglerConfig ?? join(SERVER, "wrangler.jsonc");
 // The env file every wrangler call is given, which holds nothing: without one, wrangler loads .env and .env.local from
@@ -236,28 +242,37 @@ export function mode(bits: number): string {
   return `0${(bits & 0o777).toString(8)}`;
 }
 
-// The directory itself, not followed if it is a symbolic link: the owner's alone by its permission bits.
-async function checkDirectory(): Promise<void> {
+// A path, not followed if it is a symbolic link, as kind says (a directory or a regular file), with no group or other
+// permission bits; label names it in a refusal, and missing replaces the refusal of a path that does not exist.
+async function checkEntry(path: string, label: string, kind: "directory" | "file", missing?: string): Promise<void> {
   let info;
   try {
-    info = await lstat(directory);
+    info = await lstat(path);
   } catch (error) {
     const code = errorCode(error);
-    throw new Refusal(
-      code === "ENOENT"
-        ? "the deploy directory does not exist (docs/operations.md, Setup)"
-        : `could not read the deploy directory (${code})`,
-    );
+    throw new Refusal(code === "ENOENT" && missing !== undefined ? missing : `could not read ${label} (${code})`);
   }
   if (info.isSymbolicLink()) {
-    throw new Refusal("the deploy directory is a symbolic link");
+    throw new Refusal(`${label} is a symbolic link`);
   }
-  if (!info.isDirectory()) {
-    throw new Refusal("the deploy directory is not a directory");
+  if (kind === "directory" ? !info.isDirectory() : !info.isFile()) {
+    throw new Refusal(`${label} is not a ${kind === "directory" ? "directory" : "regular file"}`);
   }
   if ((info.mode & 0o077) !== 0) {
-    throw new Refusal(`the deploy directory is open to others than its owner (mode ${mode(info.mode)}): chmod 700 it`);
+    throw new Refusal(
+      `${label} is open to others than its owner (mode ${mode(info.mode)}): chmod ${kind === "directory" ? "700" : "600"} it`,
+    );
   }
+}
+
+// The directory itself: the owner's alone by its permission bits.
+function checkDirectory(): Promise<void> {
+  return checkEntry(
+    directory,
+    "the deploy directory",
+    "directory",
+    "the deploy directory does not exist (docs/operations.md, Setup)",
+  );
 }
 
 // A file of the deploy directory, once the directory is checked, opened without following a symbolic link (or
@@ -294,6 +309,301 @@ export function stateRoot(): string {
   return xdg !== undefined && isAbsolute(xdg) ? xdg : join(homedir(), ".local", "state");
 }
 
+// Refused when path (not followed if it is a symbolic link) has an access control list. macOS's ls lists its entries
+// under the mode line with -e (its `+` after the mode gives way to the `@` of extended attributes, which most files
+// carry); GNU ls marks it with a `+` after the mode.
+async function refuseAcl(path: string): Promise<void> {
+  const darwin = process.platform === "darwin";
+  const outcome = await run("ls", "ls", [darwin ? "-lde" : "-ld", "--", path], {
+    cwd: "/",
+    env: { PATH: process.env["PATH"] ?? "/bin:/usr/bin", LC_ALL: "C" },
+    output: "keep",
+    timeoutMs: waitMs,
+  });
+  if (outcome.code !== 0 || outcome.timedOut) {
+    throw new Refusal(`could not list the access control list of ${path} (ls ${exited(outcome)})`);
+  }
+  const [first = "", ...entries] = outcome.stdout.split("\n");
+  if (darwin ? entries.some((line) => /^\s*\d+: /.test(line)) : (first.split(/\s/)[0] ?? "").endsWith("+")) {
+    throw new Refusal(
+      `${path} has an access control list, which can let others read it: ${darwin ? "chmod -N" : "setfacl -b"} it`,
+    );
+  }
+}
+
+// A file of the deploy directory, not followed if it is a symbolic link: a regular file with no group or other
+// permission bits and no access control list.
+async function checkPrivateFile(path: string): Promise<void> {
+  await checkEntry(path, path, "file");
+  await refuseAcl(path);
+}
+
+// The directory's missing ancestors, then the directory, each made 0700 whatever the umask.
+async function makeDirectory(): Promise<void> {
+  const missing: string[] = [];
+  for (let each = directory; (await lstat(each).catch(() => null)) === null; each = dirname(each)) {
+    missing.unshift(each);
+  }
+  for (const each of missing) {
+    try {
+      await mkdir(each, { mode: 0o700 });
+      await chmod(each, 0o700);
+    } catch (error) {
+      throw new Refusal(`could not make ${each} (${errorCode(error)})`);
+    }
+  }
+}
+
+// The deploy directory, made (0700) when missing, then checked with each entry it holds; true when it was made.
+export async function privateDirectory({ make }: { make: boolean }): Promise<boolean> {
+  const made = make && (await lstat(directory).catch(() => null)) === null;
+  if (made) {
+    await makeDirectory();
+  }
+  await checkDirectory();
+  await refuseAcl(directory);
+  for (const entry of await readdir(directory)) {
+    await checkPrivateFile(join(directory, entry));
+  }
+  return made;
+}
+
+// The names each file of the deploy directory sets: a refusal names one of these, and of any other only its line,
+// since a value pasted where a name goes reads as a name.
+export const ENV_NAMES: Readonly<Record<string, readonly string[]>> = {
+  [WORKER_ENV]: SECRET_NAMES,
+  [TARGET_ENV]: ["CLOUDFLARE_ACCOUNT_ID", "PRQ_HOST"],
+  [ACCESS_ENV]: ["PRQ_URL", "PRQ_ACCESS_CLIENT_ID", "PRQ_ACCESS_CLIENT_SECRET"],
+};
+
+const NAME_LINE = /^\s*(?:export\s+)?([A-Za-z_][\w.-]*)\s*=/;
+
+// An env file's names and values as Node's parseEnv reads them, refused when a line is neither NAME=value, a comment
+// nor empty (a value pasted on a line of its own), when this reading of a line's name and Node's differ, or when a
+// name is set twice or to a value that spans lines. A refusal names the file, the line and a name the file sets, never
+// any part of a value. Each value is hidden from output.
+function envEntries(file: string, text: string): Map<string, string> {
+  const parsed = parseEnv(text);
+  hide(Object.values(parsed).filter((value) => value !== undefined));
+  const known = ENV_NAMES[file] ?? [];
+  const where = (name: string, index: number) => `${known.includes(name) ? `${name}, ` : ""}line ${index + 1}`;
+  const lines = new Map<string, number>();
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    if (line.trim() === "" || line.trim().startsWith("#")) {
+      continue;
+    }
+    const name = NAME_LINE.exec(line)?.[1];
+    if (name === undefined || !Object.hasOwn(parsed, name)) {
+      // A line inside a value that spans lines is told apart below.
+      if (Object.values(parsed).some((value) => value !== undefined && /[\r\n]/.test(value))) {
+        break;
+      }
+      throw new Refusal(`line ${index + 1} of ${file} is not NAME=value, a comment or empty`);
+    }
+    const earlier = lines.get(name);
+    if (earlier !== undefined) {
+      throw new Refusal(`${file} sets a name twice (${where(name, earlier)} and line ${index + 1})`);
+    }
+    lines.set(name, index);
+  }
+  for (const [name, value] of Object.entries(parsed)) {
+    if (value !== undefined && /[\r\n]/.test(value)) {
+      const index = lines.get(name);
+      throw new Refusal(
+        `${file} sets a value that spans lines (${index === undefined ? "a name not read as one" : where(name, index)})`,
+      );
+    }
+    if (!lines.has(name)) {
+      throw new Refusal(`${file} holds a line Node reads as a name this check does not`);
+    }
+  }
+  return new Map([...lines.keys()].map((name): [string, string] => [name, parsed[name] ?? ""]));
+}
+
+// A file of the deploy directory as entries, its directory and itself checked; null when either is missing.
+export async function readEnvFile(name: string): Promise<Map<string, string> | null> {
+  const path = join(directory, name);
+  if ((await lstat(directory).catch(() => null)) === null || (await lstat(path).catch(() => null)) === null) {
+    return null;
+  }
+  await checkDirectory();
+  await refuseAcl(directory);
+  await checkPrivateFile(path);
+  return envEntries(name, await readPrivate(name));
+}
+
+// Whether a value is written unquoted as one line that reads back as itself: printable ASCII without spaces.
+export function writable(value: string): boolean {
+  return /^[\x21-\x7e]+$/.test(value) && parseEnv(`V=${value}`)["V"] === value;
+}
+
+// The temporary file a write has not renamed yet, removed when a signal or an exit ends this process first.
+let pendingTemp: string | null = null;
+
+function discardTemp(): void {
+  if (pendingTemp !== null) {
+    try {
+      unlinkSync(pendingTemp);
+    } catch {
+      // It is gone.
+    }
+    pendingTemp = null;
+  }
+}
+
+// Only the tests' fixture holds a written temporary file before its rename, to stop the write there.
+const holdMs = fixture.holdMs ?? 0;
+
+// Sets names in a file of the deploy directory, the rest of it kept with its line endings: the directory made (0700)
+// when missing; the file read and checked as envEntries does; a name it holds with another value replaced only on the
+// owner's yes (neither value shown), a no stopping before anything is written; then the whole file written to a new
+// 0600 file beside it, renamed over it, and read back. The temporary file is removed on a failure, a signal or an exit
+// before its rename. The names it changed, in the order given.
+export async function writePrivate(name: string, values: Readonly<Record<string, string>>): Promise<string[]> {
+  hide(Object.values(values));
+  for (const [key, value] of Object.entries(values)) {
+    if (!writable(value)) {
+      throw new Refusal(`the value for ${key} is not one line of printable characters without spaces`);
+    }
+  }
+  await privateDirectory({ make: true });
+  const path = join(directory, name);
+  const exists = (await lstat(path).catch(() => null)) !== null;
+  const text = exists ? await readPrivate(name) : "";
+  const entries = envEntries(name, text);
+  const changed: string[] = [];
+  for (const [key, value] of Object.entries(values)) {
+    const found = entries.get(key);
+    if (found === value) {
+      continue;
+    }
+    if (found !== undefined && !(await answer(`Replace ${key} in ${name}? [y/N] `))) {
+      throw new Refusal(`kept ${key} in ${name}; nothing was written`);
+    }
+    changed.push(key);
+  }
+  if (changed.length === 0) {
+    return [];
+  }
+  const ending = text.includes("\r\n") ? "\r\n" : "\n";
+  // Each line with its own ending; a last line without one gets the file's.
+  const lines =
+    text === "" ? [] : text.split(/(?<=\n)/).map((line) => (line.endsWith("\n") ? line : `${line}${ending}`));
+  const replaced = lines.map((line) => {
+    const key = NAME_LINE.exec(line)?.[1];
+    return key !== undefined && changed.includes(key)
+      ? `${key}=${values[key] ?? ""}${line.endsWith("\r\n") ? "\r\n" : "\n"}`
+      : line;
+  });
+  const added = changed.filter((key) => !entries.has(key)).map((key) => `${key}=${values[key] ?? ""}${ending}`);
+  const temp = join(directory, `.${name}.${randomBytes(6).toString("hex")}`);
+  const writeFailed = (what: string, error: unknown) => {
+    discardTemp();
+    return new Refusal(`could not ${what} ${name} in the deploy directory (${errorCode(error)}); it is as it was`);
+  };
+  let handle;
+  try {
+    handle = await open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  } catch (error) {
+    throw writeFailed("write", error);
+  }
+  pendingTemp = temp;
+  try {
+    await handle.chmod(0o600);
+    await handle.writeFile([...replaced, ...added].join(""));
+    await handle.sync();
+  } catch (error) {
+    await handle.close().catch(() => {});
+    throw writeFailed("write", error);
+  }
+  await handle.close();
+  if (holdMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, holdMs));
+  }
+  try {
+    await rename(temp, path);
+  } catch (error) {
+    throw writeFailed("replace", error);
+  }
+  pendingTemp = null;
+  const written = envEntries(name, await readPrivate(name));
+  const differing = Object.keys(values).filter((key) => written.get(key) !== values[key]);
+  if (differing.length > 0) {
+    throw new Refusal(`${name} does not read back ${differing.join(", ")} as written`);
+  }
+  return changed;
+}
+
+// The terminal's mode restored, while a secret is asked in raw mode.
+let restoreTerminal: (() => void) | null = null;
+
+// A secret typed at the terminal without echo, within the bound: read in raw mode, which is restored on every exit
+// (Enter, Ctrl-C, Ctrl-D, the bound, a signal, this process's exit). Refused when stdin is not a terminal or nothing
+// was typed. Ctrl-C ends this process as SIGINT does. The value is hidden from output before anything else prints.
+export async function askSecret(question: string, boundMs = waitMs): Promise<string> {
+  const stdin = process.stdin;
+  if (!stdin.isTTY) {
+    throw new Refusal(`${question.replace(/[:\s]+$/, "")} is asked on a terminal, where it does not show`);
+  }
+  const stdinHandle: { ref?: () => void; unref?: () => void } = stdin;
+  stdin.setRawMode(true);
+  restoreTerminal = () => {
+    stdin.setRawMode(false);
+  };
+  process.stdout.write(question);
+  const typed = await new Promise<{ value: string } | "interrupted" | null>((resolve) => {
+    let text = "";
+    const finish = (value: { value: string } | "interrupted" | null) => {
+      clearTimeout(timer);
+      stdin.off("data", onData).off("end", onEnd).off("error", onEnd);
+      restoreTerminal?.();
+      restoreTerminal = null;
+      stdin.pause();
+      stdinHandle.unref?.();
+      process.stdout.write("\n");
+      resolve(value);
+    };
+    const onData = (chunk: string) => {
+      for (const char of chunk) {
+        if (char === "\r" || char === "\n") {
+          finish({ value: text });
+          return;
+        }
+        if (char === "\u0003") {
+          finish("interrupted");
+          return;
+        }
+        if (char === "\u0004") {
+          finish(text === "" ? null : { value: text });
+          return;
+        }
+        if (char === "\u007f" || char === "\b") {
+          text = text.slice(0, -1);
+        } else if (char === "\u0015") {
+          text = "";
+        } else if (char >= " ") {
+          text += char;
+        }
+      }
+    };
+    const onEnd = () => finish(null);
+    const timer = setTimeout(() => finish(null), boundMs);
+    stdin.setEncoding("utf8").on("data", onData).once("end", onEnd).once("error", onEnd);
+    stdinHandle.ref?.();
+    stdin.resume();
+  });
+  if (typed === "interrupted") {
+    // As SIGINT would end this process, which raw mode kept the terminal from sending.
+    end("SIGINT");
+    await new Promise(() => {});
+  }
+  if (typed === null || typed === "interrupted" || typed.value.trim() === "") {
+    throw new Refusal(`nothing was entered at ${question.replace(/[:\s]+$/, "")}`);
+  }
+  hide([typed.value]);
+  return typed.value;
+}
+
 // The account target.env names.
 export async function account(): Promise<string> {
   const id = parseEnv(await readPrivate(TARGET_ENV))["CLOUDFLARE_ACCOUNT_ID"] ?? "";
@@ -301,6 +611,19 @@ export async function account(): Promise<string> {
     throw new Refusal(`${TARGET_ENV} does not set CLOUDFLARE_ACCOUNT_ID to an account ID (32 hexadecimal digits)`);
   }
   return id;
+}
+
+// A hostname as prq is served at (PRQ_HOST), lowercase.
+const HOST = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/;
+
+// target.env's account and hostname, as the deploy reads them.
+export async function readTarget(): Promise<{ accountId: string; host: string }> {
+  const accountId = await account();
+  const host = (parseEnv(await readPrivate(TARGET_ENV))["PRQ_HOST"] ?? "").toLowerCase();
+  if (!HOST.test(host)) {
+    throw new Refusal(`${TARGET_ENV} does not set PRQ_HOST to a hostname (such as prq.example.com)`);
+  }
+  return { accountId, host };
 }
 
 // wrangler takes the account from its configuration's account_id before CLOUDFLARE_ACCOUNT_ID, so a configuration
@@ -395,6 +718,9 @@ function end(signal: NodeJS.Signals): void {
     return;
   }
   ending = true;
+  restoreTerminal?.();
+  restoreTerminal = null;
+  discardTemp();
   void (async () => {
     await current?.stop(signal);
     await interrupt?.(signal).catch(() => {});
@@ -412,6 +738,8 @@ for (const signal of SIGNALS) {
 // An exit while a program runs (an error this process did not catch) leaves nothing of it behind.
 process.on("exit", () => {
   current?.kill();
+  restoreTerminal?.();
+  discardTemp();
 });
 
 // A program run as options say; refused when it cannot start.

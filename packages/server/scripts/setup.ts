@@ -1,7 +1,7 @@
-// The setup (`pnpm run setup [<step>]` in packages/server): the publisher's steps, `repository` and `rehearsal`, run
-// only when named. What each checks, asks and records, and its exit codes, are docs/operations.md's (First deploy,
-// step 1). Every program runs as operations.ts runs it, with a bound on its time; gh-infra's apply in the foreground,
-// where it asks.
+// The setup (`pnpm run setup [<step>]` in packages/server). Without a step it runs the host's steps in order
+// (setup-host.ts); the publisher's steps, `repository` and `rehearsal`, run only when named. What each checks, asks and
+// records, and its exit codes, are docs/operations.md's (Setup, and First deploy, step 1). Every program runs as
+// operations.ts runs it, with a bound on its time; the publisher's gh-infra in the foreground, where it asks.
 
 import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
@@ -29,9 +29,12 @@ import {
   waitMs,
 } from "./operations.ts";
 import { GITHUB } from "./release-check.ts";
+import { HOST_STEPS, type HostStep, hostStep, NEEDS as HOST_NEEDS } from "./setup-host.ts";
 
-const STEPS = ["repository", "rehearsal"] as const;
+const PUBLISHER_STEPS = ["repository", "rehearsal"] as const;
+const STEPS = [...PUBLISHER_STEPS, ...HOST_STEPS] as const;
 type Step = (typeof STEPS)[number];
+type PublisherStep = (typeof PUBLISHER_STEPS)[number];
 const USAGE = `usage: setup [${STEPS.join(" | ")}]`;
 const CI_REASON =
   "where nobody answers gh-infra's confirmation or this command's: run setup from a terminal of your own";
@@ -59,7 +62,7 @@ const CHECKS_READ = "Checks: read";
 const CONTENTS_WRITE = "Contents: write";
 // gh-infra creates and updates the labels .github/infra.yaml declares, which takes Issues or Pull requests write.
 const LABELS_WRITE = "Issues: write (or Pull requests: write, for the labels)";
-const NEEDS: Record<Step, string> = {
+const NEEDS: Record<PublisherStep, string> = {
   repository: `${ADMINISTRATION_WRITE} and ${LABELS_WRITE}`,
   rehearsal: `${ADMINISTRATION_READ}, ${ACTIONS_WRITE}, ${CHECKS_READ} and ${CONTENTS_WRITE}`,
 };
@@ -234,7 +237,7 @@ const RepositoryAnswer = v.object({ permissions: v.nullish(v.object({ admin: v.n
 
 // gh is logged in, as an admin of the repository. A fine-grained token's own permissions are not readable: each call
 // GitHub denies names the one it takes.
-async function ghAdmin({ root, repository }: Checkout, step: Step): Promise<void> {
+async function ghAdmin({ root, repository }: Checkout, step: PublisherStep): Promise<void> {
   // gh auth status prints the login's account and a part of its token: none of it is printed.
   if ((await gh(["auth", "status"], root)).code !== 0) {
     throw new Refusal("gh is not logged in: gh auth login");
@@ -901,18 +904,61 @@ function isStep(arg: string): arg is Step {
   return STEPS.some((step) => step === arg);
 }
 
+function isHostStep(step: Step): step is HostStep {
+  return HOST_STEPS.some((each) => each === step);
+}
+
+// The host's steps in order: each that stops (its refusal printed under its name) stops the steps that need it, which
+// are skipped, saying which; the others still run. Refused at the end when any stopped, with the worst exit code.
+async function hostSteps(): Promise<void> {
+  const stopped = new Set<HostStep>();
+  let unconfirmed = false;
+  for (const step of HOST_STEPS) {
+    const need = HOST_NEEDS[step].find((each) => stopped.has(each));
+    if (need !== undefined) {
+      print(`${step}: skipped (it needs ${need}, which stopped)`);
+      stopped.add(step);
+      continue;
+    }
+    try {
+      await hostStep(step);
+    } catch (error) {
+      if (!(error instanceof Refusal)) {
+        throw error;
+      }
+      for (const line of error.lines) {
+        printError(`${step}: ${line}`);
+      }
+      stopped.add(step);
+      unconfirmed ||= error instanceof Unconfirmed;
+    }
+  }
+  if (stopped.size > 0) {
+    const line = `stopped: ${[...stopped].join(", ")}; fix what the first one says, then run setup again`;
+    throw unconfirmed ? new Unconfirmed(line) : new Refusal(line);
+  }
+  print("setup: done");
+}
+
 async function main(args: readonly string[]): Promise<void> {
   const [step, ...rest] = args;
   if (rest.length > 0 || (step !== undefined && !isStep(step))) {
     throw new Refusal(USAGE);
   }
-  if (step === undefined) {
-    print("setup: there is no host step yet, so nothing was run");
-    print(`setup: the publisher's steps run only when named: ${STEPS.map((each) => `setup ${each}`).join(", ")}`);
-    return;
-  }
   refuseOverrides();
   notInCi(CI_REASON);
+  if (step === undefined) {
+    print(`setup: the host's steps: ${HOST_STEPS.join(", ")}`);
+    print(
+      `setup: the publisher's steps run only when named: ${PUBLISHER_STEPS.map((each) => `setup ${each}`).join(", ")}`,
+    );
+    await hostSteps();
+    return;
+  }
+  if (isHostStep(step)) {
+    await hostStep(step);
+    return;
+  }
   const where = await checkout();
   await (step === "repository" ? repositoryStep(where) : rehearsalStep(where));
 }
