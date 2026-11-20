@@ -14,6 +14,11 @@
     "scripts/setup.ts",
     "scripts/test-terminal.ts",
     "scripts/setup-host.ts",
+    "scripts/setup-state.ts",
+    "scripts/setup-run.ts",
+    "scripts/setup-terminal.ts",
+    "scripts/setup-github-app.ts",
+    "scripts/github-stand-in.ts",
     "scripts/worker-secrets.ts",
     "scripts/**/*.node.test.ts",
     "src/client"

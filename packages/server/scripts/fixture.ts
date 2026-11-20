@@ -31,6 +31,11 @@ export const Fixture = v.strictObject({
   holdMs: v.optional(Milliseconds),
   // The origin the setup's model step reads DeepSeek's models list from, in place of DeepSeek's API.
   modelApi: v.optional(v.string()),
+  // The origins the setup's GitHub App step reaches in place of GitHub's REST API and its web pages (the manifest
+  // form, the App's settings and installation pages), and the program run in place of the browser's opener.
+  githubApi: v.optional(v.string()),
+  githubWeb: v.optional(v.string()),
+  open: v.optional(v.string()),
   // What the stand-ins read of their environment, added to the one wrangler gets.
   childEnv: v.optional(v.record(v.string(), v.string())),
 });

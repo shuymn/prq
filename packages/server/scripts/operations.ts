@@ -456,10 +456,14 @@ const holdMs = fixture.holdMs ?? 0;
 
 // Sets names in a file of the deploy directory, the rest of it kept with its line endings: the directory made (0700)
 // when missing; the file read and checked as envEntries does; a name it holds with another value replaced only on the
-// owner's yes (neither value shown), a no stopping before anything is written; then the whole file written to a new
-// 0600 file beside it, renamed over it, and read back. The temporary file is removed on a failure, a signal or an exit
-// before its rename. The names it changed, in the order given.
-export async function writePrivate(name: string, values: Readonly<Record<string, string>>): Promise<string[]> {
+// owner's yes (neither value shown), a no stopping before anything is written (replace names those the owner already
+// agreed to); then the whole file written to a new 0600 file beside it, renamed over it, and read back. The temporary
+// file is removed on a failure, a signal or an exit before its rename. The names it changed, in the order given.
+export async function writePrivate(
+  name: string,
+  values: Readonly<Record<string, string>>,
+  { replace = [] }: { replace?: readonly string[] } = {},
+): Promise<string[]> {
   hide(Object.values(values));
   for (const [key, value] of Object.entries(values)) {
     if (!writable(value)) {
@@ -477,7 +481,7 @@ export async function writePrivate(name: string, values: Readonly<Record<string,
     if (found === value) {
       continue;
     }
-    if (found !== undefined && !(await answer(`Replace ${key} in ${name}? [y/N] `))) {
+    if (found !== undefined && !replace.includes(key) && !(await answer(`Replace ${key} in ${name}? [y/N] `))) {
       throw new Refusal(`kept ${key} in ${name}; nothing was written`);
     }
     changed.push(key);
@@ -539,8 +543,9 @@ let restoreTerminal: (() => void) | null = null;
 
 // A secret typed at the terminal without echo, within the bound: read in raw mode, which is restored on every exit
 // (Enter, Ctrl-C, Ctrl-D, the bound, a signal, this process's exit). Refused when stdin is not a terminal or nothing
-// was typed. Ctrl-C ends this process as SIGINT does. The value is hidden from output before anything else prints.
-export async function askSecret(question: string, boundMs = waitMs): Promise<string> {
+// was typed. Ctrl-C ends this process as SIGINT does. The value is hidden from output before anything else prints. An
+// abort of signal ends the question as the bound does.
+export async function askSecret(question: string, boundMs = waitMs, signal?: AbortSignal): Promise<string> {
   const stdin = process.stdin;
   if (!stdin.isTTY) {
     throw new Refusal(`${question.replace(/[:\s]+$/, "")} is asked on a terminal, where it does not show`);
@@ -555,6 +560,7 @@ export async function askSecret(question: string, boundMs = waitMs): Promise<str
     let text = "";
     const finish = (value: { value: string } | "interrupted" | null) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onEnd);
       stdin.off("data", onData).off("end", onEnd).off("error", onEnd);
       restoreTerminal?.();
       restoreTerminal = null;
@@ -588,6 +594,7 @@ export async function askSecret(question: string, boundMs = waitMs): Promise<str
     };
     const onEnd = () => finish(null);
     const timer = setTimeout(() => finish(null), boundMs);
+    signal?.addEventListener("abort", onEnd);
     stdin.setEncoding("utf8").on("data", onData).once("end", onEnd).once("error", onEnd);
     stdinHandle.ref?.();
     stdin.resume();

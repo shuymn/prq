@@ -515,7 +515,8 @@ describe("setup", () => {
       const result = await setup(args, { terminal: false });
       expect(result).toMatchObject({
         code: 1,
-        output: "setup: usage: setup [repository | rehearsal | directory | model | check]\n",
+        output:
+          "setup: usage: setup [repository | rehearsal | directory | github-app | model | check] | setup github-app --key <file> --app-id <id>\n",
       });
     }
     expect(await calls()).toEqual([]);

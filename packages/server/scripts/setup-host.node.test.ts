@@ -1,10 +1,11 @@
 // The host's setup steps (setup-host.ts, run by setup.ts) through the tests' entry (test-entry.ts), whose fixture gives
-// them a deploy directory in the OS temp directory and a local stand-in for DeepSeek's models list. Runs get a terminal
+// them a deploy directory in the OS temp directory, a local stand-in for DeepSeek's models list, and the GitHub stand-in
+// (github-stand-in.ts) for the GitHub App step, which setup-github-app.node.test.ts tests on its own. Runs get a terminal
 // from python3's pty module (as the deploy's tests get one), where the [y/N] questions and the key are answered. Every
 // key below is a sentinel no output may hold. Nothing reaches the network.
 
 import { type ChildProcess, execFile, spawn, spawnSync } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
+import { createPublicKey, generateKeyPairSync } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { chmod, lstat, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -16,6 +17,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { fixtureRoot } from "../../cli/src/test/git.ts";
 import type { Fixture } from "./fixture.ts";
+import { type StandIn, startGitHub } from "./github-stand-in.ts";
 
 const TEST_ENTRY = fileURLToPath(new URL("test-entry.ts", import.meta.url));
 const MODEL_KEY = "sk-sentinel-deepseek-4b1d9e2a";
@@ -71,6 +73,8 @@ let origin: string;
 let root: string;
 let directory: string;
 let env: Record<string, string>;
+let github: StandIn;
+let programs: { gh: string; open: string };
 const started: ChildProcess[] = [];
 
 beforeAll(async () => {
@@ -90,6 +94,7 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   origin = `http://127.0.0.1:${typeof address === "object" && address !== null ? address.port : 0}`;
+  github = await startGitHub();
   // macOS checks python3 on its first run, which can take seconds.
   await new Promise<void>((resolve) => {
     execFile("python3", ["-I", "-S", "-c", "pass"], { timeout: 60_000 }, () => resolve());
@@ -98,6 +103,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise((resolve) => server.close(resolve));
+  await github.close();
 });
 
 beforeEach(async () => {
@@ -105,6 +111,8 @@ beforeEach(async () => {
   directory = join(root, "config", "deploy");
   deepseek = { keys: [MODEL_KEY, NEW_KEY], models: ["deepseek-flash", "deepseek-pro"], requests: [] };
   env = { PATH: process.env["PATH"] ?? "", HOME: root, TERM: "xterm" };
+  github.reset();
+  programs = await github.programs(root);
 });
 
 afterEach(async () => {
@@ -140,6 +148,12 @@ async function setup(
     directory,
     modelApi: origin,
     waitMs: 15_000,
+    stateDir: join(root, "state"),
+    githubApi: `${github.origin}/api`,
+    githubWeb: `${github.origin}/web`,
+    gh: programs.gh,
+    open: programs.open,
+    childEnv: { PRQ_GITHUB_STAND_IN: github.origin },
     ...(holdMs === undefined ? {} : { holdMs }),
   };
   writeFileSync(file, JSON.stringify(settings));
@@ -215,11 +229,24 @@ async function readWorkerEnv(): Promise<string> {
   return readFile(join(directory, "worker.env"), "utf8");
 }
 
+// The App worker.env and the key file record, as GitHub's stand-in has it: installed on the test repository the setup's
+// state file records.
+async function recordedApp(): Promise<void> {
+  await writePrivateFile("github-app.pk8.pem", APP_KEY);
+  await writePrivateFile("target.env", TARGET);
+  github.addApp({ id: 918273645, name: "octo-host-prq", publicKey: createPublicKey(APP_KEY) }, [
+    { full_name: "octo-host/prq-test", private: true },
+  ]);
+  await mkdir(join(root, "state"), { mode: 0o700 });
+  await writeFile(join(root, "state", "setup.json"), '{"githubApp":{"testRepository":"octo-host/prq-test"}}', {
+    mode: 0o600,
+  });
+}
+
 // A complete deploy directory but the model's lines.
 async function completeButModel(): Promise<void> {
   await writePrivateFile("worker.env", `${OTHERS.join("\n")}\n`);
-  await writePrivateFile("github-app.pk8.pem", APP_KEY);
-  await writePrivateFile("target.env", TARGET);
+  await recordedApp();
 }
 
 // Adds an access control list entry that grants nothing the mode shows: macOS's chmod +a, or setfacl elsewhere with a
@@ -242,9 +269,14 @@ describe("setup without a step", () => {
 
     expect(first.code).toBe(0);
     const lines = first.output.split("\n");
-    const order = ["setup: the host's steps", "directory: done", "model: done", "check: done", "setup: done"].map(
-      (text) => lines.findIndex((line) => line.startsWith(text)),
-    );
+    const order = [
+      "setup: the host's steps",
+      "directory: done",
+      "github-app: done",
+      "model: done",
+      "check: done",
+      "setup: done",
+    ].map((text) => lines.findIndex((line) => line.startsWith(text)));
     expect(order).toEqual(order.toSorted((a, b) => a - b));
     expect(order).not.toContain(-1);
     expect(first.output).toContain(
@@ -269,17 +301,57 @@ describe("setup without a step", () => {
     expect(deepseek.requests).toEqual([`Bearer ${MODEL_KEY}`]);
   });
 
-  it("creates the directory and the file with exact owner bits under any umask, and stops at the check", async () => {
-    const result = await setup([], { turns: [[KEY_PROMPT, `${MODEL_KEY}\r`]], umask: "277" });
+  it("creates the directory and the file with exact owner bits under any umask, and skips the check the App's step stopped", async () => {
+    const result = await setup([], {
+      turns: [
+        ["The hostname prq will serve", "\r"],
+        [KEY_PROMPT, `${MODEL_KEY}\r`],
+      ],
+      umask: "277",
+    });
 
     expect(result.code).toBe(1);
     expect(result.output).toContain(`directory: created ${directory} (0700)`);
+    expect(result.output).toContain("github-app: that is not a hostname; nothing was written");
     expect(result.output).toContain("model: done");
-    expect(result.output).toContain("check: the deploy directory has no github-app.pk8.pem");
-    expect(result.output).toContain("setup: stopped: check; fix what the first one says, then run setup again");
+    expect(result.output).toContain("check: skipped (it needs github-app, which stopped)");
+    expect(result.output).toContain(
+      "setup: stopped: github-app, check; fix what the first one says, then run setup again",
+    );
     expect((await stat(directory)).mode & 0o777).toBe(0o700);
     expect((await stat(join(root, "config"))).mode & 0o777).toBe(0o700);
     expect((await stat(join(directory, "worker.env"))).mode & 0o777).toBe(0o600);
+  });
+
+  it("makes the App's state directory and file with exact owner bits under any umask", async () => {
+    const result = await setup([], {
+      turns: [
+        ["The hostname prq will serve", "prq.example.com\r"],
+        ["The private test repository (owner/name): ", "octo-host/prq-test\r"],
+        [KEY_PROMPT, `${MODEL_KEY}\r`],
+      ],
+      umask: "277",
+    });
+
+    expect(result.output).toContain("github-app: done");
+    expect(result.output).toContain("model: done");
+    expect((await stat(join(root, "state"))).mode & 0o777).toBe(0o700);
+    expect((await stat(join(root, "state", "setup.json"))).mode & 0o777).toBe(0o600);
+    expect((await stat(join(directory, "target.env"))).mode & 0o777).toBe(0o600);
+  });
+
+  it("stops the App's step on a state file it cannot write, runs the model's, and skips the check", async () => {
+    await writePrivateFile("target.env", TARGET);
+    await mkdir(join(root, "state"), { mode: 0o500 });
+
+    const result = await setup([], { turns: [[KEY_PROMPT, `${MODEL_KEY}\r`]] });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toMatch(/github-app: could not write setup\.json in .+ \(EACCES\); it is as it was/);
+    expect(result.output).toContain("model: done");
+    expect(result.output).toContain("check: skipped (it needs github-app, which stopped)");
+    expect(await readdir(join(root, "state"))).toEqual([]);
+    expect(github.state().opened).toEqual([]);
   });
 
   it.each([
@@ -403,8 +475,9 @@ describe("setup model", () => {
   });
 
   it("writes nothing when the replacement is declined, and stops the check", async () => {
-    const before = `${MODEL_LINES("sk-sentinel-revoked").join("\n")}\n`;
+    const before = `${[...OTHERS, ...MODEL_LINES("sk-sentinel-revoked")].join("\n")}\n`;
     await writePrivateFile("worker.env", before);
+    await recordedApp();
     SENTINELS.push("sk-sentinel-revoked");
 
     const result = await setup([], {
@@ -571,7 +644,8 @@ describe("setup model writing", () => {
   });
 
   it("refuses a directory it cannot write, naming it, and skips the check", async () => {
-    await mkdir(directory, { recursive: true, mode: 0o700 });
+    // The App recorded, so that the model's write is the first this run makes.
+    await completeButModel();
     await chmod(directory, 0o500);
 
     const result = await setup([], { turns: [[KEY_PROMPT, `${MODEL_KEY}\r`]] });

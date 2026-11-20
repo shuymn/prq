@@ -105,14 +105,16 @@ platform decisions: `docs/decisions.md`; the UI design: `design/README.md`; host
   linux-arm64 runner installs the tools `mise.lock` pins for that platform, which `lockfile_platforms` keeps there.
 - Repository settings live in `.github/infra.yaml`: `mise exec -- gh-infra plan .github/infra.yaml` shows what would
   change, and `mise exec -- gh-infra apply .github/infra.yaml` applies it once the owner approves.
-- `pnpm run setup [directory|model|check]` in `packages/server` runs the host's setup steps, all of them in order
-  without a step (`docs/operations.md`, Setup); `setup repository|rehearsal` runs the publisher's steps, only when named
-  (First deploy, step 1). They write the owner's deploy directory or reach GitHub or DeepSeek and are the owner's to
-  run. Their tests run them through the scripts' test entry on a terminal from python3's `pty` module, and nothing
-  reaches the network: `packages/server/scripts/setup-host.node.test.ts` with a deploy directory in the OS temp
-  directory and a local stand-in for DeepSeek's models list, and `setup.node.test.ts` with stand-ins for `gh` and
-  gh-infra that answer from a state file, its state directory and shorter bounds, in a clone of an origin made with
-  `FixtureGit` (`scripts/test-terminal.ts`, as the deploy's tests get their terminal).
+- `pnpm run setup [directory|github-app|model|check]` in `packages/server` runs the host's setup steps, all of them in
+  order without a step (`docs/operations.md`, Setup; `setup github-app --key <file> --app-id <id>` adopts an App made
+  by hand, Setup 6); `setup repository|rehearsal` runs the publisher's steps, only when named (First deploy, step 1).
+  They write the owner's deploy directory or reach GitHub or DeepSeek (the App's step creates an App on GitHub) and are
+  the owner's to run. Their tests run them through the scripts' test entry on a terminal from python3's `pty` module,
+  and nothing reaches the network: `packages/server/scripts/setup-host.node.test.ts` with a deploy directory in the OS
+  temp directory and a local stand-in for DeepSeek's models list, `setup-github-app.node.test.ts` with the GitHub
+  stand-in (`scripts/github-stand-in.ts`), and `setup.node.test.ts` with stand-ins for `gh` and gh-infra that answer
+  from a state file, its state directory and shorter bounds, in a clone of an origin made with `FixtureGit`
+  (`scripts/test-terminal.ts`, as the deploy's tests get their terminal).
 
 ## Packages
 
