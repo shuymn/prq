@@ -90,7 +90,7 @@ permission bit set, or carry an access control list, which can let others read w
 
 - `worker.env`: the Worker's nine scalar secrets as `NAME=value` lines: `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`,
   `WEBHOOK_SECRET`, `HOST_GITHUB_ID`, `MODEL_BASE_URL`, `MODEL_API_KEY`, `MODEL_ID`, `MODEL_CONTEXT_TOKENS` and
-  `GITHUB_APP_ID`.
+  `GITHUB_APP_ID`, and the optional `MODEL_REASONING_EFFORT` ([The model](#7-the-model)).
 - `github-app.pk8.pem`: the GitHub App's private key in PKCS#8, the Worker's `GITHUB_APP_PRIVATE_KEY`.
 - `target.env`: `PRQ_HOST=<host>` and `CLOUDFLARE_ACCOUNT_ID=<account-id>`.
 - `access.env`: the service token prq's CLI uses, `PRQ_URL=https://<host>`, `PRQ_ACCESS_CLIENT_ID` and
@@ -292,6 +292,12 @@ The window is prq's own budget for every cloud session: it keeps 16,384 tokens f
 conversation once it would exceed 1,032,192; it is not sent to the provider. Another OpenAI-compatible provider takes
 its own base URL, model ID and window (at least 16,384 tokens), added to `worker.env` by hand.
 
+`MODEL_REASONING_EFFORT`, added by hand, is optional: when set, every model request carries it as `reasoning_effort`,
+in the provider's own words (DeepSeek takes `low`, `high` and `max`, and uses `high` when the request names none).
+Unset or empty, requests carry none and the provider's default applies. `secrets put` sends it only when `worker.env`
+sets it, and leaves a value the Worker already holds as it is: to go back to the default, set the provider's default
+value and put again.
+
 ### 8. Check the files
 
 ```sh
@@ -317,11 +323,13 @@ be a value pasted in the wrong place.
 repository's pinned wrangler, logged in as above, on the account `target.env` names:
 
 - `check`: as in [Check the files](#8-check-the-files).
-- `status`: the account (its ID, and its name as the login sees it) and the Worker, then which of the ten secrets the
-  Worker has, which it lacks, and which it has besides. Names only: whether a value works shows when the Worker uses
+- `status`: the account (its ID, and its name as the login sees it) and the Worker, then which of the ten required
+  secrets the Worker has, which it lacks, whether it has the optional `MODEL_REASONING_EFFORT`, and which it has
+  besides. Names only: whether a value works shows when the Worker uses
   it.
 - `put`: `check`, then the account, the Worker, the names it sends and the Worker's other secrets, which stay as they
-  are; it asks `Put the secrets? [y/N]` and, on `y`, sends the ten as one JSON object on wrangler's stdin
+  are (with `MODEL_REASONING_EFFORT` when `worker.env` leaves it unset); it asks `Put the secrets? [y/N]` and, on `y`,
+  sends the ten, and `MODEL_REASONING_EFFORT` when set, as one JSON object on wrangler's stdin
   (`wrangler secret bulk`). That deploys a new version of the live Worker with the new values. Before asking, `put`
   refuses when the account has no Worker `prq`. That is a check before the write, not part of it: wrangler creates an
   empty Worker of the name when the write finds none, so do not delete the Worker while `put` runs.

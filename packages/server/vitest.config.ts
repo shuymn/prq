@@ -33,6 +33,7 @@ export default defineConfig(async () => {
                   MODEL_API_KEY: "",
                   MODEL_ID: "",
                   MODEL_CONTEXT_TOKENS: "",
+                  MODEL_REASONING_EFFORT: "",
                   // No GitHub App either, so no test reaches GitHub; tests that need the App give the session one.
                   GITHUB_APP_ID: "",
                   GITHUB_APP_PRIVATE_KEY: "",

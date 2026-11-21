@@ -103,6 +103,24 @@ describe("answers", () => {
   });
 });
 
+describe("reasoning effort", () => {
+  it("sends MODEL_REASONING_EFFORT as reasoning_effort, and none when it is unset", async () => {
+    const session = await servedSession();
+    session.provider.reply(answerStream("first"));
+    await session.client.chat([Q1]);
+    await untilState(session.stub, "q1", "done");
+
+    await useModelEnv(session.stub, { ...MODEL_ENV, MODEL_REASONING_EFFORT: "max" });
+    session.provider.reply(answerStream("second"));
+    await session.client.chat([Q1, Q2]);
+    await untilState(session.stub, "q2", "done");
+
+    const [first, second] = session.provider.requests.map((request) => request.body);
+    expect(first).not.toHaveProperty("reasoning_effort");
+    expect(second).toMatchObject({ model: MODEL_ENV.MODEL_ID, reasoning_effort: "max" });
+  });
+});
+
 describe("finish reasons", () => {
   it.for([
     ["length", "the model stopped at its output limit"],

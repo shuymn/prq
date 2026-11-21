@@ -22,13 +22,15 @@ export const MODEL_ENV = {
   MODEL_CONTEXT_TOKENS: "131072",
 };
 
-// The session reads its model configuration from exactly these variables (the test env's empty ones left out) from
+// The session reads its model configuration from exactly these variables (the test env's empty ones, and the effort, left out) from
 // now on. The instance keeps them until it is reset.
 export async function useModelEnv(
   stub: DurableObjectStub<PrSession>,
-  vars: Partial<Record<keyof typeof MODEL_ENV, string>> = MODEL_ENV,
+  vars: Partial<Record<keyof typeof MODEL_ENV | "MODEL_REASONING_EFFORT", string>> = MODEL_ENV,
 ): Promise<void> {
-  const base = Object.fromEntries(Object.entries(env).filter(([name]) => !(name in MODEL_ENV)));
+  const base = Object.fromEntries(
+    Object.entries(env).filter(([name]) => !(name in MODEL_ENV) && name !== "MODEL_REASONING_EFFORT"),
+  );
   await runInDurableObject(stub, (instance) => {
     Reflect.set(instance, "env", { ...base, ...vars });
   });

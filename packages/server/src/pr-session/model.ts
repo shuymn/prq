@@ -1,5 +1,12 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { APICallError, type LanguageModelMiddleware, RetryError, StreamProviderError, wrapLanguageModel } from "ai";
+import {
+  APICallError,
+  defaultSettingsMiddleware,
+  type LanguageModelMiddleware,
+  RetryError,
+  StreamProviderError,
+  wrapLanguageModel,
+} from "ai";
 import * as v from "valibot";
 
 import type { ModelConfig } from "../config.ts";
@@ -54,16 +61,28 @@ const responseBound: LanguageModelMiddleware = {
   },
 };
 
-// The cloud model of a configuration. Every request a turn makes, each step and each AI SDK retry, passes the bound.
+// The provider's name, which its options are keyed by.
+const PROVIDER = "model";
+
+// The cloud model of a configuration. Every request a turn makes, each step and each AI SDK retry, passes the bound,
+// and carries the configured reasoning effort, if any.
 export function createModel(config: ModelConfig): CloudModel {
   const provider = createOpenAICompatible({
-    name: "model",
+    name: PROVIDER,
     baseURL: config.MODEL_BASE_URL,
     apiKey: config.MODEL_API_KEY,
     // Usage in the stream's last chunk, which the usage log needs.
     includeUsage: true,
   });
-  return wrapLanguageModel({ model: provider.chatModel(config.MODEL_ID), middleware: responseBound });
+  const effort = config.MODEL_REASONING_EFFORT;
+  const middleware =
+    effort === undefined
+      ? [responseBound]
+      : [
+          defaultSettingsMiddleware({ settings: { providerOptions: { [PROVIDER]: { reasoningEffort: effort } } } }),
+          responseBound,
+        ];
+  return wrapLanguageModel({ model: provider.chatModel(config.MODEL_ID), middleware });
 }
 
 const models = new WeakMap<object, CloudModel>();

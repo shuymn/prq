@@ -466,6 +466,7 @@ describe("secrets status", () => {
         "Worker: prq",
         "set: 3 of the 10 secrets",
         `missing: ${NAMES.slice(3).join(", ")}`,
+        "optional set: none",
         "not expected: OLD_SECRET",
         "",
       ].join("\n"),
@@ -545,7 +546,15 @@ describe("secrets status", () => {
     env["FAKE_WRANGLER_SECRETS"] = NAMES.join(",");
 
     expect((await secrets(["status"])).stdout).toContain(
-      "set: 10 of the 10 secrets\nmissing: none\nnot expected: none\n",
+      "set: 10 of the 10 secrets\nmissing: none\noptional set: none\nnot expected: none\n",
+    );
+  });
+
+  it("names the optional reasoning effort apart from the required secrets", async () => {
+    env["FAKE_WRANGLER_SECRETS"] = [...NAMES, "MODEL_REASONING_EFFORT"].join(",");
+
+    expect((await secrets(["status"])).stdout).toContain(
+      "set: 10 of the 10 secrets\nmissing: none\noptional set: MODEL_REASONING_EFFORT\nnot expected: none\n",
     );
   });
 
@@ -687,6 +696,31 @@ describe("secrets put", () => {
         expect(elsewhere).not.toContain(secret);
       }
     }
+  });
+
+  it("sends the reasoning effort when worker.env sets it, and checks and sends it as given", async () => {
+    await writePrivate("worker.env", envFile({ ...SCALARS, MODEL_REASONING_EFFORT: "max" }));
+
+    const names = NAMES.toSpliced(8, 0, "MODEL_REASONING_EFFORT");
+    expect(await secrets(["check"])).toMatchObject({
+      code: 0,
+      stdout: CHECKED.replace(NAMES.join(", "), names.join(", ")),
+    });
+    expect(await secrets(["put"], "y\n")).toMatchObject({ code: 0, stderr: "" });
+    const [bulk] = await bulkCalls();
+    expect(JSON.parse(bulk?.stdin ?? "")).toStrictEqual({ ...EXPECTED, MODEL_REASONING_EFFORT: "max" });
+  });
+
+  it("leaves a live reasoning effort that worker.env does not set, and says it keeps it", async () => {
+    env["FAKE_WRANGLER_SECRETS"] = [...NAMES, "MODEL_REASONING_EFFORT"].join(",");
+    await writePrivate("worker.env", envFile({ ...SCALARS, MODEL_REASONING_EFFORT: "" }));
+
+    const result = await secrets(["put"], "y\n");
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(result.stdout).toContain(`sends: ${NAMES.join(", ")}\nkept as they are: MODEL_REASONING_EFFORT\n`);
+    const [bulk] = await bulkCalls();
+    expect(JSON.parse(bulk?.stdin ?? "")).toStrictEqual(EXPECTED);
   });
 
   it.each([
