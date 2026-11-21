@@ -5,7 +5,7 @@
 
 import * as v from "valibot";
 
-import { SECRET_NAMES } from "../src/config.ts";
+import { OPTIONAL_SECRET_NAMES, SECRET_NAMES } from "../src/config.ts";
 import {
   account,
   accountName,
@@ -61,8 +61,10 @@ async function where(): Promise<{ accountId: string; names: string[] }> {
 
 async function status(): Promise<void> {
   const { names } = await where();
-  print(`set: ${SECRET_NAMES.filter((name) => names.includes(name)).length} of the ${SECRET_NAMES.length} secrets`);
-  print(`missing: ${namesLine(SECRET_NAMES.filter((name) => !names.includes(name)))}`);
+  const required = SECRET_NAMES.filter((name) => !OPTIONAL_SECRET_NAMES.includes(name));
+  print(`set: ${required.filter((name) => names.includes(name)).length} of the ${required.length} secrets`);
+  print(`missing: ${namesLine(required.filter((name) => !names.includes(name)))}`);
+  print(`optional set: ${namesLine(OPTIONAL_SECRET_NAMES.filter((name) => names.includes(name)))}`);
   print(`not expected: ${namesLine(names.filter((name) => !SECRET_NAMES.includes(name)))}`);
 }
 
@@ -96,7 +98,8 @@ async function put(): Promise<void> {
   const { accountId, names } = await where();
   const sent = Object.keys(values);
   print(`sends: ${sent.join(", ")}`);
-  print(`kept as they are: ${namesLine(names.filter((name) => !SECRET_NAMES.includes(name)))}`);
+  // Kept: every live secret not sent, an optional one worker.env leaves unset as well.
+  print(`kept as they are: ${namesLine(names.filter((name) => !sent.includes(name)))}`);
   print(`put deploys a new version of the live Worker ${WORKER} with these values; secrets it does not send stay.`);
   if (!(await answer("Put the secrets? [y/N] "))) {
     throw new Refusal("nothing sent");

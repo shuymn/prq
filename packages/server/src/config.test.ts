@@ -154,6 +154,31 @@ describe("the model group", () => {
   });
 });
 
+describe("the model's reasoning effort", () => {
+  it("is optional, and empty reads as unset", () => {
+    const unset = { ok: true, config: { ...MODEL_ENV, MODEL_CONTEXT_TOKENS: 131_072 } };
+    expect(readModelConfig({ ...MODEL_ENV })).toStrictEqual(unset);
+    expect(readModelConfig({ ...MODEL_ENV, MODEL_REASONING_EFFORT: "" })).toEqual(unset);
+    expect(readModelConfig({ ...MODEL_ENV, MODEL_REASONING_EFFORT: "max" })).toMatchObject({
+      ok: true,
+      config: { MODEL_REASONING_EFFORT: "max" },
+    });
+  });
+
+  it("does not count toward the group: set alone, or empty with the others, the model is not configured", () => {
+    expect(readModelConfig({ MODEL_REASONING_EFFORT: "max" })).toBeNull();
+    expect(
+      readModelConfig({
+        MODEL_BASE_URL: "",
+        MODEL_API_KEY: "",
+        MODEL_ID: "",
+        MODEL_CONTEXT_TOKENS: "",
+        MODEL_REASONING_EFFORT: "",
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("the GitHub App group", () => {
   it("is not configured while neither variable is set, or both are empty", () => {
     // The tests' runtime sets both empty (vitest.config.ts), so a .dev.vars holding a real App gives no test GitHub.

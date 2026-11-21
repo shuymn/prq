@@ -8,6 +8,7 @@ import { jwtVerify } from "jose";
 import githubAppJwt from "universal-github-app-jwt";
 
 import {
+  OPTIONAL_SECRET_NAMES,
   readAccessConfig,
   readGithubAppConfig,
   readModelConfig,
@@ -21,8 +22,9 @@ const KEY = "GITHUB_APP_PRIVATE_KEY";
 const SCALARS = SECRET_NAMES.filter((name) => name !== KEY);
 export const KEY_FILE = "github-app.pk8.pem";
 
-// The ten secrets, as the Worker reads them and in its order, refused unless each is set and nothing else is. worker.env
-// as given (read by a stricter reader), else read here.
+// The secrets, as the Worker reads them and in its order, refused unless each but the optional ones is set and nothing
+// else is; an optional one left unset or empty is not among them. worker.env as given (read by a stricter reader), else
+// read here.
 async function readSecrets(given?: Readonly<Record<string, string | undefined>>): Promise<Record<string, string>> {
   const vars = given ?? parseEnv(await readPrivate(WORKER_ENV));
   const key = await readPrivate(KEY_FILE);
@@ -39,8 +41,9 @@ async function readSecrets(given?: Readonly<Record<string, string | undefined>>)
       `${WORKER_ENV} sets a name the Worker does not read (not printed, since it could be a misplaced value)`,
     );
   }
-  const values = Object.fromEntries([...SCALARS.map((name) => [name, vars[name] ?? ""]), [KEY, key]]);
-  const unset = SCALARS.filter((name) => values[name] === "");
+  const set = SCALARS.filter((name) => !OPTIONAL_SECRET_NAMES.includes(name) || (vars[name] ?? "") !== "");
+  const values = Object.fromEntries([...set.map((name) => [name, vars[name] ?? ""]), [KEY, key]]);
+  const unset = set.filter((name) => values[name] === "");
   if (unset.length > 0) {
     issues.push(`${WORKER_ENV} does not set ${unset.join(", ")}`);
   }

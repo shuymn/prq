@@ -82,7 +82,8 @@ UI:    React + Vite (Workers Static Assets), connected to PrSession with useAgen
 - **Model.** The cloud agent's model is any provider with an OpenAI-compatible chat completions API, through the AI
   SDK's `@ai-sdk/openai-compatible`, built once per isolate from four secrets: `MODEL_BASE_URL` (the API's https
   root), `MODEL_API_KEY`, `MODEL_ID` and `MODEL_CONTEXT_TOKENS` (the model's context window in tokens, since providers
-  do not report it reliably). The window is at least 16,384: below that the system prompt, the tool definitions and one
+  do not report it reliably), and optionally `MODEL_REASONING_EFFORT`, sent with every request as `reasoning_effort`
+  in the provider's own words (unset: none is sent and the provider's default applies). The window is at least 16,384: below that the system prompt, the tool definitions and one
   cut tool result leave no room for a conversation, and every turn would compact. With none of the four set (or all
   four empty, as the tests' runtime sets them), a cloud job fails `cloud agent not configured`; with some set or one
   malformed, it fails `cloud agent misconfigured: <each variable and what is wrong with it>`, never a value, and

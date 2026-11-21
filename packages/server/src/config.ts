@@ -54,11 +54,21 @@ const modelSchema = v.object(
       v.transform(Number),
       v.minValue(MIN_CONTEXT_TOKENS, "is below 16,384"),
     ),
+    // The reasoning effort, sent as each request's `reasoning_effort` in the provider's own words (DeepSeek: low,
+    // high, max). Optional: unset or empty, the request carries none and the provider's default applies.
+    MODEL_REASONING_EFFORT: v.pipe(
+      v.optional(v.string("is not a string")),
+      v.transform((value) => (value === "" ? undefined : value)),
+    ),
   },
   "is missing",
 );
 
-const MODEL_VARS = Object.keys(modelSchema.entries);
+// The model's variables that may each be left out while the group is configured.
+export const OPTIONAL_SECRET_NAMES: readonly string[] = ["MODEL_REASONING_EFFORT"];
+
+// The variables whose absence leaves the model out.
+const MODEL_VARS = Object.keys(modelSchema.entries).filter((name) => !OPTIONAL_SECRET_NAMES.includes(name));
 
 export type ModelConfig = v.InferOutput<typeof modelSchema>;
 
@@ -126,7 +136,7 @@ const githubAppSchema = v.object(
 
 const GITHUB_APP_VARS = Object.keys(githubAppSchema.entries);
 
-// The ten secrets, by group in the order above.
+// The eleven secrets, by group in the order above, one of them optional (OPTIONAL_SECRET_NAMES).
 export const SECRET_NAMES: readonly string[] = [accessSchema, webhookSchema, modelSchema, githubAppSchema].flatMap(
   (schema) => Object.keys(schema.entries),
 );

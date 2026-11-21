@@ -907,7 +907,7 @@ async function secretsStep(record: Run): Promise<void> {
     record.data.secretsPut = null;
     await record.save();
     throw new Refusal(
-      "secrets status does not list all ten and nothing besides: first-deploy --from secrets puts them again",
+      "secrets status does not list all ten required and nothing besides: first-deploy --from secrets puts them again",
     );
   }
 }
