@@ -39,6 +39,10 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*", "/agents/*", "/cli/*", "/webhook", "/webhook/*"],
   },
+  // The CPU time one invocation may use, Workers Paid's maximum (docs/design.md, Billing limits). A cloud turn's stream
+  // runs in the PrSession's invocations, and a long one with a high reasoning effort used more than the default 30 s in
+  // one of them: the object was reset and the turn ended as interrupted.
+  "limits": { "cpu_ms": 300000 },
   "observability": {
     "enabled": true,
   },

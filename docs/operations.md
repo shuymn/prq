@@ -38,6 +38,9 @@ Durable Objects and containers on it; usage beyond them is billed at the listed 
 - A workspace container (`basic`: 1/4 vCPU, 1 GiB memory, 4 GB disk) bills memory and disk for every second it runs,
   including the 30 minutes without a request after which it stops. The 25 GiB-h therefore cover at most 50 runs that
   are idle tail only; real runs cover fewer, and each further tail costs about $0.005 plus its active CPU.
+- The Worker may use up to 5 minutes of CPU time in one invocation (`limits.cpu_ms`,
+  [design.md](design.md#billing-limits)). CPU time beyond the 30M CPU-ms is billed; a long cloud turn uses tens of
+  seconds of it a minute while it streams.
 - The model's per-token price is the cost that grows with use. The Worker logs each cloud job's tokens
   (`prq.job.usage`, [design.md](design.md#observability)).
 
