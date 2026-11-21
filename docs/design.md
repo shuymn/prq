@@ -1441,6 +1441,11 @@ then a model that keeps calling tools runs until the provider refuses a call.
   or a step's tool calls), the job ends as `failed` with that reason, never as `done`.
 - In every failure, the text the turn had already produced is kept in the conversation and marked incomplete.
 - A workspace container stops after 30 minutes without a request.
+- An invocation of the Worker or a Durable Object may use up to 5 minutes of CPU time (`limits.cpu_ms` in
+  `packages/server/wrangler.jsonc`, Workers Paid's maximum), not the default 30 s. A cloud turn's stream is handled in
+  the PrSession's invocations; one that used more than its limit gets the object reset, and the turn restarts until it
+  fails as interrupted. A long turn (many steps, a high reasoning effort) was observed at about 33 s in one invocation.
+  CPU time is billed beyond the allowance ([operations.md](operations.md#costs)).
 - A `prq wait` long-poll keeps the Hub awake while it waits, and that time is Durable Object duration billed. One waiter
   should fit in the allowance included with Workers Paid; usage is checked after deployment, and if it is high the
   long-poll is replaced by short polls every few tens of seconds.
