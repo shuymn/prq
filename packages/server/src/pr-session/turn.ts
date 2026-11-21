@@ -1,10 +1,19 @@
 import { MessageMetadata } from "@prq/protocol";
-import { type FinishReason, isToolUIPart, type LanguageModel, type LanguageModelUsage, type UIMessage } from "ai";
+import {
+  type FinishReason,
+  getToolName,
+  isToolUIPart,
+  type LanguageModel,
+  type LanguageModelUsage,
+  type UIMessageChunk,
+  type UIMessage,
+} from "ai";
 import * as v from "valibot";
 
 import type { JobRow, JobUsage } from "./jobs.ts";
 import { reasonText } from "./model.ts";
 import type { Prefix } from "./prefix.ts";
+import { PUBLISH } from "./turn-tools.ts";
 import type { WorkspaceClient } from "./workspace.ts";
 
 // A cloud turn: what it is bound to, and how it ended as its callbacks recorded it in memory. prq commits it when the
@@ -51,13 +60,22 @@ export function newOutcome(): TurnOutcome {
   return { reached: false, aborted: false, contextLength: false };
 }
 
-// The reason a turn that stopped normally fails when its result holds no answer text (reasoning only, or nothing): as
-// done it would leave the author nothing, and a done job cannot be retried.
+// The reason a turn fails when it published blank text: as done it would leave the author nothing, and a done job
+// cannot be retried.
 export const NO_ANSWER_TEXT = "the model returned no answer text";
 
-// Why a turn that reached the model failed, or null when it ended normally. Only a final `stop` with answer text
-// commits a result: a cut-short answer (the output limit, the content filter) or any other ending is not stored as done.
-// A finish reason the provider sent is reason text like any other: the API key (`secret`) is replaced before the cut.
+// The reason a turn fails when the model stopped without calling publish, told to once and stopping again.
+export const NO_PUBLISH = "the model did not call publish: it ended its turn twice without delivering an answer";
+
+// What the model is told, once, when it stops without calling publish. It goes to the model only: the turn continues
+// with it, and it is neither stored nor shown.
+export const PUBLISH_NUDGE =
+  "You ended your turn without calling publish, so nothing was delivered. Call publish now with your complete answer.";
+
+// Why a turn that reached the model failed, or null when it ended normally. Only a turn whose publish call ran, with
+// text that is not blank, commits a result: one that stopped without it (twice, the nudge between), a cut-short answer
+// (the output limit, the content filter) or any other ending is not stored as done. A finish reason the provider sent
+// is reason text like any other: the API key (`secret`) is replaced before the cut.
 export function turnFailure(outcome: TurnOutcome, secret?: string): string | null {
   if (outcome.failure !== undefined) {
     return outcome.failure;
@@ -68,9 +86,13 @@ export function turnFailure(outcome: TurnOutcome, secret?: string): string | nul
   if (outcome.aborted) {
     return "the turn was cancelled";
   }
+  const published = publishedText(outcome.message?.parts ?? []);
+  if (published !== null) {
+    return published.trim() === "" ? NO_ANSWER_TEXT : null;
+  }
   switch (outcome.finishReason) {
     case "stop":
-      return outcome.message !== undefined && hasText(outcome.message.parts) ? null : NO_ANSWER_TEXT;
+      return NO_PUBLISH;
     case "length":
       return "the model stopped at its output limit";
     case "content-filter":
@@ -114,23 +136,71 @@ export function failingWith(response: Response, reason: (error: unknown) => stri
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
-// The parts of a cloud result as stored: no reasoning (it leaves the context when the turn ends), of tool parts only
-// those with a settled result, and text as final (a cut turn's last text was still streaming).
+// A turn's UI stream as the client is sent it: without text, which is not the answer (publish's input is, and the
+// result stored at the commit holds it as text), and without the nudge, which is the model's alone.
+export function withoutText(): TransformStream<UIMessageChunk, UIMessageChunk> {
+  return new TransformStream({
+    transform(chunk, controller) {
+      if (
+        chunk.type !== "text-start" &&
+        chunk.type !== "text-delta" &&
+        chunk.type !== "text-end" &&
+        chunk.type !== "steering-message"
+      ) {
+        controller.enqueue(chunk);
+      }
+    },
+  });
+}
+
+type Part = UIMessage["parts"][number];
+
+function isPublishPart(part: Part): boolean {
+  return isToolUIPart(part) && getToolName(part) === PUBLISH;
+}
+
+const PublishedInput = v.object({ text: v.string() });
+
+// The text the turn's last publish call that ran delivered, or null when none ran.
+function publishedText(parts: UIMessage["parts"]): string | null {
+  for (const part of parts.toReversed()) {
+    if (isToolUIPart(part) && getToolName(part) === PUBLISH && part.state === "output-available") {
+      const input: unknown = part.input;
+      return v.is(PublishedInput, input) ? input.text : null;
+    }
+  }
+  return null;
+}
+
+// The parts of a cloud result as stored: no reasoning (it leaves the context when the turn ends) and no nudge (it was
+// the model's alone), of tool parts only those with a settled result, and text as final (a cut turn's last text was
+// still streaming). Once publish ran, the turn's own text and the publish call give way to the published text as the
+// last part: the answer is that text, which every reader of a result (the UI, a local agent's context, compaction)
+// reads as text, and a later turn's model sees its earlier answer as its own text after its tool calls.
 export function resultParts(parts: UIMessage["parts"]): UIMessage["parts"] {
-  return parts
+  const published = publishedText(parts);
+  const kept = parts
     .filter(
       (part) =>
         part.type !== "reasoning" &&
         part.type !== "reasoning-file" &&
+        part.type !== "steering-message" &&
         (!isToolUIPart(part) ||
           part.state === "output-available" ||
           part.state === "output-error" ||
           part.state === "output-denied"),
     )
-    .map((part) => (part.type === "text" && part.state === "streaming" ? { ...part, state: "done" } : part));
+    .map((part) => (part.type === "text" && part.state === "streaming" ? { ...part, state: "done" as const } : part));
+  if (published === null) {
+    return kept;
+  }
+  return [
+    ...kept.filter((part) => part.type !== "text" && !isPublishPart(part)),
+    { type: "text", text: published, state: "done" },
+  ];
 }
 
-// Whether parts hold text that is not blank: an answer worth committing, or text worth keeping as incomplete.
+// Whether parts hold text that is not blank: text worth keeping as incomplete.
 export function hasText(parts: UIMessage["parts"]): boolean {
   return parts.some((part) => part.type === "text" && part.text.trim().length > 0);
 }

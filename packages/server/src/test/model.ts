@@ -58,9 +58,19 @@ export function toolCall(toolName: string, input: Record<string, unknown>, toolC
   return { type: "tool-call", toolCallId, toolName, input: JSON.stringify(input) };
 }
 
-// A whole answer: its text, then a normal finish.
+// A turn's publish call with its answer.
+export function publish(answer: string, toolCallId = "publish-1"): StreamPart {
+  return toolCall("publish", { text: answer }, toolCallId);
+}
+
+// A whole answer of a turn: its publish call, which ends the turn.
 export function answerScript(answer: string, tokens: Tokens = {}): Script {
-  return [...text(answer), finish("stop", tokens)];
+  return [publish(answer), finish("tool-calls", tokens)];
+}
+
+// A whole text reply, then a normal finish: a compaction's summary, or a turn that stops without calling publish.
+export function textScript(reply: string, tokens: Tokens = {}): Script {
+  return [...text(reply), finish("stop", tokens)];
 }
 
 function scriptedStream(script: Script): ReadableStream<StreamPart> {

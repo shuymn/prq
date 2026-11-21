@@ -323,6 +323,38 @@ describe("the history", () => {
     expect(shown()).toEqual(["First?", "First answer.", "Second?", "Second answer."]);
     expect(sockets.sent("cf_agent_chat_messages")).toEqual([]);
   });
+
+  test("a stored result shows its text after its last tool part, its narration before the tools hidden; a message without tool parts shows all its text", async () => {
+    const { fetch, sockets } = await detail();
+    await connect(sockets, 0, [
+      { id: "j1", question: "q1" },
+      { id: "j2", question: "q2" },
+    ]);
+    const read = { type: "tool-read_file", toolCallId: "c1", state: "output-available", input: {}, output: "a" };
+    const narrated = {
+      ...answer("j1", "q1", ""),
+      parts: [
+        { type: "step-start" },
+        { type: "text", text: "I'll start by looking at the change." },
+        read,
+        { type: "step-start" },
+        { type: "text", text: "## Overview" },
+        { type: "text", text: "\nIt adds a cache." },
+      ],
+    };
+    const whole = {
+      ...answer("j2", "q2", ""),
+      parts: [
+        { type: "text", text: "First part, " },
+        { type: "text", text: "second part." },
+      ],
+    };
+    const history = [question("q1", "First?"), narrated, question("q2", "Second?"), whole];
+    (await fetch.request(0)).respond(history);
+    (await fetch.request(1)).respond(history);
+    await expect.element(page.getByText("It adds a cache.")).toBeVisible();
+    expect(shown()).toEqual(["First?", "Overview\nIt adds a cache.", "Second?", "First part, second part."]);
+  });
 });
 
 // The chat requests the page sent: each request's ID and the messages its body carries.

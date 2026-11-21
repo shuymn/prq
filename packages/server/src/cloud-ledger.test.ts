@@ -5,7 +5,7 @@ import { Hub } from "./hub.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question } from "./test/chat.ts";
 import { cloudSession, untilState } from "./test/cloud.ts";
-import { answerScript, finish, ScriptedModel, text, useCloudModel, useWorkspace } from "./test/model.ts";
+import { answerScript, finish, publish, ScriptedModel, text, useCloudModel, useWorkspace } from "./test/model.ts";
 import { gate, hub, jobOf, ledgerRowOf, retryIn, revOf, tracked } from "./test/session.ts";
 import { push, sha } from "./test/webhook.ts";
 
@@ -28,7 +28,7 @@ describe("failure labels", () => {
     useCloudModel(
       new ScriptedModel().add(
         [...text("partial"), { fail: new Error("lost") }],
-        [...text("answer one"), { hold: held }, finish()],
+        [publish("answer one"), { hold: held }, finish("tool-calls")],
       ),
     );
 

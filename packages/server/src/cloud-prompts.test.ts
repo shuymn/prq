@@ -22,6 +22,7 @@ import {
 } from "./test/compaction.ts";
 import {
   answerScript,
+  textScript,
   type CallOptions,
   finish,
   ScriptedModel,
@@ -90,8 +91,10 @@ describe("the system prompt", () => {
     expect(systemPrompt({ pr, details, job: analysis, tools: true, hostPrompt: "" }).text).toBe(
       [
         "You work on one GitHub pull request: you summarize it and answer questions about it.",
+        "You deliver your answer by calling publish with the complete answer; text you write outside it is not shown.",
         `A tool's result is cut at ${TOOL_RESULT_CHARS} characters; a note at its end says how to read the next page.`,
-        "When the conversation has no room for more, the tools are withdrawn: answer from what you have read.",
+        "When the conversation has no room for more, the tools other than publish are withdrawn: answer from what you " +
+          "have read.",
         "Pull request: octo/widgets#7",
         "Title: A change",
         "URL: https://github.com/octo/widgets/pull/7",
@@ -107,6 +110,7 @@ describe("the system prompt", () => {
     expect(systemPrompt({ pr, details: null, job: early, tools: false, hostPrompt: " \n" }).text).toBe(
       [
         "You work on one GitHub pull request: you summarize it and answer questions about it.",
+        "You deliver your answer by calling publish with the complete answer; text you write outside it is not shown.",
         "Pull request: octo/widgets#7",
         "Its details are not known yet: no webhook has arrived.",
         "Your job: answer the last question. No push has been seen yet, so there is no code to read.",
@@ -210,8 +214,8 @@ describe("a cloud turn's prompt", () => {
       answerScript(sized("answer one", 3000), { input: 3000, output: 3000 }),
       answerScript(sized("answer two", 3000), { input: 9000, output: 3000 }),
       answerScript(sized("answer three", 3000), { input: 15_000, output: 3000 }),
-      answerScript("## Key facts\nthe notes", { input: 100, output: 50 }),
-      answerScript("## Progress So Far\nthe turn's start", { input: 100, output: 50 }),
+      textScript("## Key facts\nthe notes", { input: 100, output: 50 }),
+      textScript("## Progress So Far\nthe turn's start", { input: 100, output: 50 }),
     );
     model.contextTokens = WINDOW;
     useCloudModel(model);
@@ -263,8 +267,8 @@ describe("the instruction read at a turn's start", () => {
       await prefixFingerprint(),
     );
     const model = new ScriptedModel().add(
-      answerScript("## Key facts\nthe notes", { input: 100, output: 50 }),
-      answerScript("## Progress So Far\nthe turn's start", { input: 100, output: 50 }),
+      textScript("## Key facts\nthe notes", { input: 100, output: 50 }),
+      textScript("## Progress So Far\nthe turn's start", { input: 100, output: 50 }),
       answerScript("answer three"),
     );
     model.contextTokens = WINDOW;
@@ -351,14 +355,14 @@ describe("the instruction read at a turn's start", () => {
     expect(model.calls).toHaveLength(3);
   });
 
-  it("runs a job without tools whose prefix and own message fit, leaving no room for a tool result", async () => {
+  it("runs a job offered publish alone whose prefix and own message fit, leaving no room for a tool result", async () => {
     captureLogs();
     const window = 16_384;
     const room = contextLimit(window);
     const model = new ScriptedModel().add(answerScript("the answer"));
     model.contextTokens = window;
     useCloudModel(model);
-    // Before any push, an answer has no tools: the longest question that fits beside the prefix alone, which leaves
+    // Before any push, an answer is offered publish alone: the longest question that fits beside the prefix alone, which leaves
     // less than one tool result's room, and one character more.
     const inside = await cloudSession("prompts", sockets);
     const job: Job = {
@@ -379,7 +383,8 @@ describe("the instruction read at a turn's start", () => {
     expect(await untilEnded(over.stub, "q-long")).toEqual({
       state: "failed",
       failure:
-        `instructions: the system prompt with the host's prompt takes about ${Math.ceil(prefix.chars / 3)} tokens and ` +
+        `instructions: the system prompt with the host's prompt and the tool definitions takes about ` +
+        `${Math.ceil(prefix.chars / 3)} tokens and ` +
         `the question about ${Math.ceil((longest + 1) / 3)}, of the ${room} tokens this model's window leaves for a ` +
         "request: too little room for the answer; shorten the prompt or the question",
     });

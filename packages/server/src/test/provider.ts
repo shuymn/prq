@@ -83,6 +83,15 @@ export function delta(content: string): Record<string, unknown> {
   return { id: "chunk", model: "served-model", choices: [{ index: 0, delta: { content }, finish_reason: null }] };
 }
 
+// A chat completion chunk of the first tool call: its start (ID, type, name), or more of its arguments.
+function toolCallDelta(part: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: "chunk",
+    model: "served-model",
+    choices: [{ index: 0, delta: { tool_calls: [{ index: 0, ...part }] }, finish_reason: null }],
+  };
+}
+
 export function finishChunk(reason: string): Record<string, unknown> {
   return { id: "chunk", model: "served-model", choices: [{ index: 0, delta: {}, finish_reason: reason }] };
 }
@@ -144,6 +153,25 @@ export function answerStream(
 ) {
   const half = Math.ceil(text.length / 2);
   return sse([delta(text.slice(0, half)), delta(text.slice(half)), finishChunk("stop"), usageChunk(usage)]);
+}
+
+// A cloud turn's whole answer: its publish call, the arguments in two deltas, the finish for tool calls, and usage.
+export function publishStream(
+  text: string,
+  usage: Record<string, unknown> = { prompt_tokens: 10, completion_tokens: 5 },
+) {
+  const args = JSON.stringify({ text });
+  const half = Math.ceil(args.length / 2);
+  return sse([
+    toolCallDelta({
+      id: "call-publish",
+      type: "function",
+      function: { name: "publish", arguments: args.slice(0, half) },
+    }),
+    toolCallDelta({ function: { arguments: args.slice(half) } }),
+    finishChunk("tool_calls"),
+    usageChunk(usage),
+  ]);
 }
 
 // An error response before any byte of a stream.

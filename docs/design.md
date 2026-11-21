@@ -207,15 +207,29 @@ PrSession keeps the owner and the job state in one place and processes `claim`, 
 - A job with a workspace commit (every analysis, and an answer after a push) runs only in a workspace at that commit;
   without one it fails "workspace: not available" with no model call, so no result is stored that was produced
   without the code it is about. A question asked before any push has no workspace commit and runs without one.
+- A cloud turn delivers its answer by calling `publish` with the complete answer in Markdown: a tool offered in every
+  turn, analysis or answer, with or without other tools, and kept when the room withdraws the others (see
+  [Model context](#model-context)); one line of the system prompt says so. Its call ends the turn, and running it only
+  acknowledges. A model writes text of its own beside its tool calls (DeepSeek opened every analysis with the same
+  English sentence before its first tool call), and joined with the answer that text broke the answer's first heading;
+  an answer that is a tool's input is delimited whatever the model narrates around it. When a step ends normally
+  (`stop`) without a publish call, the turn goes on once with a message to the model alone, saying it ended without
+  calling publish and must call it with its complete answer; that message is never stored or sent to a client. A
+  second such ending fails the job "the model did not call publish: it ended its turn twice without delivering an
+  answer". A compaction's summary calls are no turns and are offered no tools.
 - When the SDK's turn has ended, the session commits it inside the history write queue, against the job's state and
   turn ID: a commit whose job has moved on (a restart, a retry) appends nothing and is logged as `prq.turn.stale`. A
-  turn whose final finish reason is `stop` and whose result holds answer text that is not blank appends that result as
-  `<kind>-<jobId>`, without reasoning and with only the tool parts whose result is settled, its metadata naming the
-  cloud model and the run's usage; the job then becomes `done` in one statement that also clears a failure it had and
-  advances `rev`. Any other ending (an error, a cancel, the output limit, the content filter, any other finish reason,
-  or a `stop` with no answer text, "the model returned no answer text") fails the job with the reason, so the host can
-  retry it, and text already produced is appended as `<kind>-<jobId>-r<run>-incomplete`, marked incomplete with the
-  reason, which leaves `<kind>-<jobId>` for a later success.
+  turn whose publish call ran with text that is not blank appends its result as `<kind>-<jobId>`: the tool parts whose
+  result is settled, without reasoning, without the turn's own text and without the publish call, then the published
+  text as its last part, its metadata naming the cloud model and the run's usage; the job then becomes `done` in one
+  statement that also clears a failure it had and advances `rev`. The answer is stored as text, not as the publish
+  call, so the UI, a local agent's context and compaction read it as they read any answer, and a later turn's model
+  reads its earlier answer as its own text after its tool calls rather than as a call it might repeat; storing the call
+  as well would send every answer twice. Any other ending (an error, a cancel, the output limit, the content filter,
+  any other finish reason, a turn that stopped twice without publish, or a publish of blank text, "the model returned
+  no answer text") fails the job with the reason, so the host can retry it, and text already produced is appended as
+  `<kind>-<jobId>-r<run>-incomplete`, marked incomplete with the reason, which leaves `<kind>-<jobId>` for a later
+  success.
 - After a reset, `settle` takes each running cloud job whose turn is no longer live and, in one statement guarded by
   that turn, marks it `done` when its result is stored, fails it with the stored reason when its run's incomplete text
   is stored (either way the commit stopped between its append and its statement, and the run had ended), starts it
@@ -339,8 +353,12 @@ UI, webhook and CLI input all enter through PrSession.
 - History keeps the order in which messages were saved: a question sent during a turn comes before that turn's answer,
   and a local answer comes last. Each answer carries the message ID of its question in `metadata`, and the UI uses it to
   pair them. Every result's metadata, like the start of its stream, also names its job and the job's run (rows stored
-  before the run was recorded have none): the UI keeps a run's streamed text until a stored row of that run, its
-  result or its incomplete text, replaces it.
+  before the run was recorded have none): the UI shows a run in progress until a stored row of that run, its result or
+  its incomplete text, replaces it. A cloud turn's stream sends the client no text and no nudge: what the model writes
+  outside publish is no answer, and the answer arrives as the stored row's text, so streaming it is not attempted. A
+  message's text as the UI shows it is its text parts after its last tool part, or all of them in a message with no
+  tool part (a question, a local agent's answer): a result stored before publish holds the model's narration before
+  its tool calls, which this leaves out.
 
 ### Notification and wait (`prq wait`)
 
@@ -955,8 +973,9 @@ never summarized, and once answered it enters the kept part with its answer, whe
   counts only while the notes are at that revision and the turn's instruction prefix is the one it was taken under, so
   after a compaction, a prompt save or a switch to a kind with another prompt, the count is the estimate of the new
   context (the prefix, the notes, the kept part and what came after) until a model call measures it. A call whose tools
-  were withdrawn left their definitions out: its measurement is kept under the instruction part without them, and a
-  turn under the same instruction part counts it with its own definitions estimated on top. The prefix is
+  were withdrawn left their definitions out, publish's alone kept: its measurement is kept under the instruction part
+  with publish's definition, and a turn under the same instruction part counts it with the definitions it would
+  withdraw estimated on top. The prefix is
   compared by a SHA-256 of the system message's instruction part (the core's lines, the skill list and the host's
   prompt) and the tool definitions, so a skill registered, removed or described anew is estimated too; the pull
   request's facts and the job's line are left out, since they change with every head and job while their size barely
@@ -972,7 +991,9 @@ never summarized, and once answered it enters the kept part with its answer, whe
   patch; when the history does not reach the merge base, the two tips, and the result says so). What a tool takes from
   the model follows `--end-of-options` or `--`, so it is never read as an option. A failure (a missing path, a bad
   pattern, a workspace that did not answer) comes back to the model as `error: …` text, and the turn goes on. A question
-  asked before any push has no workspace commit and gets no git tools.
+  asked before any push has no workspace commit and gets no git tools. Every turn is also offered `publish`, which
+  delivers its answer (see [Owner and jobs](#owner-and-jobs)); a turn with neither a workspace nor a skill is offered
+  `publish` alone.
 - **Skill tools.** While a skill is registered, a turn is also offered `activate_skill` and `read_skill_resource`,
   with or without a workspace: before the first push an author can still have a skill's prose instructions applied,
   with no code to read and no script run. A turn's tools are one set, decided at its start from its workspace and its
@@ -1034,17 +1055,18 @@ never summarized, and once answered it enters the kept part with its answer, whe
   the limit is offered its tools. Only without a measurement is the whole request estimated; its characters ÷ 3 ran
   well above the provider's count of the same context. The newest measurement already holds every earlier step, so a
   long turn is never charged twice for what it read. Each tool result, an `error: …` text included, is cut to the room
-  left, in the order results complete; when less room is left than one result needs, the next model call is offered no
-  tools and the agent answers from what it has read. Under `toolChoice: "none"`, which would have kept the tool
-  definitions in the cached prefix, DeepSeek wrote its tool call as the answer's text. Offered no tools, it still did
-  after a dozen tool calls in one analysis at a 20,000-token window; a system line saying the tools were gone did not
-  stop it, and its answers then told later turns so, which stopped calling the tools they were offered. Such an answer
-  ends normally: nothing detects the markup, so the job is done and the answer, markup included, stays in the history,
-  where later turns can imitate it. How soon a turn reaches this depends on the window (`MODEL_CONTEXT_TOKENS`): at a
-  window of about a million tokens, tools are withdrawn only after about that much in one turn; at a small window, a
-  dozen tool calls reach it. A measurement taken on a call whose tools were withdrawn lacks the tool definitions (about
-  850 tokens for the four), which the next turn's count adds (see Token count). A turn has no step limit: it goes on
-  while the model calls tools (see [Billing limits](#billing-limits)).
+  left, in the order results complete; when less room is left than one result needs, the next model call is offered
+  `publish` alone and the agent answers from what it has read. Under `toolChoice: "none"`, which would have kept the
+  tool definitions in the cached prefix, DeepSeek wrote its tool call as the answer's text. Offered no tools, it still
+  did after a dozen tool calls in one analysis at a 20,000-token window; a system line saying the tools were gone did
+  not stop it, and its answers then told later turns so, which stopped calling the tools they were offered. With
+  `publish` kept, such text is no answer: only the published text is stored, so markup written as text never reaches
+  the history, and a turn that stops on it is told to publish (see [Owner and jobs](#owner-and-jobs)). How soon a turn
+  reaches this depends on the window (`MODEL_CONTEXT_TOKENS`): at a window of about a million tokens, tools are
+  withdrawn only after about that much in one turn; at a small window, a dozen tool calls reach it. A measurement taken
+  on a call whose tools were withdrawn lacks their definitions (about 850 tokens for the four git tools), which the
+  next turn's count adds (see Token count). A turn has no step limit: it goes on while the model calls tools other than
+  `publish` (see [Billing limits](#billing-limits)).
 - **Cut point.** Going back from the newest message, the system keeps the most recent part (Pi's default: 20,000
   tokens). The cut falls at a question, at an analysis's first step (an analysis stores no request), or at a step
   boundary inside a result; a tool call and its result are one part of a step, so they are never separated. If the cut
@@ -1278,7 +1300,7 @@ Browser and edge:
   question's send settles without the history holding it yet. A read whose list lacks a message the page shows, or that
   fails, changes nothing shown; a failed refresh says so beside what was loaded. Otherwise conversation, jobs and the
   Hub's view come over the Agents SDK WebSocket, which resyncs the state after each successful reconnect, and an
-  answer's streamed text stays until its run's stored row replaces it. The ledger's
+  answer's run shows in progress until its stored row replaces it. The ledger's
   rows come over HTTP in pages, read again when the Hub's view says the ledger or presence changed, and so do the
   present agents and the repositories, read when the pool or the repository menu opens. The agents are read again while
   the pool is open, and only then: when the Hub's view changes, 30 s after the last read ended (what an agent does and
@@ -1415,8 +1437,8 @@ then a model that keeps calling tools runs until the provider refuses a call.
   The API key is replaced by `[redacted]` in every reason built from what the provider sent (these, a finish reason,
   a stream that fails midway) before it is cut to 500 characters, so a cut never leaves part of it. A stream that
   fails midway shows the client the same reason in place of the error's own text.
-- When the provider ends an answer other than normally (its output limit, its content filter, any finish but `stop`),
-  the job ends as `failed` with that reason, never as `done`.
+- When the provider ends an answer other than normally (its output limit, its content filter, any finish but `stop`
+  or a step's tool calls), the job ends as `failed` with that reason, never as `done`.
 - In every failure, the text the turn had already produced is kept in the conversation and marked incomplete.
 - A workspace container stops after 30 minutes without a request.
 - A `prq wait` long-poll keeps the Hub awake while it waits, and that time is Durable Object duration billed. One waiter

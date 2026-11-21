@@ -21,6 +21,7 @@ import { contextRow } from "./test/compaction.ts";
 import {
   answerScript,
   finish,
+  publish,
   type Script,
   ScriptedModel,
   type StreamPart,
@@ -44,7 +45,7 @@ const Q1 = question("q1");
 
 // A first turn held at a gate in its stream, after its text.
 function heldScript(held: Gate, answer = "first answer"): Script {
-  return [...text(answer), { hold: held }, finish()];
+  return [publish(answer), { hold: held }, finish("tool-calls")];
 }
 
 // Holds the history writes of the job's commit: before its result's append, or after it.
@@ -194,9 +195,10 @@ describe("restart after a reset", () => {
 
     await (await session.open()).chat([question("q2", "?")]);
     await untilState(stub, "q2", "done");
-    // On q0's measurement q2's request would leave less than a result's room and be offered no tools.
+    // On q0's measurement q2's request would leave less than a result's room and be offered publish alone.
     expect((model.calls.at(-1)?.tools ?? []).map((entry) => entry.name)).toEqual([
       "activate_skill",
+      "publish",
       "read_skill_resource",
     ]);
     await clearSkills();
@@ -261,8 +263,8 @@ describe("usage", () => {
     const logs = captureLogs();
     const session = await cloudSession("recovery", sockets);
     const model = new ScriptedModel("model-u").add([
-      ...text("first"),
-      finish("stop", { input: 100, output: 20, cached: 50 }),
+      publish("first"),
+      finish("tool-calls", { input: 100, output: 20, cached: 50 }),
     ]);
     useCloudModel(model);
     const held = await holdCommit(session.stub, "before");
@@ -270,8 +272,8 @@ describe("usage", () => {
     await held.reached();
 
     const stub = await resetAndRestart(session, model, [
-      ...text("second"),
-      finish("stop", { input: 200, output: 40, cached: 0 }),
+      publish("second"),
+      finish("tool-calls", { input: 200, output: 40, cached: 0 }),
     ]);
     await untilState(stub, "q1", "done");
 

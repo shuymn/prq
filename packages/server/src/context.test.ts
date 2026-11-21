@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import { cloudSession, untilState } from "./test/cloud.ts";
-import { answerScript, finish, ScriptedModel, text, useCloudModel, useWorkspace } from "./test/model.ts";
+import { answerScript, finish, publish, ScriptedModel, text, useCloudModel, useWorkspace } from "./test/model.ts";
 import { gate, hydrateRecent, jobOf, retryIn } from "./test/session.ts";
 import { push, sha } from "./test/webhook.ts";
 
@@ -30,7 +30,7 @@ describe("model context", () => {
     const analysis = await gate(stub);
     const model = new ScriptedModel().add(
       [...text("partial zero"), { fail: new Error("lost") }],
-      [...text("summary"), { hold: analysis }, finish()],
+      [publish("summary"), { hold: analysis }, finish("tool-calls")],
       answerScript("answer one"),
       answerScript("answer two"),
       answerScript("answer zero"),

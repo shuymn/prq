@@ -28,6 +28,7 @@ import {
 import { type FakeContainer, isRunnerArgv, runnerExecs, untilHeld, useFakeContainers } from "./test/container.ts";
 import {
   answerScript,
+  textScript,
   type CallOptions,
   finish,
   type Script,
@@ -158,7 +159,9 @@ async function firstRequest(kind: "push" | "question", skills: readonly Skill[])
   const [call] = model.calls;
   const prefix = await instructionPrefix({ pr: ref, details, job, tools: pushed, skills, hostPrompt: "" });
   expect(prefix.system).toBe(systemOf(call));
-  expect(prefix.toolChars).toBe(sentDefinitions(call).length);
+  // What the room withdraws: every definition but publish's.
+  const publishOnly = await toolDefinitionsJson({ workspace: false, skills: false });
+  expect(prefix.toolChars).toBe(sentDefinitions(call).length - publishOnly.length);
   return call;
 }
 
@@ -173,6 +176,7 @@ describe("the offered tools", () => {
       "diff",
       "grep",
       "list_files",
+      "publish",
       "read_file",
       "read_skill_resource",
       "run_skill_script",
@@ -183,7 +187,7 @@ describe("the offered tools", () => {
     expect(systemOf(withWorkspace)).toContain(`${SKILLS_LINE} ${SCRIPTS_SENTENCE}`);
 
     const noWorkspace = await firstRequest("question", runnable);
-    expect(toolNames(noWorkspace)).toEqual(["activate_skill", "read_skill_resource"]);
+    expect(toolNames(noWorkspace)).toEqual(["activate_skill", "publish", "read_skill_resource"]);
     expect(systemOf(noWorkspace)).not.toContain(SCRIPTS_SENTENCE);
 
     // An entry whose script is not a file of the skill, and one prq does not run: no run tool.
@@ -217,7 +221,7 @@ describe("the offered tools", () => {
       workspaceSha: sha("a"),
     };
     const prefix = await instructionPrefix({ pr: ref, details, job, tools: true, skills: [skill], hostPrompt: "" });
-    // The history leaves the analysis less room than a result needs: it is offered no tools and calls none.
+    // The history leaves the analysis less room than a result needs: it is offered publish alone.
     const asked = question("q0");
     const history = (contextLimit(WINDOW) - 50) * CHARS_PER_TOKEN - prefix.chars - partsChars(asked.parts);
     await seedHistory(stub, [asked, cloudAnswer("q0", [{ type: "text", text: "h".repeat(history) }])]);
@@ -226,7 +230,7 @@ describe("the offered tools", () => {
     useCloudModel(model);
     await push(ref, "a");
     expect(await untilEnded(stub, sha("a"))).toEqual({ state: "done", failure: null });
-    expect(model.calls[0]?.tools ?? []).toEqual([]);
+    expect(toolNames(model.calls[0])).toEqual(["publish"]);
     expect(await contextRow(stub)).toMatchObject({ context_tokens: 9010, context_fingerprint: prefix.bare });
 
     const own = question("q1");
@@ -236,8 +240,9 @@ describe("the offered tools", () => {
     );
     const definitions = await toolDefinitionsJson({ workspace: true, skills: true, scripts: true });
     expect(definitions).toContain('"name":"run_skill_script"');
-    expect(prefix.toolChars).toBe(definitions.length);
-    expect(tokens).toBe(9010 + estimateTokens(partsChars(own.parts) + definitions.length));
+    const withdrawn = definitions.length - (await toolDefinitionsJson({ workspace: false, skills: false })).length;
+    expect(prefix.toolChars).toBe(withdrawn);
+    expect(tokens).toBe(9010 + estimateTokens(partsChars(own.parts) + withdrawn));
   });
 });
 
@@ -739,7 +744,7 @@ describe("an earlier turn's run", () => {
       answerScript(sized("the summary", 11_000)),
       // Measured near the limit: the next turn's start compacts.
       answerScript(sized("answer one", 5500), { input: 12_000, output: 5500 }),
-      answerScript("## Key facts\nthe notes", { input: 100, output: 50 }),
+      textScript("## Key facts\nthe notes", { input: 100, output: 50 }),
       answerScript("answer two"),
     );
     useCloudModel(model);

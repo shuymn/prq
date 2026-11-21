@@ -48,11 +48,12 @@ export function chatRequest(body: string): ChatRequest {
 // A stream that stops after its first `after` text chunks, opening reached, until release opens or the Worker cancels it.
 export type Hold = { after: number; reached: Latch; release: Latch };
 
-// What the script answers a request with: one tool call, or a final text, streamed as one chunk or as the chunks given;
-// with `error`, the provider's error after the chunks (none for an error before any text) in place of the finish.
+// What the script answers a request with: one tool call; or text, streamed as one chunk or as the chunks given, then
+// with `publish` a publish call with that answer (a cloud turn's answer; without it the turn stops without one); with
+// `error`, the provider's error after the text (none for an error before any text) in place of the call and the finish.
 export type Scripted =
   | { tool: string; input: Record<string, unknown> }
-  | { text: string | string[]; hold?: Hold; error?: string };
+  | { text?: string | string[]; publish?: string; hold?: Hold; error?: string };
 
 function stream(chunks: unknown[], hold?: Hold): Response {
   const events = [...chunks.map((entry) => `data: ${JSON.stringify(entry)}\n\n`), "data: [DONE]\n\n"];
@@ -110,25 +111,26 @@ export function serveScripted(): { play: (script: Script) => void; stop: () => v
       choices: [],
       usage: { prompt_tokens: Math.ceil(body.length / 4), completion_tokens: 8 },
     };
-    if ("tool" in reply) {
+    const toolCall = (name: string, args: Record<string, unknown>) => {
       calls += 1;
       const call = {
         index: 0,
         id: `call_${calls}`,
         type: "function",
-        function: { name: reply.tool, arguments: JSON.stringify(reply.input) },
+        function: { name, arguments: JSON.stringify(args) },
       };
-      return stream([
-        chunk({ delta: { role: "assistant", tool_calls: [call] } }),
-        chunk({ delta: {}, finish_reason: "tool_calls" }),
-        usage,
-      ]);
+      return chunk({ delta: { role: "assistant", tool_calls: [call] } });
+    };
+    if ("tool" in reply) {
+      return stream([toolCall(reply.tool, reply.input), chunk({ delta: {}, finish_reason: "tool_calls" }), usage]);
     }
-    const texts = typeof reply.text === "string" ? [reply.text] : reply.text;
+    const texts = reply.text === undefined ? [] : typeof reply.text === "string" ? [reply.text] : reply.text;
     const end =
-      reply.error === undefined
-        ? [chunk({ delta: {}, finish_reason: "stop" }), usage]
-        : [{ error: { message: reply.error, type: "server_error", code: null } }];
+      reply.error !== undefined
+        ? [{ error: { message: reply.error, type: "server_error", code: null } }]
+        : reply.publish !== undefined
+          ? [toolCall("publish", { text: reply.publish }), chunk({ delta: {}, finish_reason: "tool_calls" }), usage]
+          : [chunk({ delta: {}, finish_reason: "stop" }), usage];
     return stream(
       [
         ...texts.map((text, index) =>

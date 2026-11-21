@@ -33,7 +33,9 @@ import {
 } from "./test/compaction.ts";
 import {
   answerScript,
+  textScript,
   finish,
+  publish,
   type Script,
   ScriptedModel,
   text,
@@ -82,7 +84,7 @@ describe("compaction after a commit", () => {
     const model = new ScriptedModel().add(
       ...threeTurns(),
       [...text(facts("the notes")), { hold: summary }, finish()],
-      answerScript(progress("the turn's start")),
+      textScript(progress("the turn's start")),
       answerScript("answer four"),
     );
     model.contextTokens = WINDOW;
@@ -153,7 +155,7 @@ function turnPrompts(model: ScriptedModel) {
 
 // A summary script: its reply and a normal finish.
 function notes(reply: string): Script {
-  return answerScript(reply, { input: 100, output: 50 });
+  return textScript(reply, { input: 100, output: 50 });
 }
 
 // Replies as their prompts ask for them: a history with text in one of the notes' sections, and a split turn's
@@ -794,7 +796,7 @@ describe("waiting questions", () => {
     const QW = question("qw");
     const Q5 = question("q5");
     const model = new ScriptedModel().add(
-      [...text(sized("answer one", 7000)), { hold: turn }, finish("stop", { input: 11_000, output: 7000 })],
+      [publish(sized("answer one", 7000)), { hold: turn }, finish("tool-calls", { input: 11_000, output: 7000 })],
       [...text(progress("the turn's start")), { hold: summary }, finish()],
       answerScript("answer w"),
       answerScript("answer five"),
@@ -847,7 +849,7 @@ describe("the gate", () => {
       ...threeTurns(),
       [...text(facts("the notes")), { hold: summary }, finish()],
       notes(progress("the turn's start")),
-      [...text("answer zero"), { hold: next }, finish()],
+      [publish("answer zero"), { hold: next }, finish("tool-calls")],
     );
     model.contextTokens = WINDOW;
     useCloudModel(model);
@@ -1000,11 +1002,10 @@ describe("a small window", () => {
     const model = new ScriptedModel().add(
       answerScript(`${"a".repeat(60_000)}${decided}`, { input: 800, output: 12_010 }),
       answerScript("b".repeat(18_000), { input: 15_000, output: 3600 }),
-      // A summary for each request the compaction could make, so that only the step's failure stops it; the next turn
-      // takes the first one left as its answer.
+      // A summary for the one request the compaction can make before the step that does not fit, then the next turn's
+      // answer.
       notes(facts("the first question")),
-      notes(facts("the long answer")),
-      notes(progress("the turn's start")),
+      answerScript("answer three"),
     );
     model.contextTokens = WINDOW;
     useCloudModel(model);
@@ -1104,7 +1105,8 @@ describe("the first step's room", () => {
     await client.chat([Q1]);
     await untilState(stub, "q1", "done");
 
-    expect(model.calls.slice(1).map((call) => call.tools?.length ?? 0)).toEqual([4, 4]);
+    // The four git tools and publish.
+    expect(model.calls.slice(1).map((call) => call.tools?.length ?? 0)).toEqual([5, 5]);
     expect(model.calls.filter(isSummaryCall)).toEqual([]);
   });
 });

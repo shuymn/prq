@@ -14,7 +14,7 @@ import { captureLogs, type LogEntry } from "./test/access.ts";
 import { type AgentSocket, answer, connect, hostToken, question, storedMessages } from "./test/chat.ts";
 import { cloudSession, expectAppended, messageRows, resumeOffer, untilState } from "./test/cloud.ts";
 import { latch } from "./test/latch.ts";
-import { answerScript, finish, reasoning, ScriptedModel, text, useCloudModel } from "./test/model.ts";
+import { answerScript, finish, publish, reasoning, ScriptedModel, text, useCloudModel } from "./test/model.ts";
 import { gate, holdInsert, hydrateRecent, jobOf, jobRows, prSessionSeams } from "./test/session.ts";
 
 const sockets: AgentSocket[] = [];
@@ -492,7 +492,14 @@ describe("cloud turns", () => {
   it("stores a turn's result by prq's commit only, dropping the streamed message the SDK saves", async () => {
     const logs = captureLogs();
     const cloud = await cloudSession("history", sockets);
-    useCloudModel(new ScriptedModel().add([...reasoning("thinking"), ...text("answer one"), finish()]));
+    useCloudModel(
+      new ScriptedModel().add([
+        ...reasoning("thinking"),
+        ...text("narration"),
+        publish("answer one"),
+        finish("tool-calls"),
+      ]),
+    );
     const before = await messageRows(cloud);
 
     await cloud.client.chat([Q1]);
@@ -521,12 +528,20 @@ describe("cloud turns", () => {
     const logs = captureLogs();
     const cloud = await cloudSession("history", sockets);
     const held = await gate(cloud.stub);
-    // More chunks than the SDK buffers before it stores them (10), so the cut stream has stored chunks to replay.
+    // More chunks than the SDK buffers before it stores them (10), so the cut stream has stored chunks to replay: the
+    // publish call's input as it streams (the client is sent no text).
     const deltas = Array.from(
       { length: 12 },
-      (_, index) => ({ type: "text-delta", id: "t", delta: `${index} ` }) as const,
+      (_, index) => ({ type: "tool-input-delta", id: "t", delta: index === 0 ? '{"text":"0 ' : `${index} ` }) as const,
     );
-    useCloudModel(new ScriptedModel().add([{ type: "text-start", id: "t" }, ...deltas, { hold: held }, finish()]));
+    useCloudModel(
+      new ScriptedModel().add([
+        { type: "tool-input-start", id: "t", toolName: "publish" },
+        ...deltas,
+        { hold: held },
+        finish("tool-calls"),
+      ]),
+    );
     await cloud.client.chat([Q1]);
     await held.reached();
     const before = await messageRows(cloud);

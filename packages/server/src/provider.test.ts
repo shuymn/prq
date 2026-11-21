@@ -10,7 +10,7 @@ import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
 import { type CloudSession, cloudSession, textOf, untilState } from "./test/cloud.ts";
 import {
   advance,
-  answerStream,
+  publishStream,
   delta,
   errorBody,
   finishChunk,
@@ -52,11 +52,11 @@ async function stored(session: CloudSession, id: string): Promise<UIMessage | un
 }
 
 describe("answers", () => {
-  it("stores the streamed text with the model and its usage, cached tokens from prompt_tokens_details", async () => {
+  it("stores the published text with the model and its usage, cached tokens from prompt_tokens_details", async () => {
     const logs = captureLogs();
     const session = await servedSession();
     session.provider.reply(
-      answerStream("served answer", {
+      publishStream("served answer", {
         prompt_tokens: 120,
         completion_tokens: 30,
         prompt_tokens_details: { cached_tokens: 100 },
@@ -86,7 +86,7 @@ describe("answers", () => {
     const logs = captureLogs();
     const session = await servedSession();
     session.provider.reply(
-      answerStream("served answer", { prompt_tokens: 120, completion_tokens: 30, prompt_cache_hit_tokens: 80 }),
+      publishStream("served answer", { prompt_tokens: 120, completion_tokens: 30, prompt_cache_hit_tokens: 80 }),
     );
 
     await session.client.chat([Q1]);
@@ -106,12 +106,12 @@ describe("answers", () => {
 describe("reasoning effort", () => {
   it("sends MODEL_REASONING_EFFORT as reasoning_effort, and none when it is unset", async () => {
     const session = await servedSession();
-    session.provider.reply(answerStream("first"));
+    session.provider.reply(publishStream("first"));
     await session.client.chat([Q1]);
     await untilState(session.stub, "q1", "done");
 
     await useModelEnv(session.stub, { ...MODEL_ENV, MODEL_REASONING_EFFORT: "max" });
-    session.provider.reply(answerStream("second"));
+    session.provider.reply(publishStream("second"));
     await session.client.chat([Q1, Q2]);
     await untilState(session.stub, "q2", "done");
 
@@ -213,7 +213,7 @@ describe("retries", () => {
     const session = await servedSession();
     session.provider.reply(
       errorBody(503, { error: { message: "busy" } }, { "retry-after-ms": "0" }),
-      answerStream("after a retry"),
+      publishStream("after a retry"),
     );
 
     await session.client.chat([Q1]);
@@ -251,7 +251,7 @@ describe("no response", () => {
       const logs = captureLogs();
       const session = await servedSession();
       const { stub, client, provider } = session;
-      provider.reply(noResponse({ ignoreAbort }), answerStream("answer two"));
+      provider.reply(noResponse({ ignoreAbort }), publishStream("answer two"));
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
       await client.chat([Q1]);

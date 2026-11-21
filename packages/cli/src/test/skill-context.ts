@@ -32,7 +32,7 @@ import { untilEnded } from "./workspace.ts";
 
 export type Verdict = (ok: boolean, line: string) => void;
 
-// A pull request no webhook names: its questions have no workspace, so a turn is offered the skill tools alone.
+// A pull request no webhook names: its questions have no workspace, so a turn is offered the skill tools and publish.
 const PR: PrRef = { owner: "prq-check", repo: "skills", number: 1 };
 const SKILL_TOOLS = ["activate_skill", "read_skill_resource"];
 const NOTE = /^\[truncated (?:at|inside) line \d+; call again with startLine (\d+)(?: and startChar (\d+))?\]$/;
@@ -214,7 +214,7 @@ function answerOne(example: string): Script {
       stage = "resource";
       return { tool: "read_skill_resource", input: { name: INTERNAL_COMMS_NAME, path: example } };
     }
-    return { text: "Answer 1, written after the skills were read." };
+    return { publish: "Answer 1, written after the skills were read." };
   };
 }
 
@@ -252,10 +252,10 @@ async function answer(
   return { state: job?.state ?? "no job", requests };
 }
 
-const plain: Script = () => ({ text: "A plain answer." });
+const plain: Script = () => ({ publish: "A plain answer." });
 
-// A turn's first request: the records of `skills`, the skill tools offered (none without skills), no sentinel, and
-// `calls` as their markers.
+// A turn's first request: the records of `skills`, the skill tools offered beside publish (publish alone without
+// skills), no sentinel, and `calls` as their markers.
 function checkFirst(
   label: string,
   request: ChatRequest | undefined,
@@ -276,7 +276,8 @@ function checkFirst(
   verdict(
     JSON.stringify(lines) === JSON.stringify(expected) &&
       (expected.length === 0 ? !systemText.includes("activate_skill") : systemText.includes(expected.join("\n"))) &&
-      JSON.stringify(offered) === JSON.stringify(skills.length === 0 ? [] : SKILL_TOOLS),
+      JSON.stringify(offered) ===
+        JSON.stringify(skills.length === 0 ? ["publish"] : ["activate_skill", "publish", "read_skill_resource"]),
     `${label}: the system message lists ${lines.length} records (${skills.map((skill) => skill.name).join(", ") || "none"} ` +
       `registered): ${JSON.stringify(lines) === JSON.stringify(expected) ? "the registered ones, sorted" : "NOT the registered ones"}; ` +
       `tools offered: ${offered.join(", ") || "none"}`,
