@@ -419,10 +419,14 @@ describe("tool abort", () => {
     await settles(finished, "the turn");
     await consumed;
 
-    expect(ended).toEqual([WORKSPACE_TIMED_OUT]);
-    expect(await result.text).toBe("answered from what was read");
+    // The read's timeout, then the publish call that ended the turn.
+    expect(ended).toEqual([WORKSPACE_TIMED_OUT, "Published."]);
+    expect((await result.toolCalls).map((made) => [made.toolName, made.input])).toEqual([
+      ["read_file", { path: "src/rates.ts" }],
+      ["publish", { text: "answered from what was read" }],
+    ]);
     expect(model.calls).toHaveLength(2);
-    expect(await result.finishReason).toBe("stop");
+    expect(await result.finishReason).toBe("tool-calls");
   });
 
   it("ends the call at once when the turn is aborted", async () => {

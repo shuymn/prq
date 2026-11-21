@@ -19,7 +19,13 @@ import {
   type SubmitResponse,
 } from "@prq/protocol";
 import type { Connection } from "agents";
-import { convertToModelMessages, streamText, type UIMessage } from "ai";
+import {
+  convertToModelMessages,
+  createUIMessageStreamResponse,
+  experimental_createSteering as createSteering,
+  streamText,
+  type UIMessage,
+} from "ai";
 import * as v from "valibot";
 
 import { refuseSubAgent, sendServerVersion } from "../agents.ts";
@@ -144,12 +150,14 @@ import {
   hasText,
   incompleteMessageId,
   newOutcome,
+  PUBLISH_NUDGE,
   resultParts,
   stepTokens,
   storedFailure,
   turnFailure,
   type TurnOutcome,
   usageMetadata,
+  withoutText,
 } from "./turn.ts";
 import {
   type PreparedWorkspace,
@@ -246,7 +254,7 @@ function ownLabel(row: JobRow): string {
 
 function prefixLabel(instructions: TurnInstructions): string {
   const what = instructions.skills.length === 0 ? "the host's prompt" : "the host's prompt and the skill list";
-  return `the system prompt with ${what}${instructions.tools ? " and the tool definitions" : ""}`;
+  return `the system prompt with ${what} and the tool definitions`;
 }
 
 // What a skill's Hub read may answer (instructions/skills.ts), checked when it arrives.
@@ -1453,13 +1461,15 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       instructions.skills.length === 0
         ? null
         : this.#skillContext(job, instructions.skills, instructions.scripts ? code : null);
-    const loop = instructions.tools
-      ? toolLoop(
-          { ...(code === null ? {} : { code }), ...(skills === null ? {} : { skills }) },
-          this.contextTokens(),
-          start,
-        )
-      : null;
+    const loop = toolLoop(
+      { ...(code === null ? {} : { code }), ...(skills === null ? {} : { skills }) },
+      this.contextTokens(),
+      start,
+    );
+    // A step that stops without calling publish is told to, once: the nudge is queued as that step ends, and the SDK
+    // sends it as the next step's last message only when the step called no tool.
+    const nudge = createSteering();
+    let nudged = false;
     const secret = this.#modelSecret();
     // The turn's first error, classified with the key redacted, is its reason; what the client is shown is that reason.
     const failWith = (error: unknown): string => {
@@ -1476,9 +1486,10 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       messages: modelMessages,
       abortSignal: signal,
       ...TURN_LOOP,
-      ...(loop === null
-        ? {}
-        : { tools: loop.tools, prepareStep: loop.prepareStep, onLanguageModelCallEnd: loop.onLanguageModelCallEnd }),
+      tools: loop.tools,
+      prepareStep: loop.prepareStep,
+      onLanguageModelCallEnd: loop.onLanguageModelCallEnd,
+      experimental_steering: nudge,
       onError: ({ error }) => {
         failWith(error);
       },
@@ -1493,16 +1504,21 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
         outcome.finishReason = finishReason;
         outcome.rawFinishReason = rawFinishReason;
       },
-      onStepFinish: ({ usage }) => {
+      onStepFinish: ({ usage, finishReason, toolCalls }) => {
         addStep(this.#sql, row, stepTokens(usage));
         // The context as the provider measured it: the step's request and its output, under the prefix that request
         // carried. Once the tools are withdrawn, a request leaves their definitions out.
         outcome.contextTokens = measuredTokens(usage) ?? undefined;
-        outcome.contextFingerprint = loop?.withdrawn() === true ? prefix.bare : prefix.fingerprint;
+        outcome.contextFingerprint = loop.withdrawn() ? prefix.bare : prefix.fingerprint;
+        // A provider-executed call does not keep the loop going: the SDK continues only after a call it ran.
+        if (finishReason === "stop" && toolCalls.every((call) => call.providerExecuted === true) && !nudged) {
+          nudged = true;
+          void nudge.queue(PUBLISH_NUDGE);
+        }
       },
     });
     const metadata = this.#resultMetadata(row, { kind: "cloud", model: model.modelId });
-    const response = result.toUIMessageStreamResponse({
+    const stream = result.toUIMessageStream({
       generateMessageId: () => resultMessageId(row),
       messageMetadata: ({ part }) => (part.type === "start" ? metadata : undefined),
       onFinish: ({ responseMessage, isAborted }) => {
@@ -1511,6 +1527,9 @@ export class PrSession extends AIChatAgent<Env, PrSessionView> {
       },
       onError: failWith,
     });
+    // The client is sent no text: the answer is publish's input, stored as text at the commit, and what the model
+    // writes outside it is no answer. The UI shows the run in progress until the stored result replaces it.
+    const response = createUIMessageStreamResponse({ stream: stream.pipeThrough(withoutText()) });
     return failingWith(response, failWith);
   }
 

@@ -1,7 +1,8 @@
 // The PR detail in Chrome for a cloud session, against the real Worker in wrangler's local runtime through the Access
 // stand-in's browser door, its model scripted (plan P3.6, P3.7, P4.1, P4.6): a pull request no webhook names, so its
 // questions are the cloud agent's and need no workspace. Questions are seeded through the harness or asked from the
-// composer; a held stream, and answers whose model fails after its text or before any, then succeeds on the retry.
+// composer; a held stream, whose narration before its publish call is never shown, and answers whose model fails after
+// its text or before any, then succeeds on the retry.
 
 import { type PrRef, sessionName } from "@prq/protocol";
 import { afterAll, expect, test, vi } from "vitest";
@@ -27,13 +28,17 @@ const Q1 = "What does the first change do?";
 const Q2 = "And the second one?";
 const Q3 = "Does it change the cache key?";
 
-test("a held answer streams under its own question before, after its commit and across a reconnect; the next question queues with Send back on (P3.6, P3.7)", async () => {
+test("a held answer runs under its own question before, after its commit and across a reconnect, its narration never shown; the next question queues with Send back on (P3.6, P3.7)", async () => {
   const worker = stack.worker();
   const hold: Hold = { after: 1, reached: latch(), release: latch() };
   scripted.play((request) =>
     JSON.stringify(request.messages).includes(Q2)
-      ? { text: "The second one renames the flag." }
-      : { text: ["The first change", " adds a cache."], hold },
+      ? { publish: "The second one renames the flag." }
+      : {
+          text: ["I'll start by looking at the change.", " Then the tests."],
+          publish: "The first change adds a cache.",
+          hold,
+        },
   );
   try {
     await ask(worker, PR, "q1", Q1);
@@ -44,7 +49,7 @@ test("a held answer streams under its own question before, after its commit and 
     await vi.waitFor(async () =>
       expect(await conversation(page)).toEqual([
         { role: "question", state: "sent", text: Q1 },
-        { role: "answer", state: "streaming", text: "The first change" },
+        { role: "answer", state: "streaming", text: "" },
       ]),
     );
 
@@ -54,7 +59,7 @@ test("a held answer streams under its own question before, after its commit and 
     await vi.waitFor(async () =>
       expect(await conversation(page)).toEqual([
         { role: "question", state: "sent", text: Q1 },
-        { role: "answer", state: "streaming", text: "The first change" },
+        { role: "answer", state: "streaming", text: "" },
         { role: "question", state: "queued", text: Q2 },
       ]),
     );
@@ -68,7 +73,7 @@ test("a held answer streams under its own question before, after its commit and 
     await vi.waitFor(async () =>
       expect(await conversation(page)).toEqual([
         { role: "question", state: "sent", text: Q1 },
-        { role: "answer", state: "streaming", text: "The first change" },
+        { role: "answer", state: "streaming", text: "" },
         { role: "question", state: "queued", text: Q2 },
       ]),
     );
@@ -101,7 +106,7 @@ test("an answer whose model fails after its text keeps it under its question wit
     }
     return failing
       ? { text: ["The first change", " adds"], error: "the stream broke off" }
-      : { text: "The first change adds a cache." };
+      : { publish: "The first change adds a cache." };
   });
   await ask(worker, PR, "q1", Q1);
   await vi.waitFor(async () =>

@@ -10,7 +10,7 @@ import { contextBudget } from "../src/pr-session/context-budget.ts";
 import { classifyModelError, redact } from "../src/pr-session/model.ts";
 import { instructionPrefix } from "../src/pr-session/prefix.ts";
 import { NO_ROOM } from "../src/pr-session/tools.ts";
-import { toolLoop, TURN_LOOP } from "../src/pr-session/turn-tools.ts";
+import { PUBLISH, toolLoop, TURN_LOOP } from "../src/pr-session/turn-tools.ts";
 import { type CloudModel, stepTokens } from "../src/pr-session/turn.ts";
 import { FakeWorkspace, type Files } from "../src/test/workspace.ts";
 
@@ -111,9 +111,17 @@ function resultKind(output: unknown): string {
   return "whole";
 }
 
+// The text of a publish call among a step's tool calls, or null.
+function publishedOf(calls: readonly { toolName: string; input: unknown }[]): string | null {
+  const input = calls.find((call) => call.toolName === PUBLISH)?.input;
+  return typeof input === "object" && input !== null && "text" in input && typeof input.text === "string"
+    ? input.text
+    : null;
+}
+
 // Runs the production tool loop on the check's question and prints each step, whether and when the tools were
-// withdrawn, the finish reason, the answer and the usage. True when the answer is not blank and the turn finished with
-// `stop`.
+// withdrawn, the finish reason, the answer and the usage. True when the turn ended with a publish call whose answer is
+// not blank.
 export async function checkTools(
   model: CloudModel,
   print: (line: string) => void,
@@ -140,7 +148,7 @@ export async function checkTools(
     tools: loop.tools,
     prepareStep: (options) => {
       const step = loop.prepareStep(options);
-      offered.push(step?.activeTools?.length === 0 ? "no tools offered" : "tools offered");
+      offered.push(step?.activeTools === undefined ? "tools offered" : "publish alone offered");
       return step;
     },
     onLanguageModelCallEnd: loop.onLanguageModelCallEnd,
@@ -162,32 +170,41 @@ export async function checkTools(
     },
   });
   let text: string;
+  let published: string | null;
   let finishReason: string;
   try {
     text = await result.text;
+    published = publishedOf(await result.toolCalls);
     finishReason = await result.finishReason;
   } catch (error) {
     errors.push(error);
     text = "";
+    published = null;
     finishReason = "error";
   }
   for (const error of errors) {
     say(`error: ${classifyModelError(error, secret).reason}`);
   }
-  const withdrawn = offered.indexOf("no tools offered");
+  const withdrawn = offered.indexOf("publish alone offered");
   const total = await Promise.resolve(result.totalUsage).catch(() => undefined);
   say("");
-  say(`tools withdrawn: ${withdrawn < 0 ? "no" : `from step ${withdrawn + 1} (no tools offered)`}`);
+  say(`tools withdrawn: ${withdrawn < 0 ? "no" : `from step ${withdrawn + 1} (publish alone offered)`}`);
   say(`finish reason: ${finishReason}`);
-  say("answer:");
-  for (const line of text.split("\n")) {
+  if (text.trim() !== "") {
+    say("text outside publish:");
+    for (const line of text.split("\n")) {
+      say(`  ${line}`);
+    }
+  }
+  say(published === null ? "answer: none published" : "answer:");
+  for (const line of (published ?? "").split("\n")) {
     say(`  ${line}`);
   }
   if (total !== undefined) {
     const tokens = stepTokens(total);
     say(`usage: ${offered.length} steps, input ${tokens.input}, output ${tokens.output}, cached ${tokens.cachedInput}`);
   }
-  const ok = text.trim() !== "" && finishReason === "stop";
-  say(ok ? "answered: yes" : "answered: NO (a non-blank answer with a stop finish was expected)");
+  const ok = published !== null && published.trim() !== "";
+  say(ok ? "answered: yes" : "answered: NO (a publish call with a non-blank answer was expected)");
   return ok;
 }

@@ -24,6 +24,7 @@ import {
 } from "./test/compaction.ts";
 import {
   answerScript,
+  textScript,
   type CallOptions,
   finish,
   ScriptedModel,
@@ -32,6 +33,7 @@ import {
   useWorkspace,
 } from "./test/model.ts";
 import { clearPrompts, gate, jobOf, prSessionSeams, savePrompt, sessionSql } from "./test/session.ts";
+import { sentDefinitions, toolNames } from "./test/skill-turns.ts";
 import { BASE, push, send, sha } from "./test/webhook.ts";
 import { FakeWorkspace } from "./test/workspace.ts";
 
@@ -58,8 +60,8 @@ function estimate(chars: number): number {
   return Math.ceil(chars / CHARS_PER_TOKEN);
 }
 
-// A recorded request's estimate as the context count makes it: its system message and the text of its messages,
-// characters ÷ 3. Only for requests without tools, whose messages hold text only.
+// A recorded request's estimate as the context count makes it: its system message, the text of its messages and the
+// tool definitions, characters ÷ 3. Only for requests offered publish alone, whose messages hold text only.
 function requestEstimate(call: CallOptions | undefined): number {
   let chars = 0;
   for (const message of call?.prompt ?? []) {
@@ -74,12 +76,12 @@ function requestEstimate(call: CallOptions | undefined): number {
       chars += part.text.length;
     }
   }
-  expect(call?.tools ?? []).toEqual([]);
-  return estimate(chars);
+  expect(toolNames(call)).toEqual(["publish"]);
+  return estimate(chars + sentDefinitions(call).length);
 }
 
 function summaryReply(heading: string, tokens: number) {
-  return answerScript(sized(`## ${heading}\nfacts`, tokens), { input: 100, output: 50 });
+  return textScript(sized(`## ${heading}\nfacts`, tokens), { input: 100, output: 50 });
 }
 
 // A turn's prefix as an answer to a question asked before any push reads it.
@@ -148,8 +150,8 @@ describe("a measurement under another prefix", () => {
 
     await client.chat([own]);
     await untilState(stub, "q1", "done");
-    // Started from the estimate, the turn's first step has no room for a tool result: no tools are offered.
-    expect(model.calls.map((call) => call.tools?.length ?? 0)).toEqual([4, 0]);
+    // Started from the estimate, the turn's first step has no room for a tool result: publish alone is offered.
+    expect(model.calls.map((call) => call.tools?.length ?? 0)).toEqual([5, 1]);
     expect(model.calls.filter(isSummaryCall)).toEqual([]);
   });
 });
@@ -263,7 +265,7 @@ describe("a prompt that takes the context over the limit", () => {
     expect(ended.failure).toMatch(
       new RegExp(
         `^context: after compacting, the request takes about \\d+ of the ${LIMIT} tokens this model's window leaves ` +
-          "for it \\(the system prompt with the host's prompt about \\d+, the notes about " +
+          "for it \\(the system prompt with the host's prompt and the tool definitions about \\d+, the notes about " +
           "\\d+, the kept conversation about 9000, the question about 1500\\); shorten the prompt or the question, " +
           "or use a model with a larger window$",
       ),
@@ -321,7 +323,7 @@ describe("a delivery taken in during the at-start compaction", () => {
     const model = new ScriptedModel().add(
       answerScript("the summary"),
       [...text("## Key facts\nthe notes"), { hold: held }, finish()],
-      answerScript("## Progress So Far\nthe turn's start"),
+      textScript("## Progress So Far\nthe turn's start"),
       answerScript("answer two"),
     );
     model.contextTokens = WINDOW;
@@ -372,12 +374,8 @@ describe("a split cut and a whole-turn cut at a turn's start", () => {
       ]),
     ]);
     await savePrompt("answer", "p".repeat(PROMPT_CHARS));
-    // Summaries of about 9,500 characters each, within the notes' output limit.
-    const model = new ScriptedModel().add(
-      summaryReply("Key facts", 3166),
-      summaryReply("Progress So Far", 3166),
-      answerScript("answer two"),
-    );
+    // A summary of about 9,500 characters, within the notes' output limit, then the answer.
+    const model = new ScriptedModel().add(summaryReply("Key facts", 3166), answerScript("answer two"));
     model.contextTokens = window;
     useCloudModel(model);
 
@@ -438,7 +436,7 @@ describe("a measurement taken after the tools were withdrawn", () => {
   const limit = contextLimit(window);
   const SUMMARY = "the summary";
 
-  // An analysis offered no tools from its first step: with its prefix, the conversation before it is estimated at
+  // An analysis offered publish alone from its first step: with its prefix, the conversation before it is estimated at
   // 14,260 tokens, which leaves less room than a tool result needs. The provider measures its one step at `measured`
   // tokens, and its text is `summary`.
   async function withdrawnAnalysis(measured: number, summary: string) {
@@ -476,22 +474,24 @@ describe("a measurement taken after the tools were withdrawn", () => {
     await push(ref, "a");
     await untilState(stub, sha("a"), "done");
     expect((await stub.view()).details).toEqual(details);
-    expect(model.calls[0]?.tools ?? []).toEqual([]);
+    expect(toolNames(model.calls[0])).toEqual(["publish"]);
     return { ...session, model };
   }
 
-  it("counts the tool definitions the next request adds, so it offers no tools where they would not fit", async () => {
+  it("counts the tool definitions the next request adds, so it offers publish alone where they would not fit", async () => {
     captureLogs();
-    // Measured 40 tokens plus the definitions under the limit: with the definitions, the next question leaves less
-    // room than a tool result needs.
+    // Measured 40 tokens plus the definitions the withdrawal left out under the limit: with them, the next question
+    // leaves less room than a tool result needs.
     const definitions = Math.ceil(
-      (await toolDefinitionsJson({ workspace: true, skills: false })).length / CHARS_PER_TOKEN,
+      ((await toolDefinitionsJson({ workspace: true, skills: false })).length -
+        (await toolDefinitionsJson({ workspace: false, skills: false })).length) /
+        CHARS_PER_TOKEN,
     );
     const { stub, client, model } = await withdrawnAnalysis(limit - definitions - 40, SUMMARY);
 
     await client.chat([question("q1")]);
     await untilState(stub, "q1", "done");
-    expect(model.calls.map((call) => call.tools?.length ?? 0)).toEqual([0, 0]);
+    expect(model.calls.map((call) => call.tools?.length ?? 0)).toEqual([1, 1]);
     expect(model.calls.filter(isSummaryCall)).toEqual([]);
   });
 
@@ -503,7 +503,7 @@ describe("a measurement taken after the tools were withdrawn", () => {
 
     await client.chat([question("q1")]);
     await untilState(stub, "q1", "done");
-    expect(model.calls.map((call) => call.tools?.length ?? 0)).toEqual([0, 4]);
+    expect(model.calls.map((call) => call.tools?.length ?? 0)).toEqual([1, 5]);
     expect(model.calls.filter(isSummaryCall)).toEqual([]);
   });
 
@@ -515,6 +515,6 @@ describe("a measurement taken after the tools were withdrawn", () => {
     await client.chat([question("q1")]);
     await untilState(stub, "q1", "done");
     expect(model.calls.filter(isSummaryCall)).toEqual([]);
-    expect(model.calls.map((call) => call.tools?.length ?? 0)).toEqual([0, 4]);
+    expect(model.calls.map((call) => call.tools?.length ?? 0)).toEqual([1, 5]);
   });
 });

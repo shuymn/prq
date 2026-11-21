@@ -183,7 +183,8 @@ describe("redaction", () => {
         const held = heldSse([delta("partial answer")]);
         serveProvider().reply(held.reply);
         await session.client.chat([Q1]);
-        await until(() => JSON.stringify(session.client.frames).includes("partial answer"), "the partial answer");
+        // The client is sent no text: the stream's step start says the response arrived.
+        await until(() => JSON.stringify(session.client.frames).includes("start-step"), "the response");
         // Failed inside the session, as the runtime fails a response body there.
         await runInDurableObject(session.stub, () =>
           held.fail(new DOMException(`transport rejected ${TEST_KEY}`, "AbortError")),

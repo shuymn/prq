@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OUTPUT_STALL_MS, OUTPUT_STALLED } from "./pr-session/model.ts";
 import { captureLogs } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
-import { cloudSession, streamsText, textOf } from "./test/cloud.ts";
+import { cloudSession, textOf } from "./test/cloud.ts";
 import { ScriptedModel, type StreamPart, useCloudModel } from "./test/model.ts";
 import { advance, until } from "./test/provider.ts";
 import { gate, jobOf } from "./test/session.ts";
@@ -28,9 +28,11 @@ describe("output stall", () => {
     ["before its first chunk", [], ""],
     [
       "after a chunk",
+      // The text, then the start of a publish call, which the client is sent (it is sent no text).
       [
         { type: "text-start", id: "text-1" },
         { type: "text-delta", id: "text-1", delta: "partial answer" },
+        { type: "tool-input-start", id: "publish-1", toolName: "publish" },
       ],
       "partial answer",
     ],
@@ -46,8 +48,8 @@ describe("output stall", () => {
 
       await client.chat([Q1]);
       await until(() => held.isReached(), "the stall");
-      // The chunk before the stall has reached the client, so its bound was set before the clock moves.
-      await until(() => kept === "" || streamsText(client.frames), "the chunk");
+      // The last chunk before the stall has reached the client, so its bound was set before the clock moves.
+      await until(() => kept === "" || JSON.stringify(client.frames).includes("tool-input-start"), "the chunk");
 
       await advance(stub, OUTPUT_STALL_MS - 1);
       expect((await jobOf(stub, "q1")).state).toBe("running");

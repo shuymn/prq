@@ -70,6 +70,10 @@ export function withFacts(
   return lines.join("\n");
 }
 
+// How a cloud turn delivers its answer (docs/design.md, Owner and jobs): every turn is offered publish.
+const PUBLISH_LINE =
+  "You deliver your answer by calling publish with the complete answer; text you write outside it is not shown.";
+
 // The skill mechanism, the core's only line about skills: what the list below it is and how its tools load a skill,
 // and, when the turn runs scripts, how they run.
 export const SKILLS_LINE =
@@ -84,7 +88,8 @@ export const SKILL_LIST_LABEL =
   'Skill metadata, one JSON record per line ({"name", "description"}); each record names a skill you can activate, ' +
   "and its description says when to use it:";
 
-// The system prompt's instruction part: the core's lines (how tools page and are withdrawn, when any tool is offered:
+// The system prompt's instruction part: the core's lines (how the answer is delivered, and how tools page and are
+// withdrawn, when any tool besides publish is offered:
 // the workspace's with `tools`, the skills' with a skill listed), the skill mechanism with one record per skill sorted
 // by name, and the host's prompt of the job's kind.
 export function instructionPart({
@@ -101,11 +106,12 @@ export function instructionPart({
   scripts?: boolean;
   hostPrompt: string;
 }): string {
-  const lines = ["You work on one GitHub pull request: you summarize it and answer questions about it."];
+  const lines = ["You work on one GitHub pull request: you summarize it and answer questions about it.", PUBLISH_LINE];
   if (tools || skills.length > 0) {
     lines.push(
       `A tool's result is cut at ${TOOL_RESULT_CHARS} characters; a note at its end says how to read the next page.`,
-      "When the conversation has no room for more, the tools are withdrawn: answer from what you have read.",
+      "When the conversation has no room for more, the tools other than publish are withdrawn: answer from what you " +
+        "have read.",
     );
   }
   if (skills.length > 0) {

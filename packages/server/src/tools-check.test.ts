@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CHECK_WINDOW, checkTools } from "../scripts/tools-report.ts";
 import { contextBudget } from "./pr-session/context-budget.ts";
 import { CHARS_PER_TOKEN } from "./pr-session/room.ts";
-import { answerScript, finish, ScriptedModel, text, toolCall } from "./test/model.ts";
+import { answerScript, finish, ScriptedModel, text, textScript, toolCall } from "./test/model.ts";
 import { TEST_KEY } from "./test/provider.ts";
 
 // The manual tools check (scripts/tools-check.ts) against a scripted model: what it reports of the production tool
@@ -35,12 +35,23 @@ describe("tools check", () => {
 
     expect(shown).toContain("step 1: tools offered; finish tool-calls");
     expect(shown).toMatch(/diff \{"path":"src\/catalog.ts"\} → \d+ characters, cut: no room left/);
-    expect(shown).toContain("step 2: no tools offered; finish stop");
-    expect(shown).toContain("tools withdrawn: from step 2 (no tools offered)");
-    expect(shown).toContain("  Item 115 rose the most.");
+    expect(shown).toContain("step 2: publish alone offered; finish tool-calls");
+    expect(shown).toContain("tools withdrawn: from step 2 (publish alone offered)");
+    expect(shown).toContain("answer:\n  Item 115 rose the most.");
     expect(shown).toContain("answered: yes");
     expect(ok).toBe(true);
-    expect(model.calls.map((call) => call.tools?.length ?? 0)).toEqual([4, 0]);
+    expect(model.calls.map((call) => call.tools?.length ?? 0)).toEqual([5, 1]);
+  });
+
+  it("does not count text written without a publish call", async () => {
+    const model = new ScriptedModel().add(textScript("Item 115 rose the most."));
+
+    const { ok, report: shown } = await report(model);
+
+    expect(shown).toContain("text outside publish:\n  Item 115 rose the most.");
+    expect(shown).toContain("answer: none published");
+    expect(shown).toContain("answered: NO");
+    expect(ok).toBe(false);
   });
 
   it("does not count an answer cut at the output limit, and never prints the key", async () => {

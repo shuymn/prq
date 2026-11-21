@@ -17,17 +17,18 @@ export type Prefix = {
   // its tools is estimated rather than counted short. The pull request's facts and the job's lines are left out: they
   // change with every head while their size barely does.
   fingerprint: string;
-  // The fingerprint of the same instruction part without the tool definitions: what a request whose tools were
-  // withdrawn carried. The fingerprint itself for a turn without tools.
+  // The fingerprint of the same instruction part with publish's definition alone: what a request whose tools were
+  // withdrawn carried. The fingerprint itself for a turn offered publish alone.
   bare: string;
-  // The characters of the tool definitions' JSON (none without tools).
+  // The characters the withdrawn tools' definitions add to the definitions' JSON (none for a turn offered publish
+  // alone).
   toolChars: number;
 };
 
 // What of a turn's prefix holds for the whole turn, built once at its start: whether it has the workspace's tools, the
 // skills it lists, whether it runs their scripts (a workspace, and a runnable entry), the system message's instruction
-// part as rendered, whether any tool is offered, the offered tools' definitions as JSON and the fingerprints, which
-// leave the pull request's facts out.
+// part as rendered, whether any tool besides publish is offered, the offered tools' definitions as JSON, the characters
+// of those the room withdraws, and the fingerprints, which leave the pull request's facts out.
 export type TurnInstructions = {
   workspace: boolean;
   skills: readonly TurnSkill[];
@@ -35,6 +36,7 @@ export type TurnInstructions = {
   instructions: string;
   tools: boolean;
   definitions: string;
+  withdrawnChars: number;
   fingerprint: string;
   bare: string;
 };
@@ -45,18 +47,20 @@ export async function turnInstructions(
 ): Promise<TurnInstructions> {
   const scripts = workspace && skills.some((skill) => runnableEntries(skill).length > 0);
   const instructions = instructionPart({ kind: job.target.kind, tools: workspace, skills, scripts, hostPrompt });
+  const tools = workspace || skills.length > 0;
   const definitions = await toolDefinitionsJson({ workspace, skills: skills.length > 0, scripts });
-  const tools = definitions !== "";
+  const publishOnly = tools ? await toolDefinitionsJson({ workspace: false, skills: false }) : definitions;
   const fingerprint = await fingerprintOf(instructions, definitions);
-  const bare = tools ? await fingerprintOf(instructions, "") : fingerprint;
-  return { workspace, skills, scripts, instructions, tools, definitions, fingerprint, bare };
+  const bare = tools ? await fingerprintOf(instructions, publishOnly) : fingerprint;
+  const withdrawnChars = definitions.length - publishOnly.length;
+  return { workspace, skills, scripts, instructions, tools, definitions, withdrawnChars, fingerprint, bare };
 }
 
 // The turn's prefix with the pull request's facts as `details` holds them.
 export function prefixWith(turn: TurnInstructions, input: { pr: PrRef; details: PrDetails | null; job: Job }): Prefix {
   const text = withFacts(turn.instructions, { ...input, tools: turn.workspace });
-  const { fingerprint, bare, definitions } = turn;
-  return { system: text, chars: text.length + definitions.length, fingerprint, bare, toolChars: definitions.length };
+  const { fingerprint, bare, definitions, withdrawnChars } = turn;
+  return { system: text, chars: text.length + definitions.length, fingerprint, bare, toolChars: withdrawnChars };
 }
 
 // A prefix built in one go, outside a turn (tests and the tools report): `tools` is whether the turn has the

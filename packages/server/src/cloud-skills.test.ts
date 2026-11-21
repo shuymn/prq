@@ -27,10 +27,11 @@ import {
 } from "./test/compaction.ts";
 import {
   answerScript,
+  textScript,
   finish,
+  publish,
   type Script,
   ScriptedModel,
-  text,
   toolCall,
   useCloudModel,
   useWorkspace,
@@ -221,7 +222,7 @@ describe("an earlier turn's skill results", () => {
     expect(JSON.stringify(third?.prompt)).not.toMatch(/SENTINEL/);
     // Removed: no list and no skill tools.
     expect(systemOf(third)).not.toContain(SKILL_LIST_LABEL);
-    expect(third?.tools ?? []).toEqual([]);
+    expect(toolNames(third)).toEqual(["publish"]);
     // The stored history is unchanged: the results as the turn produced them.
     const stored = (await storedMessages(session.path, session.token)).find((message) =>
       message.id.startsWith("answer-"),
@@ -347,7 +348,7 @@ describe("a compaction at a turn's start", () => {
     const session = await seeded(skill);
     const { stub, client } = session;
     const model = new ScriptedModel().add(
-      answerScript("## Key facts\nthe notes", { input: 100, output: 50 }),
+      textScript("## Key facts\nthe notes", { input: 100, output: 50 }),
       answerScript("answer three"),
     );
     model.contextTokens = WINDOW;
@@ -503,7 +504,9 @@ async function firstRequest(kind: "push" | "question", skills: readonly Skill[])
   const call = model.calls[0];
   const prefix = await instructionPrefix({ pr: ref, details, job, tools: pushed, skills, hostPrompt: "" });
   expect(prefix.system).toBe(systemOf(call));
-  expect(prefix.toolChars).toBe(sentDefinitions(call).length);
+  // What the room withdraws: every definition but publish's.
+  const publishOnly = await toolDefinitionsJson({ workspace: false, skills: false });
+  expect(prefix.toolChars).toBe(sentDefinitions(call).length - publishOnly.length);
   return call;
 }
 
@@ -520,23 +523,26 @@ describe("the offered tools", () => {
       "diff",
       "grep",
       "list_files",
+      "publish",
       "read_file",
       "read_skill_resource",
     ]);
     const skillsOnly = await firstRequest("question", skills);
     expect(sentDefinitions(skillsOnly)).toBe(await toolDefinitionsJson({ workspace: false, skills: true }));
-    expect(toolNames(skillsOnly)).toEqual(["activate_skill", "read_skill_resource"]);
+    expect(toolNames(skillsOnly)).toEqual(["activate_skill", "publish", "read_skill_resource"]);
     // The core's lines on paging come with any tool.
-    expect(systemOf(skillsOnly)).toContain("When the conversation has no room for more, the tools are withdrawn");
+    expect(systemOf(skillsOnly)).toContain(
+      "When the conversation has no room for more, the tools other than publish are withdrawn",
+    );
 
     await clearSkills();
     const gitOnly = await firstRequest("push", []);
     expect(sentDefinitions(gitOnly)).toBe(await toolDefinitionsJson({ workspace: true, skills: false }));
-    expect(toolNames(gitOnly)).toEqual(["diff", "grep", "list_files", "read_file"]);
+    expect(toolNames(gitOnly)).toEqual(["diff", "grep", "list_files", "publish", "read_file"]);
     const none = await firstRequest("question", []);
-    expect(none?.tools ?? []).toEqual([]);
-    expect(await toolDefinitionsJson({ workspace: false, skills: false })).toBe("");
-    expect(systemOf(none)).not.toContain("the tools are withdrawn");
+    expect(toolNames(none)).toEqual(["publish"]);
+    expect(sentDefinitions(none)).toBe(await toolDefinitionsJson({ workspace: false, skills: false }));
+    expect(systemOf(none)).not.toContain("are withdrawn");
   });
 
   it("are counted before any push: a question whose prefix leaves no room beside the skill schemas fails with no model call", async () => {
@@ -598,7 +604,7 @@ describe("the offered tools", () => {
       workspaceSha: sha("a"),
     };
     const prefix = await instructionPrefix({ pr: ref, details, job, tools: true, skills: [skill], hostPrompt: "" });
-    // The history leaves the analysis less room than a result needs: it is offered no tools and calls none.
+    // The history leaves the analysis less room than a result needs: it is offered publish alone.
     const asked = question("q0");
     const history = (contextLimit(WINDOW) - 50) * CHARS_PER_TOKEN - prefix.chars - partsChars(asked.parts);
     await seedHistory(stub, [asked, cloudAnswer("q0", [{ type: "text", text: "h".repeat(history) }])]);
@@ -607,7 +613,7 @@ describe("the offered tools", () => {
     useCloudModel(model);
     await push(ref, "a");
     await untilState(stub, sha("a"), "done");
-    expect(model.calls[0]?.tools ?? []).toEqual([]);
+    expect(toolNames(model.calls[0])).toEqual(["publish"]);
     expect(await contextRow(stub)).toMatchObject({ context_tokens: 9010, context_fingerprint: prefix.bare });
 
     const own = question("q1");
@@ -616,8 +622,9 @@ describe("the offered tools", () => {
       async (instance) => (await prSessionSeams(instance).measureContext(own, prefix)).tokens,
     );
     const definitions = await toolDefinitionsJson({ workspace: true, skills: true });
-    expect(prefix.toolChars).toBe(definitions.length);
-    expect(tokens).toBe(9010 + estimateTokens(partsChars(own.parts) + definitions.length));
+    const withdrawn = definitions.length - (await toolDefinitionsJson({ workspace: false, skills: false })).length;
+    expect(prefix.toolChars).toBe(withdrawn);
+    expect(tokens).toBe(9010 + estimateTokens(partsChars(own.parts) + withdrawn));
   });
 });
 
@@ -675,7 +682,10 @@ describe("the instruction prefix at the caps", () => {
     // The count the boundary was found by is the request sent: the list and the schemas in it.
     const counted = await prefixWith("x".repeat(longest));
     expect(counted.system).toBe(systemOf(model.calls[0]));
-    expect(counted.toolChars).toBe((await toolDefinitionsJson({ workspace: false, skills: true })).length);
+    expect(counted.toolChars).toBe(
+      (await toolDefinitionsJson({ workspace: false, skills: true })).length -
+        (await toolDefinitionsJson({ workspace: false, skills: false })).length,
+    );
   });
 });
 
@@ -731,8 +741,8 @@ async function measuredActivation({
   await seedHistory(stub, [question("q0"), cloudAnswer("q0", [{ type: "text", text: sized("answer zero", 6000) }])]);
   const model = new ScriptedModel().add(
     toolStep("activate_skill", { name: "polish" }, "call-1", before),
-    [...text("answer one"), finish("stop", { input: last - 10, output: 10 })],
-    answerScript("## Key facts\nthe notes", { input: 100, output: 50 }),
+    [publish("answer one"), finish("tool-calls", { input: last - 10, output: 10 })],
+    textScript("## Key facts\nthe notes", { input: 100, output: 50 }),
     answerScript("answer two"),
     answerScript("answer three"),
   );
@@ -751,13 +761,13 @@ describe("a turn whose result holds a skill call", () => {
     {
       title: "keeps no measurement: the next question starts from the estimate on the markers, with its tools offered",
       before: {},
-      answerTools: ["activate_skill", "read_skill_resource"],
+      answerTools: ["activate_skill", "publish", "read_skill_resource"],
     },
     {
-      // The activation's step leaves less room than a result: the answer's step is offered no tools.
+      // The activation's step leaves less room than a result: the answer's step is offered publish alone.
       title: "keeps no measurement taken after the tools were withdrawn either",
       before: { input: 10_659, output: 10 },
-      answerTools: [],
+      answerTools: ["publish"],
     },
   ])("$title", async ({ before, answerTools }) => {
     captureLogs();
@@ -768,7 +778,11 @@ describe("a turn whose result holds a skill call", () => {
     await untilState(stub, "q2", "done");
 
     expect(model.calls.filter(isSummaryCall)).toEqual([]);
-    expect((model.calls[2]?.tools ?? []).map((entry) => entry.name)).toEqual(["activate_skill", "read_skill_resource"]);
+    expect((model.calls[2]?.tools ?? []).map((entry) => entry.name)).toEqual([
+      "activate_skill",
+      "publish",
+      "read_skill_resource",
+    ]);
     expect(committed.context_tokens).toBeNull();
   });
 

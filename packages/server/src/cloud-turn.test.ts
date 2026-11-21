@@ -10,7 +10,7 @@ import { contextBudget } from "./pr-session/context-budget.ts";
 import { PrSession } from "./pr-session/index.ts";
 import { CHARS_PER_TOKEN } from "./pr-session/room.ts";
 import { MIN_RESULT_CHARS } from "./pr-session/tools.ts";
-import { NO_ANSWER_TEXT } from "./pr-session/turn.ts";
+import { NO_ANSWER_TEXT, NO_PUBLISH, PUBLISH_NUDGE } from "./pr-session/turn.ts";
 import { WORKSPACE_CALL_MS } from "./pr-session/workspace.ts";
 import { captureLogs, events } from "./test/access.ts";
 import { type AgentSocket, question, storedMessages } from "./test/chat.ts";
@@ -29,6 +29,7 @@ import {
   answerScript,
   type CallOptions,
   finish,
+  publish,
   reasoning,
   ScriptedModel,
   type StreamPart,
@@ -67,7 +68,7 @@ describe("hand-over", () => {
     const { stub, client } = session;
     const held = await gate(stub);
     const model = new ScriptedModel().add(
-      [...text("answer one"), { hold: held }, finish()],
+      [publish("answer one"), { hold: held }, finish("tool-calls")],
       answerScript("answer two"),
       answerScript("answer three"),
     );
@@ -117,8 +118,10 @@ describe("commit", () => {
           providerExecuted: true,
           dynamic: true,
         },
-        ...text("answer one"),
-        finish("stop", { input: 120, output: 30, cached: 100 }),
+        // The model's own narration, then its publish call, which ends the turn.
+        ...text("I'll start by looking at the change."),
+        publish("answer one"),
+        finish("tool-calls", { input: 120, output: 30, cached: 100 }),
       ] satisfies StreamPart[],
       answerScript("answer two"),
     );
@@ -146,7 +149,12 @@ describe("commit", () => {
     expect(types).not.toContain("reasoning");
     expect(JSON.stringify(result?.parts)).toContain("call-1");
     expect(JSON.stringify(result?.parts)).not.toContain("call-2");
+    // The published text is the result's one text part, its last; the narration and the publish call are not stored.
+    expect(types).not.toContain("tool-publish");
+    expect(result?.parts.at(-1)).toEqual({ type: "text", text: "answer one", state: "done" });
     expect(textOf(result)).toBe("answer one");
+    // The publish call ended the turn: one model call for Q1, one for Q2.
+    expect(model.calls).toHaveLength(2);
     // Q2's model call came after Q1's result was stored: it read it.
     expect(model.prompts()[1]?.map((message) => message.text)).toEqual(["question q1", "answer one", "question q2"]);
   });
@@ -318,8 +326,13 @@ describe("failure", () => {
     await client.chat([Q1]);
     await held.reached();
     const streamed = await client.next(
-      (frame) => frame["type"] === "cf_agent_use_chat_response" && streamsText([frame]),
+      (frame) =>
+        frame["type"] === "cf_agent_use_chat_response" &&
+        typeof frame["body"] === "string" &&
+        frame["body"].includes('"start"'),
     );
+    // The text is not streamed: only the stored row shows it.
+    expect(streamsText(turnFrames(client, String(streamed["id"])))).toBe(false);
 
     client.send({ type: "cf_agent_chat_request_cancel", id: streamed["id"] });
     await untilState(stub, "q1", "failed");
@@ -436,29 +449,88 @@ describe("finish reasons", () => {
 });
 
 describe("no answer text", () => {
+  it("fails a turn that published blank text, storing nothing, so a retry can run it again", async () => {
+    captureLogs();
+    const session = await cloudSession("turn", sockets);
+    const { stub, client } = session;
+    useCloudModel(new ScriptedModel().add([publish(" \n"), finish("tool-calls")], answerScript("answer one")));
+    const before = await messageRows(session);
+
+    await client.chat([Q1]);
+    await untilState(stub, "q1", "failed");
+
+    const job = await jobOf(stub, "q1");
+    expect(job.failure).toBe(NO_ANSWER_TEXT);
+    expectAppended(before, await messageRows(session), ["q1"]);
+    expect(await retryIn(stub, job.job_id)).toEqual({ status: "retried" });
+    await untilState(stub, "q1", "done");
+    expect(textOf(await stored(session, `answer-${job.job_id}`))).toBe("answer one");
+  });
+});
+
+// The last message of each model call's prompt.
+function lastMessages(model: ScriptedModel) {
+  return model.prompts().map((prompt) => prompt.at(-1));
+}
+
+describe("publish", () => {
   it.for([
+    ["text", [...text("I'll start by looking at the change."), finish()]],
     ["reasoning only", [...reasoning("thinking it over"), finish()]],
-    ["blank text", [...text(" \n"), finish()]],
   ] satisfies [string, StreamPart[]][])(
-    "fails a turn that stopped with %s, storing nothing, so a retry can run it again",
-    async ([, script]) => {
+    "nudges a turn that stopped with %s and no publish call once; the continuation's publish is the result, and the nudge is neither stored nor sent again",
+    async ([, missed]) => {
       captureLogs();
       const session = await cloudSession("turn", sockets);
       const { stub, client } = session;
-      useCloudModel(new ScriptedModel().add(script, answerScript("answer one")));
-      const before = await messageRows(session);
+      const model = new ScriptedModel().add(missed, answerScript("answer one"), answerScript("answer two"));
+      useCloudModel(model);
 
       await client.chat([Q1]);
-      await untilState(stub, "q1", "failed");
-
-      const job = await jobOf(stub, "q1");
-      expect(job.failure).toBe(NO_ANSWER_TEXT);
-      expectAppended(before, await messageRows(session), ["q1"]);
-      expect(await retryIn(stub, job.job_id)).toEqual({ status: "retried" });
       await untilState(stub, "q1", "done");
-      expect(textOf(await stored(session, `answer-${job.job_id}`))).toBe("answer one");
+      await client.chat([Q1, Q2]);
+      await untilState(stub, "q2", "done");
+
+      expect(model.calls).toHaveLength(3);
+      expect(lastMessages(model)[1]).toEqual({ role: "user", text: PUBLISH_NUDGE });
+      const job = await jobOf(stub, "q1");
+      const result = await stored(session, `answer-${job.job_id}`);
+      expect(result?.parts.filter((part) => part.type === "text")).toEqual([
+        { type: "text", text: "answer one", state: "done" },
+      ]);
+      const history = JSON.stringify(await storedMessages(session.path, session.token));
+      expect(history).not.toContain(PUBLISH_NUDGE);
+      expect(history).not.toContain("I'll start by looking");
+      // Q2's turn reads Q1's answer, with no nudge.
+      expect(model.prompts()[2]?.map((message) => message.text)).toEqual(["question q1", "answer one", "question q2"]);
+      expect(lastMessages(model)[2]).toEqual({ role: "user", text: "question q2" });
     },
   );
+
+  it("fails a turn that stopped without publish twice, keeping its text incomplete and not the nudge", async () => {
+    captureLogs();
+    const session = await cloudSession("turn", sockets);
+    const { stub, client } = session;
+    const model = new ScriptedModel().add(
+      [...text("first"), finish()],
+      [...text(" second"), finish()],
+      answerScript("answer one"),
+    );
+    useCloudModel(model);
+
+    await client.chat([Q1]);
+    await untilState(stub, "q1", "failed");
+
+    const job = await jobOf(stub, "q1");
+    expect(job.failure).toBe(NO_PUBLISH);
+    expect(model.calls).toHaveLength(2);
+    const incomplete = await stored(session, `answer-${job.job_id}-r1-incomplete`);
+    expect(textOf(incomplete)).toBe("first second");
+    expect(JSON.stringify(incomplete)).not.toContain(PUBLISH_NUDGE);
+    expect(await stored(session, `answer-${job.job_id}`)).toBeUndefined();
+    expect(await retryIn(stub, job.job_id)).toEqual({ status: "retried" });
+    await untilState(stub, "q1", "done");
+  });
 });
 
 describe("no client tools", () => {
@@ -474,7 +546,7 @@ describe("no client tools", () => {
     await untilState(stub, "q1", "done");
 
     expect(model.calls).toHaveLength(1);
-    expect(model.calls[0]?.tools ?? []).toEqual([]);
+    expect(toolNames(model.calls[0])).toEqual(["publish"]);
   });
 });
 
@@ -541,7 +613,7 @@ describe("settle during a turn", () => {
     const session = await cloudSession("turn", sockets);
     const { stub, client } = session;
     const held = await gate(stub);
-    const model = new ScriptedModel().add([...text("answer one"), { hold: held }, finish()]);
+    const model = new ScriptedModel().add([publish("answer one"), { hold: held }, finish("tool-calls")]);
     useCloudModel(model);
     await client.chat([Q1]);
     await held.reached();
@@ -589,7 +661,7 @@ describe("resume", () => {
     const { stub, client } = session;
     const held = await gate(stub);
     const model = new ScriptedModel().add(
-      [...text("answer one"), { hold: held }, finish()],
+      [publish("answer one"), { hold: held }, finish("tool-calls")],
       answerScript("answer two"),
     );
     useCloudModel(model);
@@ -632,7 +704,9 @@ describe("resume", () => {
     expect(firstReplay).toBeLessThan(committed);
     // The chunks are those of the result's message, under its ID.
     expect(replayed[0]).toMatchObject({ type: "start", messageId: result });
-    expect(replayed.filter((chunk) => chunk.type === "text-delta")).toMatchObject([{ delta: "answer one" }]);
+    expect(replayed.filter((chunk) => chunk.type === "tool-input-available")).toMatchObject([
+      { toolName: "publish", input: { text: "answer one" } },
+    ]);
     expect(second.chatLists(probed + committed)[0]?.map((message) => message.id)).toEqual(["q1", "q2", result]);
   });
 });
@@ -644,7 +718,7 @@ describe("races", () => {
     const { stub, ref } = session;
     const held = await gate(stub);
     const model = new ScriptedModel().add(
-      [...text("summary of a"), { hold: held }, finish()],
+      [publish("summary of a"), { hold: held }, finish("tool-calls")],
       answerScript("summary of c"),
     );
     useCloudModel(model);
@@ -698,7 +772,7 @@ function lines(count: number, label: string): string {
 }
 
 describe("tools", () => {
-  it("offers no tools to a question with no workspace commit, and the four tools to a job with one", async () => {
+  it("offers publish alone to a question with no workspace commit, and the four tools beside it to a job with one", async () => {
     captureLogs();
     const { stub, client, ref } = await cloudSession("turn", sockets);
     const model = new ScriptedModel().add(answerScript("answer one"), answerScript("the summary"));
@@ -712,8 +786,8 @@ describe("tools", () => {
     await push(ref, "a");
     await untilState(stub, sha("a"), "done");
 
-    expect(model.calls[0]?.tools).toBeUndefined();
-    expect(toolNames(model.calls[1])).toEqual(["diff", "grep", "list_files", "read_file"]);
+    expect(toolNames(model.calls[0])).toEqual(["publish"]);
+    expect(toolNames(model.calls[1])).toEqual(["diff", "grep", "list_files", "publish", "read_file"]);
     // The repository and installation of the pull request's webhooks, under the analysis turn's sequence (the second).
     expect(workspace.prepares).toEqual([
       { fullName: "octo/turn", installationId: INSTALLATION_ID, sha: sha("a"), baseSha: BASE, seq: 2 },
@@ -866,7 +940,7 @@ describe("room", () => {
     await push(ref, "a");
 
     const ended = await untilEnded(stub, sha("a"));
-    expect(model.calls.map((call) => toolNames(call).length)).toEqual(Array.from({ length: 9 }, () => 4));
+    expect(model.calls.map((call) => toolNames(call).length)).toEqual(Array.from({ length: 9 }, () => 5));
     expect(ended).toEqual({ state: "done", failure: null });
     expect(model.calls).toHaveLength(9);
     const results = toolResults(model.calls[8]);
@@ -907,7 +981,10 @@ describe("room", () => {
     expect(results.reduce((sum, result) => sum + result.length, 0)).toBeLessThanOrEqual(left);
     expect(results.filter((result) => result.split("\n").length === 100)).toHaveLength(1);
     expect(results.filter((result) => /\[cut at line \d+ .*no room for more/.test(result))).toHaveLength(1);
-    // The answer's step is offered no tools.
-    expect(model.calls.map((call) => toolNames(call))).toEqual([["diff", "grep", "list_files", "read_file"], []]);
+    // The answer's step is offered publish alone.
+    expect(model.calls.map((call) => toolNames(call))).toEqual([
+      ["diff", "grep", "list_files", "publish", "read_file"],
+      ["publish"],
+    ]);
   });
 });

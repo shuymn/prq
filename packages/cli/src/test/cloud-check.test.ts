@@ -70,10 +70,19 @@ const choice = (delta: object, finish: string | null) => ({
   choices: [{ index: 0, delta, finish_reason: finish }],
 });
 
+// The answer as a publish call, its arguments in two deltas.
+const ARGUMENTS = JSON.stringify({ text: "A pull request proposes changes. Review catches mistakes." });
 const ANSWER = [
-  choice({ content: "A pull request proposes changes. " }, null),
-  choice({ content: "Review catches mistakes." }, null),
-  choice({}, "stop"),
+  choice(
+    {
+      tool_calls: [
+        { index: 0, id: "call-1", type: "function", function: { name: "publish", arguments: ARGUMENTS.slice(0, 30) } },
+      ],
+    },
+    null,
+  ),
+  choice({ tool_calls: [{ index: 0, function: { arguments: ARGUMENTS.slice(30) } }] }, null),
+  choice({}, "tool_calls"),
   { id: "c", choices: [], usage: { prompt_tokens: 120, completion_tokens: 12, prompt_cache_hit_tokens: 64 } },
 ];
 

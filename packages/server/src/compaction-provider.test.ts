@@ -10,6 +10,7 @@ import { contextRow, notesRow, sized, WINDOW } from "./test/compaction.ts";
 import {
   advance,
   answerStream,
+  publishStream,
   errorBody,
   heldSse,
   MODEL_ENV,
@@ -70,10 +71,10 @@ describe("a context-length refusal through the adapter", () => {
     const session = await servedSession();
     const { stub, client, provider } = session;
     provider.reply(
-      answerStream(sized("answer one", 7000), { prompt_tokens: 6000, completion_tokens: 7000 }),
+      publishStream(sized("answer one", 7000), { prompt_tokens: 6000, completion_tokens: 7000 }),
       ...refusals,
       answerStream("## Progress So Far\nthe turn's start"),
-      answerStream("answer two"),
+      publishStream("answer two"),
     );
     await client.chat([Q1]);
     await untilState(stub, "q1", "done");
@@ -97,10 +98,10 @@ describe("a stalled summary", () => {
     // The first summary's stream sends nothing after its headers; the retry's request gets no response.
     const silent = heldSse([]);
     provider.reply(
-      answerStream(sized("answer one", 7000), { prompt_tokens: 11_000, completion_tokens: 7000 }),
+      publishStream(sized("answer one", 7000), { prompt_tokens: 11_000, completion_tokens: 7000 }),
       silent.reply,
       noResponse(),
-      answerStream("answer two"),
+      publishStream("answer two"),
     );
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await client.chat([Q1]);

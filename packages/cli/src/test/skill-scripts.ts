@@ -119,7 +119,7 @@ function scriptsTurn(): { script: Script; steps: Step[] } {
         pages += 1;
         step = { label: `activation page ${pages}`, call: { tool: "activate_skill", input } };
       } else {
-        step = runs[next] ?? { label: "answer", call: { text: "done" } };
+        step = runs[next] ?? { label: "answer", call: { publish: "done" } };
         next += 1;
       }
     }
@@ -691,7 +691,7 @@ export async function checkScripts(
           .map((tool) => tool.entry)
           .join(" ; "),
     );
-    scripted.play(() => ({ text: "The summary." }));
+    scripted.play(() => ({ publish: "The summary." }));
     await deliver(worker, pr, {
       action: "opened",
       head: pull.head.sha,

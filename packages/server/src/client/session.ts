@@ -133,8 +133,14 @@ const StartChunk = v.pipe(
   v.looseObject({ type: v.literal("start"), messageId: v.string(), messageMetadata: MessageMetadata }),
 );
 
+// A message's text as the UI shows it: its text parts after its last tool part. A cloud result's answer comes after the
+// tool calls it read with, and text before them was the model's own narration; a message without tool parts (a
+// question, a local agent's result) shows all of its text.
 const textOf = (parts: readonly { type: string; text?: unknown }[]) =>
-  parts.map((part) => (part.type === "text" && typeof part.text === "string" ? part.text : "")).join("");
+  parts
+    .slice(parts.findLastIndex((part) => part.type === "dynamic-tool" || part.type.startsWith("tool-")) + 1)
+    .map((part) => (part.type === "text" && typeof part.text === "string" ? part.text : ""))
+    .join("");
 
 const storedMessage = (message: ChatMessage): StoredMessage => {
   const metadata = v.safeParse(MessageMetadata, message.metadata);
